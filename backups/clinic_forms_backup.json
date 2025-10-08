@@ -1,0 +1,387 @@
+[
+    {
+        "id": 1,
+        "name": "Pharmacist Declaration Form",
+        "description": null,
+        "schema": [
+            {
+                "type": "text_input",
+                "data": {
+                    "label": "Pharmacist Name",
+                    "placeholder": null,
+                    "help": null,
+                    "required": true,
+                    "hidden": false,
+                    "disabled": false
+                }
+            },
+            {
+                "type": "number",
+                "data": {
+                    "label": "Pharmacist GPHC Number",
+                    "placeholder": null,
+                    "min": null,
+                    "max": null,
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "signature",
+                "data": {
+                    "label": "Signature",
+                    "signature_pad": null,
+                    "help": "Draw your signature above",
+                    "required": true
+                }
+            }
+        ],
+        "form_type": null,
+        "service_slug": null,
+        "treatment_slug": null,
+        "version": 1,
+        "is_active": 1,
+        "created_at": "2025-10-08T08:06:17.000000Z",
+        "updated_at": "2025-10-08T08:06:17.000000Z"
+    },
+    {
+        "id": 2,
+        "name": "Weight Loss Injections - Record of Supply",
+        "description": null,
+        "schema": [
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>This letter is to confirm that above named patient is currently under my care and has been prescribed weight loss medication for Weight Management, as below. We also kindly ask that customs officials and airport security personnel allow the patient to carry their medication, injection supplies i.e needles, and a suitable cooling pack to maintain the medications&#039;s integrity during transit.<\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "date",
+                "data": {
+                    "label": "Date Provided",
+                    "date": null,
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "select",
+                "data": {
+                    "label": "Select",
+                    "options": [
+                        {
+                            "value": "Mounjaro",
+                            "label": null
+                        },
+                        {
+                            "value": "Wegovy",
+                            "label": null
+                        }
+                    ],
+                    "required": true,
+                    "help": null
+                }
+            },
+            {
+                "type": "number",
+                "data": {
+                    "label": "Item Strength",
+                    "placeholder": null,
+                    "min": null,
+                    "max": null,
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "number",
+                "data": {
+                    "label": "Quantity",
+                    "placeholder": null,
+                    "min": null,
+                    "max": null,
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "text_input",
+                "data": {
+                    "label": "Other Clinical Notes",
+                    "placeholder": null,
+                    "help": null,
+                    "required": false,
+                    "hidden": false,
+                    "disabled": false
+                }
+            }
+        ],
+        "form_type": null,
+        "service_slug": null,
+        "treatment_slug": null,
+        "version": 1,
+        "is_active": 1,
+        "created_at": "2025-10-08T08:19:52.000000Z",
+        "updated_at": "2025-10-08T08:19:52.000000Z"
+    },
+    {
+        "id": 3,
+        "name": "Weight Management (Mounjaro) - Advice",
+        "description": null,
+        "schema": [
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<h2><strong>Please now supply your selected medicine<\/strong><\/h2>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>Please follow your training and the relevant PGD guidance on how to prepare your selected medicine then supply it to the patient<\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<h2><strong>Mounjaro Patient Information<\/strong><\/h2>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>Mounjaro is a medicine for weight loss and weight maintenance that contains the active substance tirzepatide It is similar to a natural hormone called glucagon like peptide-1 that is released from the intestine after a meal Mounjaro works by acting on receptors in the brain that control appetite causing an individual to feel fuller and less hungry and experience less craving for food<\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "checkbox",
+                "data": {
+                    "label": "Please tick if discussed with the patient",
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<h2><strong>How To Administer Mounjaro<\/strong><\/h2>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>The starting dose of tirzepatide is 2.5 mg once weekly After 4 weeks the dose should be increased to 5 mg once weekly If needed dose increases can be made in 2.5 mg increments after a minimum of 4 weeks on the current dose The recommended maintenance doses are 5 10 and 15 mg The maximum dose is 15 mg once weekly<\/p><p>Mounjaro is to be injected subcutaneously in the abdomen thigh or upper arm Injection sites should be rotated with each dose<\/p><p>Injection sites should be rotated with each dose<\/p><p>Mounjaro is to be administered once weekly on the same day each week if possible at any time of the day with or without meals The day of weekly administration can be changed if necessary as long as the time between two doses is at least 3 days<\/p><p>Mounjaro should not be mixed with other medicinal products<\/p><p><a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https:\/\/youtu.be\/vPYe04kjMdA\">Youtube Video<\/a><\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "checkbox",
+                "data": {
+                    "label": "Please tick if discussed with the patient",
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<h2><strong>Administration<\/strong><\/h2>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>Each multiple-dose pre-filled pen contains 4 doses of 0.6 ml solution The instructions for using the pen included with the package leaflet must be followed carefully<\/p><p>Mounjaro is injected under the skin of your stomach area abdomen or upper leg thigh or upper arm If the same area of the body is used each week a different injection site within that area should be chosen<\/p><p>Mounjaro that has been frozen must not be used<\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "checkbox",
+                "data": {
+                    "label": "Please tick if discussed with the patient",
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<h2><strong>Missed Dose<\/strong><\/h2>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>If a dose is missed it should be administered as soon as possible within 4 days after the missed dose If more than 4 days have passed skip the missed dose and administer the next dose on the regularly scheduled day In each case patients can then resume their regular once-weekly dosing schedule<\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "checkbox",
+                "data": {
+                    "label": "Please tick if discussed with the patient",
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<h2><strong>Side Effects<\/strong><\/h2>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>Patients should be informed of the characteristic symptoms of acute pancreatitis these are severe and persistent pain in the abdomen which might reach through to the back and nausea and vomiting<\/p><p>If these symptoms are experienced patients should be advised to discontinue treatment and seek medical advice If acute pancreatitis is confirmed Mounjaro treatment should not be restarted<\/p><p>Patients should be advised of the potential risk of dehydration in relation to gastrointestinal side effects and take precautions to avoid fluid depletion Symptoms of dehydration include dizziness headache fatigue infrequent urination of small amounts and dry mouth lips and eyes<\/p><p>Overdose with Mounjaro may be associated with gastrointestinal disorders which could lead to dehydration In the event of overdose the patient should seek immediate medical assistance<\/p><p>Provide advice on and explain potential warnings and side effects and request to report them if they occur If the symptoms do not disappear or the patient experiences other severe symptoms they should be advised to contact their GP call NHS 111 or visit A&amp;E<\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "checkbox",
+                "data": {
+                    "label": "Please tick if discussed with the patient",
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<h2><strong>Interaction With Other Medicines<\/strong><\/h2>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>Advise patients to consult their GP if they are taking sulfonylurea medicines for diabetes such as glimepiride or glibenclamide or if they are taking insulin as they may experience hypoglycaemia when they use these medicines with Mounjaro Therefore the patient\u2019s GP may adjust the dose of the diabetes medicine to prevent hypoglycaemia<\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "checkbox",
+                "data": {
+                    "label": "Please tick if discussed with the patient",
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<h2><strong>Storage<\/strong><\/h2>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>Store in original package in order to protect from light<\/p><p>Mounjaro should be stored in a refrigerator between 2 and 8 degrees Do not freeze Keep away from the freezer compartment<\/p><p>Mounjaro may be stored unrefrigerated for up to 30 cumulative days at a temperature not above 30 degrees and then the pre-filled pen must be discarded<\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "checkbox",
+                "data": {
+                    "label": "Please tick if discussed with the patient",
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<h2><strong>Disposal<\/strong><\/h2>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>The patient should be advised to discard the pre-filled pen into a sharps box and not put it in the household waste<\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "checkbox",
+                "data": {
+                    "label": "Please tick if discussed with the patient",
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<h2><strong>Lifestyle Advice<\/strong><\/h2>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>It is vital that Mounjaro is used as part of an integrated approach to weight management with the appropriate support counselling and behavioural strategies available to the patient<\/p><p>Patients should be advised to adhere to the dietary recommendations they are given This includes a nutritionally balanced mildly hypocaloric diet in addition to a diet that is rich in fruit and vegetables<\/p><p>Patients should receive advice about increasing physical activity Any advice given about exercise activities and duration should consider the person\u2019s current physical fitness and ability<\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "checkbox",
+                "data": {
+                    "label": "Please tick if discussed with the patient",
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<h2><strong>General Advice<\/strong><\/h2>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "text_block",
+                "data": {
+                    "content": "<p>Syncope fainting can occur as a psychogenic response to needle injection This can be accompanied by neurological signs such as light-headedness incontinence and limb movements Caution should be taken when considering treatment for patients with a history of fainting<\/p><p>Advise the patient that Mounjaro should not be used during pregnancy and if the patient wishes to become pregnant they must stop using Mounjaro Advise the patient if they become pregnant when using Mounjaro they should contact their GP and treatment provider<\/p><p>Patients using oral contraceptives should consider also using a barrier method of contraception such as a condom or switching to a non-oral contraceptive method for 4 weeks after starting Mounjaro and for 4 weeks after each increase in dose<\/p>",
+                    "align": "left"
+                }
+            },
+            {
+                "type": "checkbox",
+                "data": {
+                    "label": "Please tick if discussed with the patient",
+                    "help": null,
+                    "required": true
+                }
+            },
+            {
+                "type": "text_input",
+                "data": {
+                    "label": "Consultation notes",
+                    "placeholder": null,
+                    "help": null,
+                    "required": false,
+                    "hidden": false,
+                    "disabled": false
+                }
+            }
+        ],
+        "form_type": null,
+        "service_slug": null,
+        "treatment_slug": null,
+        "version": 1,
+        "is_active": 1,
+        "created_at": "2025-10-08T08:46:19.000000Z",
+        "updated_at": "2025-10-08T08:46:19.000000Z"
+    }
+]
