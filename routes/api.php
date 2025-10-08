@@ -1,0 +1,25 @@
+<?php
+
+use App\Http\Controllers\PageApiController;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
+use App\Models\Order;
+
+Route::get('/debug/order/by-ref/{reference}', function (Request $req, string $reference) {
+    $o = \App\Models\Order::where('reference', $reference)->firstOrFail();
+    return response()->json([
+        'id' => $o->id,
+        'reference' => $o->reference,
+        'payment_status' => $o->payment_status,
+        'booking_status' => $o->booking_status,
+        'meta_items_0_variations' => data_get($o, 'meta.items.0.variations'),
+        'meta_lines_0_variation'  => data_get($o, 'meta.lines.0.variation'),
+        'meta_items_0_unitMinor'  => data_get($o, 'meta.items.0.unitMinor'),
+        'meta_items_0_totalMinor' => data_get($o, 'meta.items.0.totalMinor'),
+        'meta_totalMinor'         => data_get($o, 'meta.totalMinor'),
+        'selectedProduct'         => data_get($o, 'meta.selectedProduct'),
+    ]);
+});
+Route::get('pages/slug/{slug}', [PageApiController::class, 'showBySlug']);
+Route::get('pages/{id}', [PageApiController::class, 'showById']);
+

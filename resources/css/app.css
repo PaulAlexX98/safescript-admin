@@ -1,0 +1,2 @@
+/* Only import Tailwind utilities so Filament styles (base/components) are not reset */
+@import "tailwindcss/utilities";

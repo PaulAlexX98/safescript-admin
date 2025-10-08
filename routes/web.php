@@ -1,0 +1,134 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+
+Route::redirect('/', '/admin'); // send the homepage to your Filament panel
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
+use App\Models\PendingOrder;
+use App\Models\ApprovedOrder;
+use App\Services\Consultations\StartConsultation;
+// TODO: Replace this placeholder with the real Filament Page once implemented
+Route::get('/admin/consultations/{session}', function ($sessionId) {
+    return response()->view('consultations.placeholder', ['sessionId' => $sessionId]);
+})->name('filament.admin.pages.consultation-runner')->middleware(['web', 'auth']);
+
+// Legacy: /admin/forms?order=123 -> create/reuse session, then redirect to runner
+Route::get('/admin/forms', function (Request $request) {
+    $orderId = (int) $request->query('order', 0);
+    abort_if($orderId <= 0, 404);
+    $order = ApprovedOrder::findOrFail($orderId);
+    $session = app(StartConsultation::class)($order);
+    return redirect()->route('filament.admin.pages.consultation-runner', ['session' => $session->id]);
+})->name('admin.forms.legacy')->middleware(['web', 'auth']);
+
+
+// Inline view fallback if resources/views/consultations/placeholder.blade.php does not exist
+if (!\View::exists('consultations.placeholder')) {
+    \View::addNamespace('consultations', resource_path('views/consultations'));
+    \View::composer('consultations.placeholder', function ($view) {});
+    Route::get('/__inline/consultations/placeholder/{sessionId}', function ($sessionId) {
+        return \Illuminate\Support\Facades\Blade::render('<x-filament::page><div class="space-y-4"><h2 class="text-xl font-semibold">Consultation Session</h2><p>Session ID: {{ $sessionId }}</p><p>This is a temporary placeholder page. The full Consultation Runner page class is not yet installed.</p></div></x-filament::page>', compact('sessionId'));
+    })->middleware(['web','auth'])->name('consultations.inline.placeholder');
+}
+
+
+
+Route::get('/_debug/pending-order', function (Request $req) {
+    $q = PendingOrder::query();
+
+    if ($ref = $req->string('ref')->toString()) {
+        $q->where('reference', $ref);
+    } elseif ($id = $req->integer('id')) {
+        $q->whereKey($id);
+    } else {
+        $q->latest('created_at');
+    }
+
+    $po = $q->firstOrFail();
+
+    $meta = is_array($po->meta) ? $po->meta : (json_decode($po->meta ?? '[]', true) ?: []);
+
+    // Find items in common places
+    $items = Arr::get($meta, 'products')
+           ?? Arr::get($meta, 'items')
+           ?? Arr::get($meta, 'lines')
+           ?? Arr::get($meta, 'line_items')
+           ?? Arr::get($meta, 'cart.items');
+
+    if (is_string($items)) {
+        $decoded = json_decode($items, true);
+        if (json_last_error() === JSON_ERROR_NONE) $items = $decoded;
+    }
+
+    // If single associative item, wrap as one-element list
+    if (is_array($items) && !empty($items)) {
+        $isList = array_keys($items) === range(0, count($items) - 1);
+        if (!$isList && (isset($items['name']) || isset($items['title']) || isset($items['product_name']))) {
+            $items = [$items];
+        }
+    }
+
+    $keys = [
+        'variations','variation','optionLabel','option_label','optionText','option_text','option',
+        'variant','dose','strength','strength_text','plan','package','bundle','pack','size','volume',
+        'label','text','title','display','displayName','fullLabel','full_option_label',
+        'meta.variations','meta.variation','meta.optionLabel','meta.option_label','meta.optionText','meta.option_text','meta.option',
+        'selected.variations','selected.variation','selected.optionLabel','selected.option_label','selected.optionText','selected.option_text','selected.option',
+        'selectedOption','selected_option','selectedOptions.0','selected_options.0',
+    ];
+
+    $findVar = function ($row) use ($keys) {
+        foreach ($keys as $k) {
+            $v = data_get($row, $k);
+            if ($v !== null && $v !== '') {
+                if (is_array($v)) {
+                    if (array_key_exists('label', $v)) return ['path'=>$k,'value'=>$v['label']];
+                    if (array_key_exists('value', $v)) return ['path'=>$k,'value'=>$v['value']];
+                    return ['path'=>$k,'value'=>trim(implode(' ', array_map('strval', $v)))];
+                }
+                return ['path'=>$k,'value'=>(string)$v];
+            }
+        }
+        return null;
+    };
+
+    $lineInfo = [];
+    if (is_array($items)) {
+        foreach ($items as $i => $it) {
+            $lineInfo[] = [
+                'index'     => $i,
+                'name'      => $it['name'] ?? $it['title'] ?? $it['product_name'] ?? $it,
+                'qty'       => $it['qty'] ?? $it['quantity'] ?? 1,
+                'variation' => $findVar($it),
+            ];
+        }
+    }
+
+    // Single-item meta-level fallback
+    $singleMetaVar = null;
+    if (count($lineInfo) === 1 && empty($lineInfo[0]['variation'])) {
+        $containers = ['selectedProduct','selected_product','product','item','order.item'];
+        foreach ($containers as $c) {
+            foreach ($keys as $k) {
+                $try = data_get($meta, $c.'.'.$k);
+                if ($try !== null && $try !== '') {
+                    $singleMetaVar = ['container'=>$c,'path'=>$k,'value'=>is_array($try)?( $try['label'] ?? $try['value'] ?? json_encode($try) ):(string)$try];
+                    break 2;
+                }
+            }
+        }
+    }
+
+    return response()->json([
+        'id'        => $po->id,
+        'reference' => $po->reference,
+        'status'    => $po->status,
+        'meta_keys' => array_keys($meta),
+        'items_raw' => $items,
+        'lines'     => $lineInfo,
+        'selectedProduct' => $meta['selectedProduct'] ?? ($meta['selected_product'] ?? null),
+        'single_item_meta_variation' => $singleMetaVar,
+    ]);
+})->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
