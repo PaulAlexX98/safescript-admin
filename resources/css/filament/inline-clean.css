@@ -1,0 +1,23 @@
+/* Apply ONLY when ?inline=1 adds data-inline on <html> */
+html[data-inline="1"] .fi-sidebar,
+html[data-inline="1"] .fi-topbar,
+html[data-inline="1"] .fi-header,
+html[data-inline="1"] aside,
+html[data-inline="1"] nav {
+  display: none !important;
+}
+
+html[data-inline="1"] .fi-main {
+  margin-left: 0 !important;
+}
+
+html[data-inline="1"], html[data-inline="1"] body {
+  margin: 0 !important;
+  padding: 0 !important;
+  background: #0b0b0b !important;
+  color: #e5e7eb !important;
+}
+
+html[data-inline="1"] body, html[data-inline="1"] html {
+  overflow-x: hidden;
+}

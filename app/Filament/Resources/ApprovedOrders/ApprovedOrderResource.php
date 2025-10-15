@@ -855,15 +855,15 @@ class ApprovedOrderResource extends Resource
                             ]),
                     ])
                     ->extraModalFooterActions([
+                        // Start Consultation action (refactored)
                         Action::make('startConsultation')
                             ->label('Start Consultation')
                             ->color('success')
                             ->icon('heroicon-o-play')
                             ->action(function (\App\Models\ApprovedOrder $record) {
                                 $session = app(\App\Services\Consultations\StartConsultation::class)($record);
-                                return redirect()->route('filament.admin.pages.consultation-runner', [
-                                    'session' => $session->id,
-                                ]);
+                                // Use the new split-page route:
+                                return redirect()->to("/admin/consultations/{$session->id}/pharmacist-advice");
                             }),
                         Action::make('addAdminNote')
                             ->label('Add Admin Note')
@@ -953,9 +953,7 @@ class ApprovedOrderResource extends Resource
     }
     public function startConsultationAction($record)
     {
-        $session = app(StartConsultation::class)($record); // $record is the approved Order
-        return redirect()->route('filament.admin.pages.consultation-runner', [
-            'session' => $session->id,
-        ]);
+        $session = app(StartConsultation::class)($record);
+        return redirect()->to("/admin/consultations/{$session->id}/pharmacist-advice");
     }
 }

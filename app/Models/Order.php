@@ -21,6 +21,11 @@ class Order extends Model
             ->where('status', 'pending');
     }
 
+    public function patient()
+    {
+        return $this->belongsTo(\App\Models\Patient::class);
+    }
+
     public function scopePendingApproval($q)
     {
         return $q->where('status', 'pending');

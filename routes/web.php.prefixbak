@@ -1,5 +1,18 @@
 <?php
+Route::match(['POST'],'admin/consultations/{session}/forms/{form}/save', function(\Illuminate\Http\Request $r, $session, $form) {
+    return response()->json([
+        'ok' => true,
+        'session_param' => $session,
+        'form_param' => $form,
+        'cookie_name' => config('session.cookie'),
+        'has_cookie' => $r->hasCookie(config('session.cookie')),
+        'cookies' => $r->cookies->all(),
+        'user' => optional(auth()->user())->only(['id','email']),
+    ]);
+})->name('consultations.forms.save');
+Route::match(['POST'],'admin/consultations/{session}/forms/{form}/save', function(\Illuminate\Http\Request $r, $session, $form){ return response()->json(['ok'=>true,'session'=>,'form'=>,'has_cookie'=>->hasCookie(config('session.cookie'))]); })->name('consultations.forms.save');
 
+<?php
 
 use Illuminate\Support\Facades\Route;
 
@@ -16,68 +29,13 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use App\Models\PendingOrder;
 use App\Models\ApprovedOrder;
-use App\Models\ClinicForm; 
-use App\Models\ConsultationFormResponse;
-use App\Http\Controllers\Admin\ConsultationPdfController;
-use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
-
-Route::middleware([
-    'web',
-    FilamentAuthenticate::class,               // <- Filament’s auth middleware
-])
-->prefix('admin/consultations/{session}')
-->name('admin.consultations.')
-->group(function () {
-    Route::get('pdf/full',            [ConsultationPdfController::class, 'full'])->name('pdf.full');
-    Route::get('pdf/private-prescription',[ConsultationPdfController::class, 'pre'])->name('pdf.pre');
-    Route::get('pdf/record-of-supply',[ConsultationPdfController::class, 'ros'])->name('pdf.ros');
-    Route::get('pdf/invoice',         [ConsultationPdfController::class, 'invoice'])->name('pdf.invoice');
-});
-
-// Allow {form} route parameter to resolve from either a ClinicForm id
-// or a ConsultationFormResponse id, mapping responses to their template ClinicForm.
-Route::bind('form', function ($value) {
-    // Allow ConsultationFormResponse id first
-    if ($resp = \App\Models\ConsultationFormResponse::find($value)) {
-        return $resp; // pass the response model through
-    }
-
-    // Fallback to ClinicForm id for template level routes or save endpoints
-    if ($cf = \App\Models\ClinicForm::find($value)) {
-        return $cf;
-    }
-
-    // Do not abort here. Return the raw value so the controller can decide what to do.
-    return is_numeric($value) ? (int) $value : $value;
-});
-
-
-// Optionally, constrain numeric parameters early for clarity
-// Route::pattern('session', '[0-9]+');
-// Route::pattern('form', '[0-9]+');
 use App\Services\Consultations\StartConsultation;
 use App\Filament\Pages\ConsultationRunner;
 use App\Models\ConsultationSession;
 use App\Http\Controllers\ConsultationFormController;
-use App\Http\Controllers\ConsultationRunnerController;
 
 // Fallback for any middleware that uses route('login'):
 Route::get('/login', fn () => redirect('/admin/login'))->name('login');
-
-// Legacy redirect for old consultation runner links
-Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admin'])
-    ->get('/admin/consultation-runner', function (Request $request) {
-        $sessionId = (string) $request->query('session');
-        $tab = (string) $request->query('tab', 'pharmacist-advice');
-        $map = [
-            'advice' => 'pharmacist-advice',
-            'declaration' => 'pharmacist-declaration',
-            'supply' => 'record-of-supply',
-        ];
-        $tab = $map[$tab] ?? $tab;
-        abort_if(!$sessionId, 404);
-        return redirect("/admin/consultations/{$sessionId}/{$tab}", 302);
-    });
 
 // Legacy redirect (unchanged logic, explicit numeric check already present)
 Route::get('/admin/forms', function (Request $request) {
@@ -87,81 +45,18 @@ Route::get('/admin/forms', function (Request $request) {
     $order = ApprovedOrder::findOrFail($orderId);
     $session = app(StartConsultation::class)($order);
 
-    return redirect()->route('consultations.pharmacist_advice', ['session' => $session->id]);
+    return redirect()->to(ConsultationRunner::getUrl(['session' => $session->id]));
 })->name('admin.forms.legacy')->middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admin']);
-
 
 Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admin'])
     ->prefix('admin/consultations')
     ->group(function () {
         Route::post('{session}/forms/{form}/save', [ConsultationFormController::class, 'save'])
             ->name('consultations.forms.save');
-
-        Route::post('{session}/start', function (\App\Models\ConsultationSession $session) {
-            return redirect()->to("/admin/consultations/{$session->id}");
-        })->name('consultations.start');
-
-        // Hard redirect any /{session}/form hits to the base session with a valid tab key
-        Route::get('{session}/form', function (\App\Models\ConsultationSession $session, Request $request) {
-            $tab = (string) $request->query('tab', 'pharmacist-declaration');
-            // normalise underscore to hyphen and whitelist known tabs
-            $tab = str_replace('_', '-', strtolower($tab));
-            $allowed = ['pharmacist-declaration','pharmacist-advice','record-of-supply','risk-assessment','patient-declaration'];
-            if (!in_array($tab, $allowed, true)) {
-                $tab = 'pharmacist-declaration';
-            }
-            return redirect()->to("/admin/consultations/{$session->id}?tab={$tab}", 302);
-        })->name('consultations.form_legacy');
-
-        Route::get('{session}/pharmacist-advice', function (\App\Models\ConsultationSession $session) {
-            return redirect()->to("/admin/consultations/{$session->id}?tab=pharmacist-advice");
-        })->name('consultations.pharmacist_advice');
-
-        Route::get('{session}/pharmacist-declaration', function (\App\Models\ConsultationSession $session) {
-            return redirect()->to("/admin/consultations/{$session->id}?tab=pharmacist-declaration");
-        })->name('consultations.pharmacist_declaration');
-
-        Route::get('{session}/record-of-supply', function (\App\Models\ConsultationSession $session) {
-            return redirect()->to("/admin/consultations/{$session->id}?tab=record-of-supply");
-        })->name('consultations.record_of_supply');
-
-        Route::get('{session}/risk-assessment', [ConsultationRunnerController::class, 'riskAssessment'])
-            ->name('consultations.risk_assessment');
-        Route::get('{session}/patient-declaration', [ConsultationRunnerController::class, 'patientDeclaration'])
-            ->name('consultations.patient_declaration');
-
         Route::get('debug', function () {
             return response()->json(['ok' => true, 'where' => 'admin/consultations group loaded']);
         })->name('consultations.debug');
-
-        // Submitted Forms: View / Edit / History pages (used by CompletedOrderDetails buttons)
-        Route::prefix('forms')->name('consultations.forms.')->controller(ConsultationFormController::class)->group(function () {
-            Route::get('{session}/{form}/view', 'view')->name('view');
-            Route::get('{session}/{form}/history', 'history')->name('history');
-            Route::get('{session}/{form}/edit', 'edit')->name('edit');
-        });
-
-        // Parameter constraints for clarity
-        Route::whereNumber('session');
-        Route::whereNumber('form');
     });
-Route::get('{session}/{form}/__probe', function (\App\Models\ConsultationSession $session, $form, \Illuminate\Http\Request $req) {
-    return response()->json([
-        'session_param_type' => get_class($session),
-        'session_id'         => $session->id,
-        'form_param_type'    => is_object($form) ? get_class($form) : gettype($form),
-        'form_payload'       => is_object($form)
-                                   ? array_filter([
-                                         'id'    => $form->id ?? null,
-                                         'consultation_session_id' => $form->consultation_session_id ?? null,
-                                         'clinic_form_id' => $form->clinic_form_id ?? null,
-                                         'step_slug' => $form->step_slug ?? null,
-                                     ])
-                                   : $form,
-        'inline'             => $req->boolean('inline'),
-        'user_id'            => auth()->id(),
-    ]);
-})->name('consultations.forms.probe');
 
 
 // Inline view fallback if resources/views/consultations/placeholder.blade.php does not exist
@@ -271,7 +166,14 @@ Route::get('/_debug/pending-order', function (Request $req) {
         'single_item_meta_variation' => $singleMetaVar,
     ]);
 })->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
-
+Route::get('/__session_touch', function (\Illuminate\Http\Request $r) {
+    $r->session()->put('touched', now()->toIso8601String());
+    return response()->json([
+        'cookie_name' => config('session.cookie'),
+        'session_id' => session()->getId(),
+        'touched' => session('touched'),
+    ]);
+});
 
 Route::get('/__session_touch', function (\Illuminate\Http\Request $r) {
     $r->session()->put('touched', now()->toIso8601String());

@@ -19,6 +19,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Filament\Forms\Components\Textarea;
+use App\Filament\Resources\Orders\CompletedOrderResource as CompletedOrders;
 
 class OrderResource extends Resource
 {
@@ -288,6 +289,16 @@ class OrderResource extends Resource
                 // No filters by default for generic Orders resource
             ])
             ->actions([
+                // For COMPLETED: go to the dedicated details page
+                Action::make('viewDetails')
+                    ->label('View')
+                    ->color('warning')
+                    ->button()
+                    ->url(fn ($record) => CompletedOrders::getUrl('details', ['record' => $record]))
+                    ->openUrlInNewTab(false)
+                    ->visible(fn ($record) => strtolower((string)$record->status) === 'completed'),
+
+                // For REJECTED / UNPAID: keep the existing modal with infolist
                 Action::make('viewOrder')
                     ->label('View')
                     ->button()
@@ -296,6 +307,7 @@ class OrderResource extends Resource
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('Close')
                     ->modalWidth('5xl')
+                    ->visible(fn ($record) => in_array(strtolower((string)$record->status), ['rejected','unpaid'], true))
                     ->infolist([
                         Grid::make(12)->schema([
                             Section::make('Customer')
@@ -381,6 +393,7 @@ class OrderResource extends Resource
                                 ]),
                         ]),
 
+                        // Rejection note (if any)
                         Section::make('Rejection Note')
                             ->visible(function ($record) {
                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
@@ -398,6 +411,8 @@ class OrderResource extends Resource
                                     ->html(),
                             ]),
 
+
+                        // Items list remains as before
                         Section::make('Items')
                             ->collapsible()
                             ->collapsed()
@@ -405,244 +420,40 @@ class OrderResource extends Resource
                                 RepeatableEntry::make('meta.items')
                                     ->hiddenLabel()
                                     ->getStateUsing(function ($record) {
-                                        // Collect from common meta locations
                                         $items = null;
                                         $candidates = [
-                                            'meta.items',
-                                            'meta.lines',
-                                            'meta.products',
-                                            'meta.line_items',
-                                            'meta.cart.items',
+                                            'meta.items', 'meta.lines', 'meta.products', 'meta.line_items', 'meta.cart.items',
                                         ];
                                         foreach ($candidates as $path) {
                                             $arr = data_get($record, $path);
                                             if (is_array($arr) && count($arr)) { $items = $arr; break; }
                                         }
-  
-                                        // Wrap a single associative product into a list
                                         if (is_array($items)) {
                                             $isList = array_keys($items) === range(0, count($items) - 1);
-                                            if (
-                                                !$isList &&
-                                                (isset($items['name']) || isset($items['title']) || isset($items['product_name']))
-                                            ) {
+                                            if (!$isList && (isset($items['name']) || isset($items['title']) || isset($items['product_name']))) {
                                                 $items = [$items];
                                             }
                                         }
-                                        $__itemsCount = is_array($items) ? count($items) : 0;
                                         if (!is_array($items) || empty($items)) return [];
-  
-                                        // Money parser to minor units
-                                        $parseMoneyToMinor = function ($value) {
-                                            if ($value === null || $value === '') return null;
-                                            if (is_int($value)) return $value;
-                                            if (is_float($value)) return (int) round($value * 100);
-                                            if (is_string($value)) {
-                                                $s = trim($value);
-                                                $s = preg_replace('/[^\d\.\,\-]/', '', $s);
-                                                if (strpos($s, ',') !== false && strpos($s, '.') === false) {
-                                                    $s = str_replace(',', '.', $s);
-                                                } else {
-                                                    $s = str_replace(',', '', $s);
-                                                }
-                                                if ($s === '' || !is_numeric($s)) return null;
-                                                return (int) round(((float) $s) * 100);
-                                            }
-                                            return null;
-                                        };
-  
                                         $out = [];
                                         foreach ($items as $it) {
-                                            if (is_string($it)) {
-                                                $out[] = [
-                                                    'name'           => (string) $it,
-                                                    'variation'      => '',
-                                                    'qty'            => 1,
-                                                    'priceMinor'     => null,
-                                                    'priceFormatted' => '—',
-                                                ];
-                                                continue;
-                                            }
-                                            if (!is_array($it)) continue;
-  
                                             $name = $it['name'] ?? ($it['title'] ?? 'Item');
                                             $qty  = (int)($it['qty'] ?? $it['quantity'] ?? 1);
                                             if ($qty < 1) $qty = 1;
-  
-                                            // Variation resolution (match PendingOrderResource)
-                                            $resolveVar = function ($row) {
-                                                $keys = [
-                                                    'variations','variation','optionLabel','variant','dose','strength','option',
-                                                    'meta.variations','meta.variation','meta.optionLabel','meta.variant','meta.dose','meta.strength','meta.option',
-                                                    'selected.variations','selected.variation','selected.optionLabel','selected.variant','selected.dose','selected.strength','selected.option',
-                                                ];
-                                                foreach ($keys as $k) {
-                                                    $v = data_get($row, $k);
-                                                    if ($v !== null && $v !== '') {
-                                                        if (is_array($v)) {
-                                                            if (array_key_exists('label', $v)) return (string) $v['label'];
-                                                            if (array_key_exists('value', $v)) return (string) $v['value'];
-                                                            $flat = [];
-                                                            foreach ($v as $vv) {
-                                                                if (is_array($vv)) {
-                                                                    if (isset($vv['label'])) $flat[] = (string) $vv['label'];
-                                                                    elseif (isset($vv['value'])) $flat[] = (string) $vv['value'];
-                                                                } else {
-                                                                    $flat[] = (string) $vv;
-                                                                }
-                                                            }
-                                                            $j = trim(implode(' ', array_filter($flat, fn($s) => $s !== '')));
-                                                            if ($j !== '') return $j;
-                                                            continue;
-                                                        }
-                                                        return (string) $v;
-                                                    }
-                                                }
-                                                if (is_array($row['options'] ?? null)) {
-                                                    $parts = [];
-                                                    foreach ($row['options'] as $op) {
-                                                        if (is_array($op)) $parts[] = $op['label'] ?? $op['value'] ?? null;
-                                                    }
-                                                    $j = trim(implode(' ', array_filter(array_map('strval', array_filter($parts)))));
-                                                    if ($j !== '') return $j;
-                                                }
-                                                if (is_array($row['attributes'] ?? null)) {
-                                                    $parts = [];
-                                                    foreach ($row['attributes'] as $op) {
-                                                        if (is_array($op)) $parts[] = $op['label'] ?? $op['value'] ?? null;
-                                                    }
-                                                    $j = trim(implode(' ', array_filter(array_map('strval', array_filter($parts)))));
-                                                    if ($j !== '') return $j;
-                                                }
-                                                return '';
-                                            };
-                                            $variation = $resolveVar($it);
-                                            if (($variation === '' || $variation === null) && $__itemsCount === 1) {
-                                                $metaRoot = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                                $variation = data_get($metaRoot, 'selectedProduct.variations')
-                                                    ?? data_get($metaRoot, 'selected_product.variations')
-                                                    ?? data_get($metaRoot, 'selectedProduct.variation')
-                                                    ?? data_get($metaRoot, 'selected_product.variation')
-                                                    ?? data_get($metaRoot, 'selectedProduct.optionLabel')
-                                                    ?? data_get($metaRoot, 'selected_product.optionLabel')
-                                                    ?? data_get($metaRoot, 'selectedProduct.variant')
-                                                    ?? data_get($metaRoot, 'selected_product.variant')
-                                                    ?? data_get($metaRoot, 'selectedProduct.dose')
-                                                    ?? data_get($metaRoot, 'selected_product.dose')
-                                                    ?? data_get($metaRoot, 'selectedProduct.strength')
-                                                    ?? data_get($metaRoot, 'selected_product.strength')
-                                                    ?? data_get($metaRoot, 'variant')
-                                                    ?? data_get($metaRoot, 'dose')
-                                                    ?? data_get($metaRoot, 'strength')
-                                                    ?? data_get($metaRoot, 'variation')
-                                                    ?? data_get($metaRoot, 'option')
-                                                    ?? '';
-                                                if (is_array($variation)) {
-                                                    $variation = is_string($variation['label'] ?? null) ? $variation['label']
-                                                        : (is_string($variation['value'] ?? null) ? $variation['value'] : trim(implode(' ', array_map('strval', $variation))));
-                                                }
-                                            }
-  
-                                            // Price resolution
-                                            $minorCandidates = [
-                                                'lineTotalMinor','line_total_minor','line_total_pennies','lineTotalPennies',
-                                                'totalMinor','total_minor','totalPennies','total_pennies',
-                                                'amountMinor','amount_minor',
-                                                'subtotalMinor','subtotal_minor',
-                                                'priceMinor','price_minor','priceInMinor','priceInPence','price_in_minor','price_in_pence',
-                                                'unitMinor','unit_minor','unitPriceMinor','unit_price_minor','unitPricePennies','unit_price_pennies',
-                                                'minor','pennies','value_minor','valueMinor',
-                                            ];
-                                            $unitMinor = null;
-                                            $priceMinor = null;
-                                            foreach ($minorCandidates as $key) {
-                                                if (array_key_exists($key, $it) && $it[$key] !== null && $it[$key] !== '') {
-                                                    $val = $it[$key];
-                                                    if (in_array($key, ['unitMinor','unit_minor','unitPriceMinor','unit_price_minor'], true)) {
-                                                        $unitMinor = (int) $val;
-                                                    } else {
-                                                        $priceMinor = (int) $val;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            if ($priceMinor === null && $unitMinor !== null) {
-                                                $priceMinor = (int) $unitMinor * $qty;
-                                            }
-                                            if ($priceMinor === null) {
-                                                $majorCandidates = [
-                                                    'lineTotal','line_total','linePrice','line_price','line_total_price',
-                                                    'total','amount','subtotal',
-                                                    'price','cost',
-                                                    'unitPrice','unit_price','unitCost','unit_cost',
-                                                ];
-                                                $unitMajor = null;
-                                                foreach ($majorCandidates as $key) {
-                                                    if (array_key_exists($key, $it) && $it[$key] !== null && $it[$key] !== '') {
-                                                        if (in_array($key, ['unitPrice','unit_price','unitCost','unit_cost'], true)) {
-                                                            $unitMajor = $parseMoneyToMinor($it[$key]);
-                                                        } else {
-                                                            $parsed = $parseMoneyToMinor($it[$key]);
-                                                            if ($parsed !== null) { $priceMinor = $parsed; break; }
-                                                        }
-                                                    }
-                                                }
-                                                if ($priceMinor === null && $unitMajor !== null) {
-                                                    $priceMinor = (int) $unitMajor * $qty;
-                                                }
-                                            }
-                                            if ($priceMinor === null) {
-                                                $maybe = data_get($it, 'money.totalMinor')
-                                                    ?? data_get($it, 'money.amountMinor')
-                                                    ?? data_get($it, 'money.subtotalMinor')
-                                                    ?? data_get($it, 'money.lineTotalMinor')
-                                                    ?? data_get($it, 'pricing.totalMinor')
-                                                    ?? data_get($it, 'pricing.amountMinor')
-                                                    ?? data_get($it, 'pricing.subtotalMinor')
-                                                    ?? data_get($it, 'price.minor')
-                                                    ?? data_get($it, 'total.minor')
-                                                    ?? data_get($it, 'subtotal.minor')
-                                                    ?? data_get($it, 'price.pennies')
-                                                    ?? data_get($it, 'total.pennies')
-                                                    ?? data_get($it, 'subtotal.pennies');
-                                                if (is_numeric($maybe)) $priceMinor = (int) $maybe;
-                                                if ($priceMinor === null) {
-                                                    $maybeMajor = data_get($it, 'money.total')
-                                                        ?? data_get($it, 'pricing.total')
-                                                        ?? data_get($it, 'price.value')
-                                                        ?? data_get($it, 'total.value')
-                                                        ?? data_get($it, 'subtotal.value');
-                                                    $unitMaybeMajor = data_get($it, 'money.unit')
-                                                        ?? data_get($it, 'pricing.unit')
-                                                        ?? data_get($it, 'price.unit');
-                                                    $parsed = $parseMoneyToMinor($maybeMajor);
-                                                    if ($parsed !== null) $priceMinor = $parsed;
-                                                    if ($priceMinor === null) {
-                                                        $unitParsed = $parseMoneyToMinor($unitMaybeMajor);
-                                                        if ($unitParsed !== null) $priceMinor = (int) $unitParsed * $qty;
-                                                    }
-                                                }
-                                            }
-  
-                                            $displayPrice = (is_numeric($priceMinor) ? ('£' . number_format(((int) $priceMinor) / 100, 2)) : '—');
-  
+                                            $var  = $it['variation'] ?? $it['variant'] ?? $it['strength'] ?? $it['dose'] ?? '';
                                             $out[] = [
-                                                'name'           => (string) $name,
-                                                'variation'      => (string) $variation,
-                                                'qty'            => $qty,
-                                                'priceMinor'     => $priceMinor,
-                                                'priceFormatted' => $displayPrice,
+                                                'name'      => (string) $name,
+                                                'variation' => (string) $var,
+                                                'qty'       => $qty,
                                             ];
                                         }
-  
                                         return $out;
                                     })
                                     ->schema([
                                         Grid::make(12)->schema([
                                             TextEntry::make('name')->label('Product')->columnSpan(6),
                                             TextEntry::make('variation')->label('Variation')->formatStateUsing(fn ($state) => $state ?: '—')->columnSpan(3),
-                                            TextEntry::make('qty')->label('Qty')->formatStateUsing(fn ($state) => (string) $state)->columnSpan(1),
-                                            TextEntry::make('priceFormatted')->label('Price')->formatStateUsing(fn ($state) => (string) $state)->columnSpan(2)->extraAttributes(['class' => 'text-right whitespace-nowrap']),
+                                            TextEntry::make('qty')->label('Qty')->formatStateUsing(fn ($state) => (string) $state)->columnSpan(3),
                                         ]),
                                     ])
                                     ->columnSpanFull(),

@@ -2,18 +2,18 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Pages\ConsultationRunner;
 use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Navigation\NavigationGroup;
 use Filament\Navigation\NavigationItem;
-use App\Filament\Resources\Orders\OrderResource as OrdersOrderResource;
 use App\Filament\Resources\Appointments\AppointmentResource as AppointmentsAppointmentResource;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use App\Filament\Resources\Orders\PendingOrderResource;
-use App\Filament\Resources\ApprovedOrders\ApprovedOrderResource;
-
+use Illuminate\Support\Facades\Route;
+use Filament\Pages;
 
 class AdminPanelProvider extends PanelProvider
 {
@@ -52,13 +52,43 @@ class AdminPanelProvider extends PanelProvider
             ->default()
             ->id('admin')
             ->path('admin')
+            ->topbar(false)
+            ->login()
+            ->authGuard('admin')
+            ->profile()  
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
-            ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
-            ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
             ->pages([
-                Dashboard::class,
-                
+                \Filament\Pages\Dashboard::class,    
+                ConsultationRunner::class,
             ])
+            ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
+
+            ->routes(function () {
+                // These are scoped under the panel path "admin" and the admin auth guard
+                Route::get('/consultations/{session}', ConsultationRunner::class)
+                    ->name('filament.admin.consultations.session');
+                Route::get('/consultations/{session}/{tab}', ConsultationRunner::class)
+                    ->name('filament.admin.consultations.session.tab');
+            })
+
+            ->renderHook('panels::head.end', function () {
+                if (!request()->boolean('inline')) return '';
+                $style = <<<HTML
+<style>
+  /* Hide Filament chrome when viewing inside inline modal iframe */
+  .fi-sidebar,
+  .fi-topbar,
+  .fi-header,
+  aside,
+  nav { display: none !important; }
+  .fi-main { margin-left: 0 !important; }
+  body { background: transparent !important; padding: 16px !important; }
+  html, body { overflow-x: hidden; }
+</style>
+HTML;
+                return \Illuminate\Support\HtmlString::from($style);
+            })
+
             ->navigationGroups([
                 NavigationGroup::make('Notifications')
                     ->collapsed(false)
@@ -86,6 +116,13 @@ class AdminPanelProvider extends PanelProvider
                 NavigationGroup::make('Forms')
                     ->collapsed(true),
             ])
-        ;
+            ->viteTheme([
+                'resources/css/filament/admin/theme.css',
+                'resources/css/filament/inline-clean.css',
+            ])
+            ->darkMode(true)
+            ->colors([
+                'primary' => '#f59e0b',
+            ]);
     }
 }

@@ -16,7 +16,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // This is the Laravel 12+ way — no custom middleware class required.
         $middleware->append(\Illuminate\Http\Middleware\HandleCors::class);
         $middleware->validateCsrfTokens(except: [
-            'livewire/*',     // Livewire update endpoint
+            'livewire/*',     // Livewire update endpoint            'admin/consultations/*/forms/*/save',            'admin/consultations/*/forms/*/save',
             'admin/consultations/*/forms/*/save',
         ]);
     })

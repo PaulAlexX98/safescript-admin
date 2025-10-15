@@ -307,4 +307,23 @@ class ApprovedOrder extends Model
         }
         return [];
     }
+    /**
+     * Direct URL to start or continue the consultation on the new split pages.
+     * Defaults to Pharmacist Advice as the first step.
+     */
+    public function getConsultationUrlAttribute(): ?string
+    {
+        // Try several common locations for the session id
+        $sessionId = data_get($this->attributes, 'consultation_session_id')
+            ?? data_get($this->meta, 'consultation_session_id')
+            ?? data_get($this->meta, 'session.id')
+            ?? data_get($this->meta, 'session_id')
+            ?? null;
+
+        if (!$sessionId) {
+            return null;
+        }
+
+        return route('consultations.runner.pharmacist_advice', ['session' => $sessionId]);
+    }
 }

@@ -32,7 +32,8 @@ class CompletedOrderResource extends OrderResource
     public static function getPages(): array
     {
         return [
-            'index' => Pages\ListCompletedOrders::route('/'),
+            'index'   => Pages\ListCompletedOrders::route('/'),
+            'details' => Pages\CompletedOrderDetails::route('/{record}/details'),
         ];
     }
 }
