@@ -4,6 +4,9 @@ use App\Http\Controllers\PageApiController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Models\Order;
+use App\Http\Controllers\ClinicFormApiController;
+use App\Http\Controllers\WeightManagement\SubmitAssessmentController;
+use App\Models\ClinicForm;
 
 Route::get('/debug/order/by-ref/{reference}', function (Request $req, string $reference) {
     $o = \App\Models\Order::where('reference', $reference)->firstOrFail();
@@ -22,4 +25,13 @@ Route::get('/debug/order/by-ref/{reference}', function (Request $req, string $re
 });
 Route::get('pages/slug/{slug}', [PageApiController::class, 'showBySlug']);
 Route::get('pages/{id}', [PageApiController::class, 'showById']);
+Route::match(['get','post'], '/sessions/{session}/weight-management-service', [ClinicFormApiController::class, 'handle'])
+    ->middleware('auth:sanctum');
 
+Route::middleware(['auth:sanctum']) // or your auth
+    ->post('/weight/assessment/submit', SubmitAssessmentController::class);
+
+Route::get('/raf/{service}', function (string $service) {
+    $schema = ClinicForm::where('service_slug', $service)->value('raf_schema') ?? ['stages' => []];
+    return response()->json(['ok' => true, 'schema' => $schema]);
+});

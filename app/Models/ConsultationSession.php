@@ -18,10 +18,14 @@ class ConsultationSession extends Model
         'templates',
         'steps',
         'current',
+        'form_id',
+        'form_type',
+        'answers',
     ];
     
     protected $casts = [
         'templates' => 'array',
-        'steps'     => 'array'
+        'steps'     => 'array',
+        'answers'   => 'array'
     ];
 }

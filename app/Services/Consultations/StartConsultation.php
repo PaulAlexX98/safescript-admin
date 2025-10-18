@@ -54,6 +54,11 @@ class StartConsultation
             throw new \RuntimeException('Missing treatment for this service; cannot start consultation.');
         }
 
+        // Ensure the session is tied to a user (column is NOT NULL in DB)
+        if (empty($order->user_id)) {
+            throw new \RuntimeException('Cannot start consultation because order has no user_id. Link the order to a user.');
+        }
+
         // Helper to fetch a specific form_type for the exact service+treatment
         $pick = function (string $type) use ($service, $treat) {
             return ClinicForm::query()
@@ -95,11 +100,12 @@ class StartConsultation
 
         // Create the session
         $session = ConsultationSession::create([
-            'order_id'  => $order->id,
-            'service'   => $service,
-            'treatment' => $treat,
-            'templates' => $snapshot,   // json column on the session
-            'steps'     => $stepKeys,
+            'user_id'   => (int) $order->user_id,
+            'order_id'  => (int) $order->id,
+            'service'   => (string) $service,
+            'treatment' => (string) $treat,
+            'templates' => $snapshot,        // json column on the session
+            'steps'     => array_values($stepKeys),
             'current'   => 0,
         ]);
 

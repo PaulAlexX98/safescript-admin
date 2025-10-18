@@ -6,6 +6,7 @@ use App\Filament\Resources\ClinicForms\Pages\CreateClinicForm;
 use App\Filament\Resources\ClinicForms\Pages\EditClinicForm;
 use App\Filament\Resources\ClinicForms\Pages\ListClinicForms;
 use App\Filament\Resources\ClinicForms\Pages\ViewClinicForm;
+use App\Filament\Resources\ClinicForms\Pages\RafBuilder;
 use App\Filament\Resources\ClinicForms\Schemas\ClinicFormForm;
 use App\Filament\Resources\ClinicForms\Tables\ClinicFormsTable;
 use App\Models\ClinicForm;
@@ -40,6 +41,11 @@ class ClinicFormResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->recordUrl(function ($record) {
+                return ($record->form_type === 'raf')
+                    ? RafBuilder::getUrl(['record' => $record])
+                    : EditClinicForm::getUrl(['record' => $record]);
+            })
             ->defaultSort('created_at', 'desc')
             ->columns([
                 Tables\Columns\TextColumn::make('id')
@@ -51,7 +57,26 @@ class ClinicFormResource extends Resource
                     ->label('Title')
                     ->searchable()
                     ->sortable(),
-    
+
+                Tables\Columns\TextColumn::make('form_type')
+                    ->label('Type')
+                    ->badge()
+                    ->sortable(),
+
+                Tables\Columns\TextColumn::make('raf_version')
+                    ->label('RAF v.')
+                    ->sortable()
+                    ->toggleable(),
+
+                Tables\Columns\BadgeColumn::make('raf_status')
+                    ->label('RAF Status')
+                    ->colors([
+                        'success' => 'published',
+                        'warning' => 'draft',
+                    ])
+                    ->sortable()
+                    ->toggleable(),
+
                 Tables\Columns\TextColumn::make('updated_at')
                     ->label('Updated')
                     ->dateTime('d-m-Y')
@@ -76,6 +101,11 @@ class ClinicFormResource extends Resource
             ->actionsColumnLabel('Operations')
             ->actions([
                 Actions\EditAction::make(),
+                Actions\Action::make('raf')
+                    ->label('RAF')
+                    ->icon('heroicon-m-wrench-screwdriver')
+                    ->url(fn ($record) => RafBuilder::getUrl(['record' => $record]))
+                    ->visible(fn ($record) => ($record->form_type ?? null) === 'raf'),
                 Actions\DeleteAction::make(),
             ])
             ->bulkActions([
@@ -95,6 +125,7 @@ class ClinicFormResource extends Resource
             'create' => CreateClinicForm::route('/create'),
             'view'   => ViewClinicForm::route('/{record}'),
             'edit'   => EditClinicForm::route('/{record}/edit'),
+            'raf' => Pages\RafBuilder::route('/{record}/raf'),
         ];
     }
 }

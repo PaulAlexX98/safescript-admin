@@ -18,6 +18,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use App\Services\Consultations\StartConsultation;
+use App\Models\ConsultationSession;
 
 class ApprovedOrderResource extends Resource
 {
@@ -831,27 +832,134 @@ class ApprovedOrderResource extends Resource
                             ->collapsible()
                             ->collapsed()
                             ->schema([
-                                TextEntry::make('form_answers')
-                                    ->hiddenLabel()
-                                    ->state(function ($record) {
-                                        $answers = data_get($record->meta ?? [], 'formAnswers')
-                                            ?? data_get($record->meta ?? [], 'assessment')
-                                            ?? 'No answers submitted';
-                                        if (is_string($answers)) {
-                                            $decoded = json_decode($answers, true);
-                                            if (json_last_error() === JSON_ERROR_NONE) $answers = $decoded;
-                                        }
-                                        if (!is_array($answers)) return (string) $answers;
+                                // Prefer a Blade view renderer if present; it receives $state = answers array
+                                \Filament\Infolists\Components\ViewEntry::make('assessment_answers')
+                                    ->label(false)
+                                    ->getStateUsing(function ($record) {
+                                        // --- compute raw answers array (no formatting) ---
+                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                        $answers = data_get($meta, 'formAnswers')
+                                            ?? data_get($meta, 'assessment')
+                                            ?? data_get($meta, 'form_answers')
+                                            ?? data_get($meta, 'answers');
 
-                                        $out = [];
-                                        foreach ($answers as $key => $value) {
-                                            if (is_array($value)) $value = implode(', ', array_map('strval', $value));
-                                            $label = ucwords(str_replace(['_', '-'], ' ', (string)$key));
-                                            $out[] = '<strong>' . e($label) . ':</strong> ' . e((string)$value);
+                                        $toArray = function ($v) {
+                                            if (is_string($v)) {
+                                                $d = json_decode($v, true);
+                                                if (json_last_error() === JSON_ERROR_NONE) return $d;
+                                            }
+                                            return $v;
+                                        };
+                                        $answers = $toArray($answers);
+
+                                        if (empty($answers)) {
+                                            $sessionId = data_get($meta, 'consultation_session_id')
+                                                ?? data_get($meta, 'session_id')
+                                                ?? data_get($meta, 'intake.session_id');
+
+                                            $sessionMeta = null;
+                                            if ($sessionId) {
+                                                try {
+                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
+                                                        ->where('id', (int) $sessionId)
+                                                        ->value('meta');
+                                                } catch (\Throwable $e) { $sessionMeta = null; }
+                                            }
+                                            if ($sessionMeta === null && !empty($record->user_id)) {
+                                                try {
+                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
+                                                        ->where('user_id', (int) $record->user_id)
+                                                        ->orderByDesc('id')
+                                                        ->value('meta');
+                                                } catch (\Throwable $e) { $sessionMeta = null; }
+                                            }
+                                            if ($sessionMeta) {
+                                                $sessionMetaArr = is_array($sessionMeta) ? $sessionMeta : (json_decode($sessionMeta, true) ?: []);
+                                                $answers = data_get($sessionMetaArr, 'answers') ?? $sessionMetaArr;
+                                            }
                                         }
-                                        return implode('<br>', $out);
+
+                                        return (is_array($answers) ? $answers : []);
                                     })
-                                    ->html(),
+                                    ->view('filament/pending-orders/assessment-card') // reuse the same Blade view
+                                    ->columnSpanFull()
+                                    ->hidden(function () {
+                                        return ! \Illuminate\Support\Facades\View::exists('filament/pending-orders/assessment-card');
+                                    }),
+
+                                // Fallback renderer (shown only if the Blade view does not exist yet)
+                                \Filament\Infolists\Components\TextEntry::make('assessment_render_fallback')
+                                    ->hidden(function () {
+                                        return \Illuminate\Support\Facades\View::exists('filament/pending-orders/assessment-card');
+                                    })
+                                    ->hiddenLabel()
+                                    ->getStateUsing(function ($record) {
+                                        // 1) Load answers from order meta, else from consultation_sessions
+                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                        $answers = data_get($meta, 'formAnswers')
+                                            ?? data_get($meta, 'assessment')
+                                            ?? data_get($meta, 'form_answers')
+                                            ?? data_get($meta, 'answers');
+
+                                        $toArray = function ($v) {
+                                            if (is_string($v)) {
+                                                $d = json_decode($v, true);
+                                                if (json_last_error() === JSON_ERROR_NONE) return $d;
+                                            }
+                                            return $v;
+                                        };
+                                        $answers = $toArray($answers);
+
+                                        if (empty($answers)) {
+                                            $sessionId = data_get($meta, 'consultation_session_id')
+                                                ?? data_get($meta, 'session_id')
+                                                ?? data_get($meta, 'intake.session_id');
+
+                                            $sessionMeta = null;
+                                            if ($sessionId) {
+                                                try {
+                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
+                                                        ->where('id', (int) $sessionId)
+                                                        ->value('meta');
+                                                } catch (\Throwable $e) { $sessionMeta = null; }
+                                            }
+                                            if ($sessionMeta === null && !empty($record->user_id)) {
+                                                try {
+                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
+                                                        ->where('user_id', (int) $record->user_id)
+                                                        ->orderByDesc('id')
+                                                        ->value('meta');
+                                                } catch (\Throwable $e) { $sessionMeta = null; }
+                                            }
+                                            if ($sessionMeta) {
+                                                $sessionMetaArr = is_array($sessionMeta) ? $sessionMeta : (json_decode($sessionMeta, true) ?: []);
+                                                $answers = data_get($sessionMetaArr, 'answers') ?? $sessionMetaArr;
+                                            }
+                                        }
+
+                                        if (empty($answers) || !is_array($answers)) {
+                                            return '&lt;em&gt;No answers submitted&lt;/em&gt;';
+                                        }
+
+                                        // simple flat fallback while Blade view is missing
+                                        $fmt = function ($v) {
+                                            if (is_bool($v)) return $v ? 'Yes' : 'No';
+                                            if (is_array($v)) return implode(', ', array_map(fn($x) => is_scalar($x)? (string)$x : json_encode($x), $v));
+                                            if ($v === null || $v === '') return '—';
+                                            return (string) $v;
+                                        };
+                                        $rows = [];
+                                        foreach ($answers as $k => $v) {
+                                            $label = ucwords(str_replace(['_','-'],' ', (string) $k));
+                                            $rows[] = '&lt;tr&gt;&lt;th class="text-left pr-3 align-top whitespace-nowrap"&gt;'
+                                                . e($label) . ':&lt;/th&gt;&lt;td class="align-top"&gt;'
+                                                . e($fmt($v))
+                                                . '&lt;/td&gt;&lt;/tr&gt;';
+                                        }
+                                        return '&lt;div class="rounded border border-gray-200 p-3"&gt;&lt;table class="text-sm w-full"&gt;' . implode('', $rows) . '&lt;/table&gt;&lt;/div&gt;';
+                                    })
+                                    ->html()
+                                    ->columnSpanFull(),
                             ]),
                     ])
                     ->extraModalFooterActions([

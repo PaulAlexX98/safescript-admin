@@ -13,9 +13,13 @@ class EditClinicForm extends EditRecord
 
     protected function getHeaderActions(): array
     {
-        return [
-            ViewAction::make(),
-            DeleteAction::make(),
-        ];
+        $actions = parent::getHeaderActions();
+
+        $actions[] = \Filament\Actions\Action::make('raf')
+            ->label('Risk Assessment Builder')
+            ->visible(fn () => $this->record->slug === 'weight-management-service')
+            ->url(static::getResource()::getUrl('raf-builder', ['record' => $this->record]));
+
+        return $actions;
     }
 }

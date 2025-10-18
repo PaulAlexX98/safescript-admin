@@ -17,12 +17,17 @@ class ClinicForm extends Model
         'treatment_slug',
         'version',
         'is_active',
+        'raf_schema',
+        'raf_version',
+        'raf_status',
     ];
 
     protected $casts = [
         'schema'    => 'array',
         'is_active' => 'boolean',
         'version'   => 'integer',
+        'raf_version' => 'integer',
+        'raf_schema' => 'array',
     ];
 
     /* ---------------------------

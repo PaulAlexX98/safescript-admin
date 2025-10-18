@@ -1,11 +1,13 @@
 /* Load Filament core styles first */
-@import '/vendor/filament/filament/resources/css/theme.css';
+@import '../../../../vendor/filament/filament/resources/css/theme.css';
 
-/* Tailwind v4 */
-@import "tailwindcss";
+/* Tailwind v3 entry points */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 /* Your custom tweaks (optional) */
 @layer utilities {
-  /* example: ensure our tab pills look good */
+  /* ensure our tab pills look good */
   .pill { @apply px-5 py-2 text-sm font-medium rounded-full; }
 }

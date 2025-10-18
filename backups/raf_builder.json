@@ -1,0 +1,80 @@
+{
+  "stages": [
+    {
+      "title": "About You",
+      "order": 1,
+      "fields": [
+        {"type":"notice","label":"Read and confirm you are ordering for yourself only","key":"about_ack_note"},
+        {"type":"checkbox","label":"I understand","key":"about_ack","required":true},
+        {"type":"radio","label":"Are you aged between 18 and 85","key":"age_18_to_85","options":["Yes","No"],"required":true},
+        {"type":"radio","label":"What is your ethnicity","key":"ethnicity","options":["South Asian","Chinese","Middle Eastern","Other Asian","Black African","African-Caribbean","None of the above"],"required":true},
+        {"type":"radio","label":"Are you breast feeding pregnant or planning to become pregnant","key":"pregnant_or_breastfeeding_or_planning","options":["Yes","No"],"required":true},
+        {"type":"textarea","label":"If yes tell us if breastfeeding or how many weeks pregnant","key":"preg_text","show_if":{"pregnant_or_breastfeeding_or_planning":"Yes"}},
+        {"type":"number","label":"BMI","key":"bmi","help":"New patients need BMI over 20.5","required":true},
+        {"type":"textarea","label":"What is your target weight","key":"target_weight","required":true},
+        {"type":"upload","label":"Upload a photo of you on weighing scales mandatory","key":"scale_image","meta":{"store_name_key":"scale_image_name","store_size_key":"scale_image_size","attached_key":"scale_image_attached"},"required":true,"help":"Show weight reading plus legs and feet and todays date on paper"},
+        {"type":"upload","label":"Upload a full body photo mandatory","key":"body_image","meta":{"store_name_key":"body_image_name","store_size_key":"body_image_size","attached_key":"body_image_attached"},"required":true,"help":"Front facing head to toe with todays date on paper"}
+      ]
+    },
+    {
+      "title": "Conditions and Medicines",
+      "order": 2,
+      "fields": [
+        {"type":"checkbox_group","label":"Weight related conditions select all that apply","key":"weight_related_conditions","options":["Acid reflux or gastro-oesophageal reflux disease","High blood pressure","Erectile Dysfunction","Cardiovascular disease for example heart attack or atrial fibrillation","High cholesterol","Knee or hip osteoarthritis","Asthma","COPD","Obstructive sleep apnoea","Polycystic ovary syndrome PCOS","Perimenopause or Menopause","None of the above"]},
+        {"type":"radio","label":"Do you smoke","key":"smoke","options":["Yes","No"],"required":true},
+        {"type":"radio","label":"Would you like information on stopping smoking","key":"want_stop_smoking_info","options":["Yes","No"],"show_if":{"smoke":"Yes"}},
+        {"type":"radio","label":"Do you drink alcohol","key":"drink_alcohol","options":["Yes","No"],"required":true},
+        {"type":"radio","label":"Would you like information on safe alcohol use","key":"want_alcohol_info","options":["Yes","No"],"show_if":{"drink_alcohol":"Yes"}},
+        {"type":"radio","label":"Have you ever been prescribed or currently taking weight loss medication or undergoing a low energy diet plan","key":"prior_weightloss_or_led","options":["Yes","No"],"required":true},
+        {"type":"textarea","label":"Tell us what medication or diet plan whether current or past why you stopped and your starting weight","key":"prior_weightloss_details","show_if":{"prior_weightloss_or_led":"Yes"}},
+        {"type":"radio","label":"Do you need to upload evidence for higher strengths ordered elsewhere","key":"require_evidence_yes","options":["Yes","No"],"required":true},
+        {"type":"upload","label":"Upload evidence label photo prior prescription or letter or screenshot","key":"evidence_image","meta":{"store_name_key":"evidence_image_name","store_size_key":"evidence_image_size","attached_key":"evidence_image_attached"},"show_if":{"require_evidence_yes":"Yes"}},
+        {"type":"radio","label":"Do you have or have you ever suffered from an eating disorder such as Bulimia or Anorexia","key":"eating_disorder","options":["Yes","No"],"required":true},
+        {"type":"textarea","label":"Please provide more details","key":"eating_disorder_text","show_if":{"eating_disorder":"Yes"}},
+        {"type":"radio","label":"Do you have any of the listed conditions","key":"has_conditions_yes","options":["Yes","No"],"required":true},
+        {"type":"checkbox_group","label":"Select your conditions","key":"has_conditions","options":["Cholecystitis or chronic malabsorption syndrome","Thyroid disease or thyroid cancer or family history of thyroid cancer or MEN2","Inflammatory bowel disease such as ulcerative colitis or crohns disease","Gastroparesis","Type 1 or Type 2 Diabetes","Gallbladder or gallstones or bile problems","Pancreatitis","Electrolyte imbalance","Retinopathy"],"show_if":{"has_conditions_yes":"Yes"}},
+        {"type":"textarea","label":"Provide more details about your conditions","key":"conditions_text","show_if":{"has_conditions_yes":"Yes"}},
+        {"type":"radio","label":"Do you take any of the listed medication","key":"has_medicines_yes","options":["Yes","No"],"required":true},
+        {"type":"checkbox_group","label":"Select your medicines","key":"has_medicines_list","options":["Anticoagulants such as Warfarin or Rivaroxaban","Amiodarone","Vitamin A or D or E or K supplements","Ciclosporin","Anti-retroviral medicines such as tenofovir or efavirenz or abacavir or emtricitabine","Acarbose","Epilepsy medication","Diabetes or polycystic ovaries medication or insulin"],"show_if":{"has_medicines_yes":"Yes"}},
+        {"type":"textarea","label":"Let us know what medication you take","key":"meds_text","show_if":{"has_medicines_yes":"Yes"}},
+        {"type":"radio","label":"Do you take oral contraceptives","key":"oral_contraceptives","options":["Yes","No"],"required":true},
+        {"type":"textarea","label":"Provide more details about oral contraceptives","key":"ocp_details","show_if":{"oral_contraceptives":"Yes"}},
+        {"type":"radio","label":"Do you exercise 4 to 5 times a week for 30 minutes","key":"exercise_4_5_per_week","options":["Yes","No"],"required":true},
+        {"type":"textarea","label":"Provide more details about exercise","key":"exercise_text","show_if":{"exercise_4_5_per_week":"Yes"}},
+        {"type":"radio","label":"How many calories do you believe you consume daily","key":"daily_calories","options":["under1500","1500to2500","over2500"],"required":true}
+      ]
+    },
+    {
+      "title": "Past History",
+      "order": 3,
+      "fields": [
+        {"type":"radio","label":"Do you have any kidney or liver impairment","key":"kidney_or_liver_impairment","options":["Yes","No"],"required":true},
+        {"type":"textarea","label":"Please provide more details","key":"kidney_or_liver_impairment_text","show_if":{"kidney_or_liver_impairment":"Yes"}},
+        {"type":"radio","label":"Do you have any other medical conditions or past surgical procedures","key":"other_medical_conditions_yes","options":["Yes","No"],"required":true},
+        {"type":"textarea","label":"Please provide more details","key":"other_medical_conditions_text","show_if":{"other_medical_conditions_yes":"Yes"}},
+        {"type":"radio","label":"Are you currently taking or recently stopped any medicines including herbal or recreational","key":"current_or_recent_meds_yes","options":["Yes","No"],"required":true},
+        {"type":"textarea","label":"Please provide more details","key":"current_or_recent_meds_text","show_if":{"current_or_recent_meds_yes":"Yes"}},
+        {"type":"radio","label":"Are you allergic to any medicines or other substances such as peanuts or soya","key":"allergies_yes","options":["Yes","No"],"required":true},
+        {"type":"textarea","label":"Please provide more details","key":"allergies_text","show_if":{"allergies_yes":"Yes"}},
+        {"type":"text","label":"GP name","key":"gp_name"},
+        {"type":"textarea","label":"GP address","key":"gp_address"},
+        {"type":"text","label":"GP name and address single line","key":"gp_name_address"},
+        {"type":"text","label":"GP ODS code","key":"gp_ods_code"},
+        {"type":"email","label":"GP email","key":"gp_email","required":true},
+        {"type":"checkbox","label":"Email saved","key":"gp_email_submitted"}
+      ]
+    },
+    {
+      "title": "Declarations",
+      "order": 4,
+      "fields": [
+        {"type":"checkbox","label":"I understand I will need needles swabs and a sharps bin to use Mounjaro","key":"ack_needles_swabs_bin","required":true},
+        {"type":"checkbox","label":"I understand the delivery must be accepted on the first delivery attempt","key":"ack_first_attempt_delivery","required":true},
+        {"type":"checkbox","label":"I consent to access my NHS Summary Care Records","key":"consent_scr_access","required":true},
+        {"type":"checkbox","label":"I agree to treatment rules listed","key":"ack_treatment_rules","required":true},
+        {"type":"checkbox","label":"I agree to the final declaration items listed","key":"final_declaration","required":true}
+      ]
+    }
+  ]
+}
+
