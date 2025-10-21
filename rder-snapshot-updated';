@@ -1,0 +1,14 @@
+[90m= [39m[34;4mApp\Models\PendingOrder[39;24m {#7429
+    [34mid[39m: [35m62[39m,
+    [34muser_id[39m: [35m4[39m,
+    [34mreference[39m: "[32mPWLN5169098[39m",
+    [34mstatus[39m: "[32mpending[39m",
+    [34mpayment_status[39m: "[32mpaid[39m",
+    [34mpaid_at[39m: "[32m2025-10-21 11:03:07[39m",
+    [34mbooking_status[39m: "[32mpending[39m",
+    [34mapproved_at[39m: [36mnull[39m,
+    [34mmeta[39m: "[32m{"service":"Weight Management Service","lines":[{"index":0,"name":"Mounjaro","qty":1,"variation":"7.5mg"}],"type":"new","items":[{"sku":"mounjaro:7-5mg","name":"Mounjaro","variations":"7.5mg","strength":null,"qty":1,"unitMinor":22499,"totalMinor":22499,"variation":"7.5mg"}],"selectedProduct":{"name":"Mounjaro","variation":"7.5mg","strength":"7.5mg","qty":1,"unitMinor":22499,"totalMinor":22499},"createdAt":"2025-10-21T11:03:07+00:00","totalMinor":22499,"consultation_session_id":93,"assessment":{"answers":{"age_18_to_85":true,"ethnicity":["Asian"],"pregnant_or_breastfeeding_or_planning":false,"height_input":170,"weight_input":85,"bmi":29.4,"gp_selected":true}}}[39m",
+    [34mcreated_at[39m: "[32m2025-10-21 11:03:07[39m",
+    [34mupdated_at[39m: "[32m2025-10-21 12:36:02[39m",
+  }
+

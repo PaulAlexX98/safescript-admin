@@ -12,10 +12,9 @@ class StartConsultation
 {
     public function __invoke(ApprovedOrder $order): ConsultationSession
     {
-        // If a session already exists for this order, reuse it
-        if ($existing = ConsultationSession::where('order_id', $order->id)->first()) {
-            return $existing;
-        }
+        // If a session already exists for this order, reuse it but do NOT return early.
+        // We still want to reattach answers and sync order/pending snapshots below.
+        $session = ConsultationSession::where('order_id', $order->id)->first();
 
         // Resolve service + treatment from the order (be generous with sources)
         $service = $this->firstSlug([
@@ -98,22 +97,115 @@ class StartConsultation
             ];
         }
 
-        // Create the session
-        $session = ConsultationSession::create([
-            'user_id'   => (int) $order->user_id,
-            'order_id'  => (int) $order->id,
-            'service'   => (string) $service,
-            'treatment' => (string) $treat,
-            'templates' => $snapshot,        // json column on the session
-            'steps'     => array_values($stepKeys),
-            'current'   => 0,
-        ]);
+        // Reuse existing session for this order if one exists; otherwise create a new one
+        if (!$session) {
+            $session = ConsultationSession::firstOrCreate(
+                ['order_id' => (int) $order->id],
+                [
+                    'user_id'   => (int) $order->user_id,
+                    'service'   => (string) $service,
+                    'treatment' => (string) $treat,
+                    'templates' => $snapshot,
+                    'steps'     => array_values($stepKeys),
+                    'current'   => 0,
+                ]
+            );
+        }
 
         // Denormalise essential info back onto the order->meta so downstream UIs can rely on it
         $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
 
+        // --- Reattach assessment answers (no cross-session hydration) ---
+        // 1) Prefer answers from the PENDING order (same reference) snapshot.
+        // 2) If missing, read ONLY the CURRENT session DB row.
+        // 3) As a last resort, use answers already present on the APPROVED order snapshot.
+        $answers = null;
+
+        // (1) PendingOrder (same reference only)
+        try {
+            $pending = \App\Models\PendingOrder::where('reference', $order->reference)->first();
+            if ($pending) {
+                $pm = is_array($pending->meta) ? $pending->meta : (json_decode($pending->meta ?? '[]', true) ?: []);
+                $answers = \Illuminate\Support\Arr::get($pm, 'assessment.answers')
+                        ?? \Illuminate\Support\Arr::get($pm, 'assessment_snapshot');
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('Unable to read PendingOrder answers for same reference: ' . $e->getMessage());
+        }
+
+        // (2) Current-session DB row only
+        if (empty($answers)) {
+            try {
+                $existing = \DB::table('consultation_form_responses')
+                    ->where('consultation_session_id', $session->id)
+                    ->whereIn('form_type', ['assessment','intake','risk_assessment'])
+                    ->orderByDesc('id')
+                    ->value('data');
+
+                if ($existing) {
+                    $answers = is_string($existing)
+                        ? (json_decode($existing, true) ?: [])
+                        : $existing;
+                }
+            } catch (\Throwable $e) {
+                \Log::warning('Unable to read current-session answers: ' . $e->getMessage());
+            }
+        }
+
+        // (3) ApprovedOrder snapshot (fallback only; do not prefer this)
+        if (empty($answers)) {
+            $answers = Arr::get($meta, 'assessment.answers')
+                    ?? Arr::get($meta, 'assessment_snapshot');
+        }
+
+        if (!empty($answers)) {
+            // Attach to order snapshot
+            $meta['assessment'] = $meta['assessment'] ?? [];
+            $meta['assessment']['answers'] = $answers;
+            // Also keep an immutable snapshot for admin UIs
+            $meta['assessment_snapshot'] = $answers;
+
+            // Persist to this session's consultation_form_responses row (idempotent)
+            try {
+                \DB::table('consultation_form_responses')->updateOrInsert(
+                    ['consultation_session_id' => $session->id, 'form_type' => 'risk_assessment'],
+                    [
+                        'clinic_form_id' => null,
+                        'data'          => json_encode($answers),
+                        'is_complete'   => 1,
+                        'completed_at'  => now(),
+                        'updated_at'    => now(),
+                        'created_at'    => now(),
+                    ]
+                );
+            } catch (\Throwable $e) {
+                \Log::warning('Unable to persist answers for this session: ' . $e->getMessage());
+            }
+        }
+
         // Ensure we can link back to the session later (used by Completed Order details & PDFs)
         $meta['consultation_session_id'] = $session->id;
+
+        // Keep PendingOrder snapshot in sync so the admin card always renders answers
+        try {
+            $pending = \App\Models\PendingOrder::where('reference', $order->reference)->first()
+                ?: \App\Models\PendingOrder::where('user_id', $order->user_id)->latest()->first();
+
+            if ($pending) {
+                $pm = is_array($pending->meta) ? $pending->meta : (json_decode($pending->meta ?? '[]', true) ?: []);
+                $pm['consultation_session_id'] = $session->id;
+
+                if (!empty($answers)) {
+                    $pm['assessment'] = $pm['assessment'] ?? [];
+                    $pm['assessment']['answers'] = $answers;
+                }
+
+                $pending->meta = $pm;
+                $pending->save();
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('Unable to sync PendingOrder snapshot: ' . $e->getMessage());
+        }
 
         // Snapshot patient fields (fallback to user record if not in meta)
         $meta['firstName'] = $meta['firstName'] ?? ($order->user->first_name ?? (\Illuminate\Support\Arr::get($order->meta ?? [], 'patient.firstName') ?? null));

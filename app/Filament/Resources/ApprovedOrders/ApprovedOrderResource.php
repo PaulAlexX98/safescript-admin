@@ -838,20 +838,26 @@ class ApprovedOrderResource extends Resource
                                     ->getStateUsing(function ($record) {
                                         // --- compute raw answers array (no formatting) ---
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        $answers = data_get($meta, 'formAnswers')
-                                            ?? data_get($meta, 'assessment')
+                                        
+                                        // Prefer flat answers first, then snapshot, then other fallbacks
+                                        $answers = data_get($meta, 'assessment.answers')
+                                            ?? data_get($meta, 'assessment_snapshot')
+                                            ?? data_get($meta, 'formAnswers')
                                             ?? data_get($meta, 'form_answers')
                                             ?? data_get($meta, 'answers');
-
-                                        $toArray = function ($v) {
-                                            if (is_string($v)) {
-                                                $d = json_decode($v, true);
-                                                if (json_last_error() === JSON_ERROR_NONE) return $d;
+                                        
+                                        // normalize if it came in as JSON string
+                                        if (is_string($answers)) {
+                                            $decoded = json_decode($answers, true);
+                                            if (json_last_error() === JSON_ERROR_NONE) {
+                                                $answers = $decoded;
                                             }
-                                            return $v;
-                                        };
-                                        $answers = $toArray($answers);
-
+                                        }
+                                        // If a container like ['answers' => [...]] slipped through, unwrap it
+                                        if (is_array($answers) && array_key_exists('answers', $answers) && is_array($answers['answers'])) {
+                                            $answers = $answers['answers'];
+                                        }
+                                        
                                         if (empty($answers)) {
                                             $sessionId = data_get($meta, 'consultation_session_id')
                                                 ?? data_get($meta, 'session_id')
@@ -896,19 +902,21 @@ class ApprovedOrderResource extends Resource
                                     ->getStateUsing(function ($record) {
                                         // 1) Load answers from order meta, else from consultation_sessions
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        $answers = data_get($meta, 'formAnswers')
-                                            ?? data_get($meta, 'assessment')
+                                        $answers = data_get($meta, 'assessment.answers')
+                                            ?? data_get($meta, 'assessment_snapshot')
+                                            ?? data_get($meta, 'formAnswers')
                                             ?? data_get($meta, 'form_answers')
                                             ?? data_get($meta, 'answers');
-
-                                        $toArray = function ($v) {
-                                            if (is_string($v)) {
-                                                $d = json_decode($v, true);
-                                                if (json_last_error() === JSON_ERROR_NONE) return $d;
+                                        
+                                        if (is_string($answers)) {
+                                            $decoded = json_decode($answers, true);
+                                            if (json_last_error() === JSON_ERROR_NONE) {
+                                                $answers = $decoded;
                                             }
-                                            return $v;
-                                        };
-                                        $answers = $toArray($answers);
+                                        }
+                                        if (is_array($answers) && array_key_exists('answers', $answers) && is_array($answers['answers'])) {
+                                            $answers = $answers['answers'];
+                                        }
 
                                         if (empty($answers)) {
                                             $sessionId = data_get($meta, 'consultation_session_id')
@@ -969,8 +977,68 @@ class ApprovedOrderResource extends Resource
                             ->color('success')
                             ->icon('heroicon-o-play')
                             ->action(function (\App\Models\ApprovedOrder $record) {
+                                // --- Preserve a snapshot of assessment answers BEFORE starting the consultation ---
+                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                $answers = data_get($meta, 'assessment.answers')
+                                    ?? data_get($meta, 'assessment_answers')
+                                    ?? data_get($meta, 'answers');
+
+                                // If we have answers, store a durable snapshot and optionally persist into an existing session
+                                if (!empty($answers) && (is_array($answers) || is_string($answers))) {
+                                    // Save a non-destructive snapshot copy on the order meta so later updates can't wipe it
+                                    data_set($meta, 'assessment_snapshot', is_string($answers) ? (json_decode($answers, true) ?: $answers) : $answers);
+
+                                    // If a session already exists on the order, upsert into consultation_form_responses for durability
+                                    $sid = (int) (data_get($meta, 'consultation_session_id') ?? 0);
+                                    if ($sid > 0) {
+                                        try {
+                                            $payload = is_string($answers) ? $answers : json_encode($answers);
+                                            \Illuminate\Support\Facades\DB::table('consultation_form_responses')->updateOrInsert(
+                                                ['consultation_session_id' => $sid, 'form_type' => 'risk_assessment'],
+                                                [
+                                                    'clinic_form_id' => null,
+                                                    'data'          => $payload,
+                                                    'is_complete'   => 1,
+                                                    'completed_at'  => now(),
+                                                    'updated_at'    => now(),
+                                                    'created_at'    => now(),
+                                                ]
+                                            );
+                                        } catch (\Throwable $e) {
+                                            \Log::warning('Unable to persist assessment answers snapshot to consultation_form_responses: ' . $e->getMessage());
+                                        }
+                                    }
+
+                                    // Write back the meta with the snapshot preserved
+                                    $record->meta = $meta;
+                                    $record->save();
+                                }
+
+                                // --- Now start the consultation (this may create a new session) ---
+                                /** @var \App\Models\ConsultationSession $session */
                                 $session = app(\App\Services\Consultations\StartConsultation::class)($record);
-                                // Use the new split-page route:
+
+                                // If a new session was created AND we have answers, persist them into that session as well
+                                if (isset($session) && isset($session->id) && !empty($answers)) {
+                                    try {
+                                        $payload = is_string($answers) ? $answers : json_encode($answers);
+                                        \Illuminate\Support\Facades\DB::table('consultation_form_responses')->updateOrInsert(
+                                            ['consultation_session_id' => (int) $session->id, 'form_type' => 'risk_assessment'],
+                                            [
+                                                'clinic_form_id' => null,
+                                                'data'          => $payload,
+                                                'is_complete'   => 1,
+                                                'completed_at'  => now(),
+                                                'updated_at'    => now(),
+                                                'created_at'    => now(),
+                                            ]
+                                        );
+                                    } catch (\Throwable $e) {
+                                        \Log::warning('Unable to persist assessment answers to newly created session: ' . $e->getMessage());
+                                    }
+                                }
+
+                                // Use the split-page route
                                 return redirect()->to("/admin/consultations/{$session->id}/pharmacist-advice");
                             }),
                         Action::make('addAdminNote')

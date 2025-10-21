@@ -18,6 +18,7 @@ class ApprovedOrder extends Model
      */
     protected $table = 'orders';
 
+
     /**
      * Casts similar in spirit to Appointment, adapted for orders.
      */
@@ -26,6 +27,41 @@ class ApprovedOrder extends Model
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
+
+    protected static function booted(): void
+    {
+        static::saving(function ($model) {
+            // decode current + incoming meta
+            $curr = is_array($model->getOriginal('meta'))
+                ? $model->getOriginal('meta')
+                : (json_decode($model->getOriginal('meta') ?? '[]', true) ?: []);
+
+            $incoming = is_array($model->meta)
+                ? $model->meta
+                : (json_decode($model->meta ?? '[]', true) ?: []);
+
+            // paths we NEVER allow to be lost
+            $mustKeep = [
+                'assessment.answers',
+                'assessment_snapshot',
+                'consultation_session_id',
+            ];
+
+            foreach ($mustKeep as $path) {
+                if (!\Illuminate\Support\Arr::has($incoming, $path) &&
+                    \Illuminate\Support\Arr::has($curr, $path)) {
+                    \Illuminate\Support\Arr::set(
+                        $incoming,
+                        $path,
+                        \Illuminate\Support\Arr::get($curr, $path)
+                    );
+                }
+            }
+
+            // final non-destructive merge (incoming wins, but preserved keys survive)
+            $model->meta = array_replace_recursive($curr, $incoming);
+        });
+    }
 
     /**
      * Scope to approved orders, similar to Appointment::scopeUpcoming().

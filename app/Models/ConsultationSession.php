@@ -12,6 +12,7 @@ class ConsultationSession extends Model
     }
 
     protected $fillable = [
+        'user_id',
         'order_id',
         'service',
         'treatment',

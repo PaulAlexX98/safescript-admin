@@ -916,20 +916,28 @@ class PendingOrderResource extends Resource
                                     ->getStateUsing(function ($record) {
                                         // --- compute raw answers array (no formatting) ---
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        $answers = data_get($meta, 'formAnswers')
-                                            ?? data_get($meta, 'assessment')
-                                            ?? data_get($meta, 'form_answers')
-                                            ?? data_get($meta, 'answers');
 
-                                        $toArray = function ($v) {
-                                            if (is_string($v)) {
-                                                $d = json_decode($v, true);
-                                                if (json_last_error() === JSON_ERROR_NONE) return $d;
+                                        // 1) Prefer the real shape: assessment.answers
+                                        $answers = data_get($meta, 'assessment.answers');
+
+                                        // 2) If assessment exists but answers are nested or it's already flat, normalize
+                                        if (empty($answers)) {
+                                            $ass = data_get($meta, 'assessment');
+                                            if (is_array($ass)) {
+                                                $answers = array_key_exists('answers', $ass) && is_array($ass['answers'])
+                                                    ? $ass['answers']
+                                                    : $ass;
                                             }
-                                            return $v;
-                                        };
-                                        $answers = $toArray($answers);
+                                        }
 
+                                        // 3) Other legacy keys the FE may have used
+                                        if (empty($answers)) {
+                                            $answers = data_get($meta, 'formAnswers')
+                                                ?? data_get($meta, 'form_answers')
+                                                ?? data_get($meta, 'answers');
+                                        }
+
+                                        // 4) If still empty, try consultation_session meta (by explicit id, then latest by user)
                                         if (empty($answers)) {
                                             $sessionId = data_get($meta, 'consultation_session_id')
                                                 ?? data_get($meta, 'session_id')
@@ -953,8 +961,17 @@ class PendingOrderResource extends Resource
                                             }
                                             if ($sessionMeta) {
                                                 $sessionMetaArr = is_array($sessionMeta) ? $sessionMeta : (json_decode($sessionMeta, true) ?: []);
-                                                $answers = data_get($sessionMetaArr, 'answers') ?? $sessionMetaArr;
+                                                // Prefer session.assessment.answers, then answers
+                                                $answers = data_get($sessionMetaArr, 'assessment.answers')
+                                                    ?? (is_array(data_get($sessionMetaArr, 'assessment')) && is_array(data_get($sessionMetaArr, 'assessment.answers', null))
+                                                        ? data_get($sessionMetaArr, 'assessment.answers')
+                                                        : (data_get($sessionMetaArr, 'answers') ?? $sessionMetaArr));
                                             }
+                                        }
+
+                                        // Ensure flat array (in case something passed a wrapper again)
+                                        if (is_array($answers) && array_key_exists('answers', $answers) && is_array($answers['answers'])) {
+                                            $answers = $answers['answers'];
                                         }
 
                                         return (is_array($answers) ? $answers : []);
@@ -972,22 +989,23 @@ class PendingOrderResource extends Resource
                                     })
                                     ->hiddenLabel()
                                     ->getStateUsing(function ($record) {
-                                        // 1) Load answers from order meta, else from consultation_sessions
+                                        // 1) Resolve answers using the same normalized logic as the view above
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        $answers = data_get($meta, 'formAnswers')
-                                            ?? data_get($meta, 'assessment')
-                                            ?? data_get($meta, 'form_answers')
-                                            ?? data_get($meta, 'answers');
+                                        $answers = data_get($meta, 'assessment.answers');
 
-                                        $toArray = function ($v) {
-                                            if (is_string($v)) {
-                                                $d = json_decode($v, true);
-                                                if (json_last_error() === JSON_ERROR_NONE) return $d;
+                                        if (empty($answers)) {
+                                            $ass = data_get($meta, 'assessment');
+                                            if (is_array($ass)) {
+                                                $answers = array_key_exists('answers', $ass) && is_array($ass['answers'])
+                                                    ? $ass['answers']
+                                                    : $ass;
                                             }
-                                            return $v;
-                                        };
-                                        $answers = $toArray($answers);
-
+                                        }
+                                        if (empty($answers)) {
+                                            $answers = data_get($meta, 'formAnswers')
+                                                ?? data_get($meta, 'form_answers')
+                                                ?? data_get($meta, 'answers');
+                                        }
                                         if (empty($answers)) {
                                             $sessionId = data_get($meta, 'consultation_session_id')
                                                 ?? data_get($meta, 'session_id')
@@ -1011,8 +1029,14 @@ class PendingOrderResource extends Resource
                                             }
                                             if ($sessionMeta) {
                                                 $sessionMetaArr = is_array($sessionMeta) ? $sessionMeta : (json_decode($sessionMeta, true) ?: []);
-                                                $answers = data_get($sessionMetaArr, 'answers') ?? $sessionMetaArr;
+                                                $answers = data_get($sessionMetaArr, 'assessment.answers')
+                                                    ?? (is_array(data_get($sessionMetaArr, 'assessment')) && is_array(data_get($sessionMetaArr, 'assessment.answers', null))
+                                                        ? data_get($sessionMetaArr, 'assessment.answers')
+                                                        : (data_get($sessionMetaArr, 'answers') ?? $sessionMetaArr));
                                             }
+                                        }
+                                        if (is_array($answers) && array_key_exists('answers', $answers) && is_array($answers['answers'])) {
+                                            $answers = $answers['answers'];
                                         }
 
                                         if (empty($answers) || !is_array($answers)) {
