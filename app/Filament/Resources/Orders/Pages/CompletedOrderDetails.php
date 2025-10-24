@@ -142,6 +142,10 @@ class CompletedOrderDetails extends ViewRecord
                     // Normalise a friendly consistent title and assign a display order
                     $rawType = strtolower((string) ($f->form_type ?? ''));
                     $rawTitle = strtolower((string) ($f->title ?? ''));
+                    $isRAF = str_contains($rawType, 'raf') || str_contains($rawTitle, 'raf');
+                    if ($isRAF) {
+                        return null; // exclude RAF from Submitted Forms
+                    }
 
                     // heuristics flags
                     $metaArr = is_array($f->meta) ? $f->meta : (json_decode($f->meta ?? '[]', true) ?: []);
@@ -160,7 +164,7 @@ class CompletedOrderDetails extends ViewRecord
                         $order = 10;
                     } elseif ($isRisk) {
                         $label = 'Risk Assessment';
-                        $order = 50;
+                        $order = 1; // put Risk Assessment at the top
                     } elseif ($hasDecl) {
                         // Default ambiguous "Declaration" to Pharmacist unless explicitly Patient
                         if ($hasPatient && !$hasPharmacist) {
@@ -191,7 +195,10 @@ class CompletedOrderDetails extends ViewRecord
                         'created' => optional($f->created_at)->format('d-m-Y H:i'),
                         'order'   => $order,
                     ];
-                })->toArray();
+                })
+                ->filter()
+                ->values()
+                ->toArray();
 
             usort($forms, function ($a, $b) {
                 $cmp = ($a['order'] ?? 99) <=> ($b['order'] ?? 99);

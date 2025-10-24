@@ -15,6 +15,8 @@ export default {
     'text-[11px]', 'leading-5', 'tabular-nums',
     'overflow-auto', 'overflow-x-auto', 'overflow-y-auto',
     'rounded-lg', 'table-fixed', 'sticky', 'top-0', 'z-10',
+    'backdrop-blur-0','backdrop-blur','backdrop-blur-sm','backdrop-blur-md',
+    'backdrop-blur-lg','backdrop-blur-xl','backdrop-blur-2xl','backdrop-blur-3xl'
   ],
   plugins: [],
 };

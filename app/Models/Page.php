@@ -15,6 +15,8 @@ class Page extends Model
         'template',
         'status',
         'content',
+        'content_rich',
+        'edit_mode',
         'description',
         'gallery',
         'visibility',
@@ -22,9 +24,11 @@ class Page extends Model
         'meta_title',
         'meta_description',
         'published_at',
+        'meta',
     ];
 
     protected $casts = [
+        'meta' => 'array',
         'active' => 'boolean',
         'gallery' => 'array',
         'published_at' => 'datetime',

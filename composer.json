@@ -18,7 +18,9 @@
         "filament/tables": "^4.0",
         "filament/widgets": "^4.0",
         "laravel/framework": "^12.0",
-        "laravel/tinker": "^2.10.1"
+        "laravel/tinker": "^2.10.1",
+        "malzariey/filament-lexical-editor": "^2.0",
+        "mdobes/rich-editor-fullscreen": "^1.2"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

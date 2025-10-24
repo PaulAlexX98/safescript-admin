@@ -35,3 +35,11 @@ Route::get('/raf/{service}', function (string $service) {
     $schema = ClinicForm::where('service_slug', $service)->value('raf_schema') ?? ['stages' => []];
     return response()->json(['ok' => true, 'schema' => $schema]);
 });
+
+use App\Support\Settings as AppSettings;
+
+Route::get('/theme', function () {
+    return response()->json([
+        'cardTheme' => AppSettings::get('card_theme', 'sky'),
+    ]);
+});

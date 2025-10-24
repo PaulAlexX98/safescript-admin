@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "7e7f4289534ca5985007318018b82069",
+    "content-hash": "ecc1c6f01965f58d9d33583d773120a2",
     "packages": [
         {
             "name": "anourvalar/eloquent-serialize",
@@ -3474,6 +3474,72 @@
             "time": "2025-07-17T05:12:15+00:00"
         },
         {
+            "name": "malzariey/filament-lexical-editor",
+            "version": "2.0.1",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/malzariey/filament-lexical-editor.git",
+                "reference": "23f86f44b3b3e812909697574b9e073823073daa"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/malzariey/filament-lexical-editor/zipball/23f86f44b3b3e812909697574b9e073823073daa",
+                "reference": "23f86f44b3b3e812909697574b9e073823073daa",
+                "shasum": ""
+            },
+            "require": {
+                "filament/filament": "^4.0",
+                "php": "^8.1"
+            },
+            "type": "library",
+            "extra": {
+                "laravel": {
+                    "providers": [
+                        "Malzariey\\FilamentLexicalEditor\\FilamentLexicalEditorServiceProvider"
+                    ]
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Malzariey\\FilamentLexicalEditor\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Majid Al Zariey",
+                    "email": "malzariey@hajarco.com",
+                    "role": "Developer"
+                }
+            ],
+            "description": "Implementation of meta's lexical editor in FilamentPHP, a modern, extensible text editor framework.",
+            "homepage": "https://github.com/malzariey/filament-lexical-editor",
+            "keywords": [
+                "Malzariey",
+                "editor",
+                "filaemntPHP",
+                "filament-lexical-editor",
+                "laravel",
+                "lexical",
+                "rich-text",
+                "text-editor"
+            ],
+            "support": {
+                "issues": "https://github.com/malzariey/filament-lexical-editor/issues",
+                "source": "https://github.com/malzariey/filament-lexical-editor"
+            },
+            "funding": [
+                {
+                    "url": "https://github.com/malzariey",
+                    "type": "github"
+                }
+            ],
+            "time": "2025-07-09T14:06:48+00:00"
+        },
+        {
             "name": "masterminds/html5",
             "version": "2.10.0",
             "source": {
@@ -3539,6 +3605,84 @@
                 "source": "https://github.com/Masterminds/html5-php/tree/2.10.0"
             },
             "time": "2025-07-25T09:04:22+00:00"
+        },
+        {
+            "name": "mdobes/rich-editor-fullscreen",
+            "version": "1.2.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/mdobes/filament-rich-editor-fullscreen.git",
+                "reference": "3b6b402b09573470202c6d57d8b10fe86afca53a"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/mdobes/filament-rich-editor-fullscreen/zipball/3b6b402b09573470202c6d57d8b10fe86afca53a",
+                "reference": "3b6b402b09573470202c6d57d8b10fe86afca53a",
+                "shasum": ""
+            },
+            "require": {
+                "filament/forms": "^4.0",
+                "php": "^8.1",
+                "spatie/laravel-package-tools": "^1.15.0"
+            },
+            "require-dev": {
+                "laravel/pint": "^1.0",
+                "nunomaduro/collision": "^7.9",
+                "nunomaduro/larastan": "^2.0.1",
+                "orchestra/testbench": "^8.0",
+                "pestphp/pest": "^2.1",
+                "pestphp/pest-plugin-arch": "^2.0",
+                "pestphp/pest-plugin-laravel": "^2.0",
+                "phpstan/extension-installer": "^1.1",
+                "phpstan/phpstan-deprecation-rules": "^1.0",
+                "phpstan/phpstan-phpunit": "^1.0"
+            },
+            "type": "library",
+            "extra": {
+                "laravel": {
+                    "aliases": {
+                        "RichEditorFullscreen": "mdobes\\RichEditorFullscreen\\Facades\\RichEditorFullscreen"
+                    },
+                    "providers": [
+                        "mdobes\\RichEditorFullscreen\\RichEditorFullscreenServiceProvider"
+                    ]
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "mdobes\\RichEditorFullscreen\\": "src/",
+                    "mdobes\\RichEditorFullscreen\\Database\\Factories\\": "database/factories/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Michal Dobeš",
+                    "email": "michal@dobes.dev",
+                    "role": "Developer"
+                }
+            ],
+            "description": "Fullscreen functionality for Filament V4 Rich Editor",
+            "homepage": "https://github.com/mdobes/rich-editor-fullscreen",
+            "keywords": [
+                "laravel",
+                "mdobes",
+                "rich-editor-fullscreen"
+            ],
+            "support": {
+                "issues": "https://github.com/mdobes/rich-editor-fullscreen/issues",
+                "source": "https://github.com/mdobes/rich-editor-fullscreen"
+            },
+            "funding": [
+                {
+                    "url": "https://github.com/mdobes",
+                    "type": "github"
+                }
+            ],
+            "time": "2025-09-27T21:03:53+00:00"
         },
         {
             "name": "monolog/monolog",

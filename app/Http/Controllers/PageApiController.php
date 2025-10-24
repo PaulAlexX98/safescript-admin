@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Page;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use App\Support\Shortcodes\PageShortcodes;
 
 class PageApiController extends Controller
 {
@@ -43,8 +44,12 @@ class PageApiController extends Controller
             'title' => $p->title ?? $p->name ?? '',
             'slug' => $p->slug,
             'content' => $p->content ?? $p->description ?? '',
+            'rendered_html' => PageShortcodes::render($p->content ?? $p->description ?? ''),
             'meta_title' => $p->meta_title,
             'meta_description' => $p->meta_description,
+            'meta' => is_array($p->meta)
+                ? $p->meta
+                : (is_string($p->meta) && $p->meta !== '' ? (json_decode($p->meta, true) ?: []) : []),
             'gallery' => is_array($p->gallery)
                 ? $p->gallery
                 : (is_string($p->gallery) && $p->gallery !== '' ? json_decode($p->gallery, true) ?: [] : []),
