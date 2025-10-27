@@ -3,8 +3,8 @@
 namespace App\Filament\Resources\Services\Pages;
 
 use App\Filament\Resources\Services\ServiceResource;
-use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
+use Filament\Actions;
 
 class ListServices extends ListRecords
 {
@@ -13,7 +13,9 @@ class ListServices extends ListRecords
     protected function getHeaderActions(): array
     {
         return [
-            CreateAction::make(),
+            Actions\CreateAction::make()
+                ->label('Create Service')
+                ->createAnother(false),
         ];
     }
 }

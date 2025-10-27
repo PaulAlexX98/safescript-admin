@@ -28,6 +28,7 @@ class ClinicForm extends Model
         'version'   => 'integer',
         'raf_version' => 'integer',
         'raf_schema' => 'array',
+        'form_type' => 'string',
     ];
 
     /* ---------------------------

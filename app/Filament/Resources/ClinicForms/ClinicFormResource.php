@@ -42,7 +42,7 @@ class ClinicFormResource extends Resource
     {
         return $table
             ->recordUrl(function ($record) {
-                return ($record->form_type === 'raf')
+                return ($record->type === 'raf')
                     ? RafBuilder::getUrl(['record' => $record])
                     : EditClinicForm::getUrl(['record' => $record]);
             })
@@ -105,7 +105,7 @@ class ClinicFormResource extends Resource
                     ->label('RAF')
                     ->icon('heroicon-m-wrench-screwdriver')
                     ->url(fn ($record) => RafBuilder::getUrl(['record' => $record]))
-                    ->visible(fn ($record) => ($record->form_type ?? null) === 'raf'),
+                    ->visible(fn ($record) => ($record->type ?? null) === 'raf'),
                 Actions\DeleteAction::make(),
             ])
             ->bulkActions([
@@ -125,7 +125,7 @@ class ClinicFormResource extends Resource
             'create' => CreateClinicForm::route('/create'),
             'view'   => ViewClinicForm::route('/{record}'),
             'edit'   => EditClinicForm::route('/{record}/edit'),
-            'raf' => Pages\RafBuilder::route('/{record}/raf'),
+            'raf-builder' => Pages\RafBuilder::route('/{record}/raf'),
         ];
     }
 }
