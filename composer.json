@@ -17,6 +17,7 @@
         "filament/support": "^4.0",
         "filament/tables": "^4.0",
         "filament/widgets": "^4.0",
+        "guava/calendar": "^2.0",
         "laravel/framework": "^12.0",
         "laravel/tinker": "^2.10.1",
         "malzariey/filament-lexical-editor": "^2.0",

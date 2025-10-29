@@ -1,37 +1,32 @@
 <?php
 
-// app/Models/Appointment.php
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Appointment extends Model
 {
-    protected $table = 'appointments';
+    use HasFactory, SoftDeletes;
+
+    protected $fillable = [
+        'start_at', 'end_at',
+        'patient_name', 'first_name', 'last_name',
+        'service_slug', 'service_name',
+        'status', 'order_id',
+    ];
 
     protected $casts = [
         'start_at' => 'datetime',
-        'end_at' => 'datetime',
-        'dob' => 'date',
+        'end_at'   => 'datetime',
     ];
 
-    public function scopeUpcoming($q)
+    // Nice title used by Filament (Resource record title)
+    public function getDisplayTitleAttribute(): string
     {
-        return $q->where('status', 'booked')
-                 ->where('start_at', '>=', now())
-                 ->orderBy('start_at');
-    }
-
-    public function getAppointmentTimeAttribute(): string
-    {
-        $start = $this->start_at?->format('d-m-Y H:i') ?? '';
-        $end = $this->end_at?->format('H:i') ?? '';
-        return trim($start . ' - ' . $end, ' -');
-    }
-
-    // relation if you track items
-    public function items()
-    {
-        return $this->hasMany(AppointmentItem::class, 'appointment_id');
+        $name = $this->patient_name ?: trim(($this->first_name ?? '').' '.($this->last_name ?? ''));
+        $when = optional($this->start_at)->format('d M Y, H:i');
+        return trim(($name ?: 'Appointment').' · '.($when ?: ''));
     }
 }

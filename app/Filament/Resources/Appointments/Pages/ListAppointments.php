@@ -1,12 +1,9 @@
 <?php
 
-namespace App\Filament\Resources\Appointments\Pages;
+namespace App\Filament\Resources\Appointments\AppointmentResource\Pages;
 
 use App\Filament\Resources\Appointments\AppointmentResource;
-use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Relations\Relation;
 
 class ListAppointments extends ListRecords
 {
@@ -14,26 +11,6 @@ class ListAppointments extends ListRecords
 
     protected function getHeaderActions(): array
     {
-        return [
-        ];
-    }
-    
-    protected function getTableQuery(): Builder|Relation|null
-    {
-        $query = parent::getTableQuery();
-
-        if (request()->query('filter') === 'upcoming') {
-            if ($query instanceof Builder) {
-                return $query->upcoming();
-            }
-
-            if ($query instanceof Relation) {
-                return $query->getQuery()->upcoming();
-            }
-
-            return $query; // null
-        }
-
-        return $query;
+        return []; // add CreateAction if you want to create from admin
     }
 }

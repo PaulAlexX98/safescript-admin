@@ -15,6 +15,7 @@ use App\Filament\Resources\Orders\PendingOrderResource;
 use Illuminate\Support\Facades\Route;
 use Filament\Pages;
 
+
 class AdminPanelProvider extends PanelProvider
 {
     public function panel(Panel $panel): Panel
@@ -99,6 +100,11 @@ HTML;
                             ->url(fn () => PendingOrderResource::getUrl('index'))
                             ->visible($hasOrders),
 
+                        NavigationItem::make('Appointments')
+                            ->icon('heroicon-o-calendar')
+                            ->url(fn () => AppointmentsAppointmentResource::getUrl('index'))
+                            ->visible(true),
+
                         NavigationItem::make('Pending Approval')
                             ->icon('heroicon-o-clock')
                             ->badge($pendingApproval ?: null)
@@ -110,6 +116,17 @@ HTML;
                             ->badge($upcoming ?: null)
                             ->url(fn () => AppointmentsAppointmentResource::getUrl('index', ['filter' => 'upcoming']))
                             ->visible($hasAppointments),
+                    ]),
+                NavigationGroup::make('Scheduling')
+                    ->collapsed(false)
+                    ->items([
+                        NavigationItem::make('Schedules')
+                            ->icon('heroicon-o-clock')
+                            ->url(function () {
+                                $class = \App\Filament\Resources\Scheduling\Schedules\ScheduleResource::class;
+                                return class_exists($class) ? $class::getUrl('index') : '/admin';
+                            })
+                            ->visible(true),
                     ]),
                 NavigationGroup::make('Orders')
                     ->collapsed(false),

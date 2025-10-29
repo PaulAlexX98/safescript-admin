@@ -20,14 +20,7 @@ use App\Models\ClinicForm;
 use App\Models\ConsultationFormResponse;
 use App\Http\Controllers\Admin\ConsultationPdfController;
 use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
-use App\Http\Controllers\Admin\AppointmentsApiController;
 
-Route::middleware(['web','auth'])
-    ->prefix('admin/api/appointments')
-    ->group(function () {
-        Route::get('/stats', [AppointmentsApiController::class, 'stats'])->name('admin.api.appointments.stats');
-        Route::get('/day',   [AppointmentsApiController::class, 'day'])->name('admin.api.appointments.day');
-    });
 
 Route::middleware([
     'web',

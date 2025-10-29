@@ -85,10 +85,31 @@ class PendingOrderResource extends Resource
                             ?: data_get($meta, 'serviceName')
                             ?: data_get($meta, 'treatment')
                             ?: data_get($meta, 'title');
-                        return $name ?: 'Weight Management Service';
-                    })
-                    ->wrap()
-                    ->toggleable(),
+
+                        // fallback or override from consultation session slug
+                        $sid = data_get($meta, 'consultation_session_id')
+                            ?? data_get($meta, 'consultation.sessionId');
+
+                        if ($sid) {
+                            try {
+                                $slug = \Illuminate\Support\Facades\DB::table('consultation_sessions')
+                                    ->where('id', $sid)
+                                    ->value('service_slug');
+
+                                if ($slug) {
+                                    $fromSlug = ucwords(str_replace(['-', '_'], ' ', $slug));
+                                    // prefer the slug source if meta name is missing or looks generic
+                                    if (!$name || stripos($name, 'weight management') !== false || stripos($name, 'service') !== false) {
+                                        $name = $fromSlug;
+                                    }
+                                }
+                            } catch (\Throwable $e) {
+                                // ignore
+                            }
+                        }
+
+                        return $name ?: 'Service';
+                    }),
 
                 TextColumn::make('order_item')
                     ->label('Order Item')
@@ -508,17 +529,27 @@ class PendingOrderResource extends Resource
                                             TextEntry::make('order_datetime')
                                                 ->hiddenLabel()
                                                 ->getStateUsing(function ($record) {
-                                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                                    $type = strtolower((string) (data_get($meta, 'type', '')));
-                                                    if (! in_array($type, ['consultation', 'new', 'transfer'], true)) {
-                                                        return null;
-                                                    }
-                                                    $start = data_get($meta, 'appointment_start_at');
-                                                    $end   = data_get($meta, 'appointment_end_at');
+                                                    $meta = is_array($record->meta)
+                                                        ? $record->meta
+                                                        : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                                    // try multiple meta paths for start and end
+                                                    $start = data_get($meta, 'appointment_start_at')
+                                                        ?? data_get($meta, 'appointment.start_at')
+                                                        ?? data_get($meta, 'appointment_at')
+                                                        ?? data_get($meta, 'booking.start_at');
+
+                                                    $end   = data_get($meta, 'appointment_end_at')
+                                                        ?? data_get($meta, 'appointment.end_at')
+                                                        ?? data_get($meta, 'booking.end_at');
+
                                                     if (! $start) return null;
+
                                                     $fmt = function ($dt) {
-                                                        try { return \Carbon\Carbon::parse($dt)->format('d-m-Y H:i'); } catch (\Throwable) { return (string) $dt; }
+                                                        try { return \Carbon\Carbon::parse($dt)->format('d-m-Y H:i'); }
+                                                        catch (\Throwable) { return (string) $dt; }
                                                     };
+
                                                     return $end ? ($fmt($start) . ' — ' . $fmt($end)) : $fmt($start);
                                                 }),
                                         ]),
@@ -905,164 +936,35 @@ class PendingOrderResource extends Resource
                                     ]),
                             ]),
 
-                        // Assessment / RAF Form Answers
+                        // Consultation QA snapshot (RAF only — rendered via Blade)
                         Section::make('Assessment Answers')
                             ->collapsible()
-                            ->collapsed()
                             ->schema([
-                                // Prefer a Blade view renderer if present; it receives $state = answers array
-                                ViewEntry::make('assessment_answers')
+                                ViewEntry::make('consultation_qa')
                                     ->label(false)
                                     ->getStateUsing(function ($record) {
-                                        // --- compute raw answers array (no formatting) ---
+                                        // First try formsQA from the PendingOrder meta
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                        $forms = data_get($meta, 'formsQA', []);
 
-                                        // 1) Prefer the real shape: assessment.answers
-                                        $answers = data_get($meta, 'assessment.answers');
-
-                                        // 2) If assessment exists but answers are nested or it's already flat, normalize
-                                        if (empty($answers)) {
-                                            $ass = data_get($meta, 'assessment');
-                                            if (is_array($ass)) {
-                                                $answers = array_key_exists('answers', $ass) && is_array($ass['answers'])
-                                                    ? $ass['answers']
-                                                    : $ass;
+                                        // If empty, fall back to the real Order row by reference
+                                        if (empty($forms)) {
+                                            try {
+                                                $order = \App\Models\Order::where('reference', $record->reference)->first();
+                                                if ($order) {
+                                                    $ometa = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                                    $forms = data_get($ometa, 'formsQA', []);
+                                                }
+                                            } catch (\Throwable $e) {
+                                                // ignore
                                             }
                                         }
 
-                                        // 3) Other legacy keys the FE may have used
-                                        if (empty($answers)) {
-                                            $answers = data_get($meta, 'formAnswers')
-                                                ?? data_get($meta, 'form_answers')
-                                                ?? data_get($meta, 'answers');
-                                        }
-
-                                        // 4) If still empty, try consultation_session meta (by explicit id, then latest by user)
-                                        if (empty($answers)) {
-                                            $sessionId = data_get($meta, 'consultation_session_id')
-                                                ?? data_get($meta, 'session_id')
-                                                ?? data_get($meta, 'intake.session_id');
-
-                                            $sessionMeta = null;
-                                            if ($sessionId) {
-                                                try {
-                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
-                                                        ->where('id', (int) $sessionId)
-                                                        ->value('meta');
-                                                } catch (\Throwable $e) { $sessionMeta = null; }
-                                            }
-                                            if ($sessionMeta === null && !empty($record->user_id)) {
-                                                try {
-                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
-                                                        ->where('user_id', (int) $record->user_id)
-                                                        ->orderByDesc('id')
-                                                        ->value('meta');
-                                                } catch (\Throwable $e) { $sessionMeta = null; }
-                                            }
-                                            if ($sessionMeta) {
-                                                $sessionMetaArr = is_array($sessionMeta) ? $sessionMeta : (json_decode($sessionMeta, true) ?: []);
-                                                // Prefer session.assessment.answers, then answers
-                                                $answers = data_get($sessionMetaArr, 'assessment.answers')
-                                                    ?? (is_array(data_get($sessionMetaArr, 'assessment')) && is_array(data_get($sessionMetaArr, 'assessment.answers', null))
-                                                        ? data_get($sessionMetaArr, 'assessment.answers')
-                                                        : (data_get($sessionMetaArr, 'answers') ?? $sessionMetaArr));
-                                            }
-                                        }
-
-                                        // Ensure flat array (in case something passed a wrapper again)
-                                        if (is_array($answers) && array_key_exists('answers', $answers) && is_array($answers['answers'])) {
-                                            $answers = $answers['answers'];
-                                        }
-
-                                        return (is_array($answers) ? $answers : []);
+                                        return $forms;
                                     })
-                                    ->view('filament/pending-orders/assessment-card') // Blade view you can customize
-                                    ->columnSpanFull()
-                                    ->hidden(function () {
-                                        return ! \Illuminate\Support\Facades\View::exists('filament/pending-orders/assessment-card');
-                                    }),
-
-                                // Fallback renderer (shown only if the Blade view does not exist yet)
-                                \Filament\Infolists\Components\TextEntry::make('assessment_render_fallback')
-                                    ->hidden(function () {
-                                        return \Illuminate\Support\Facades\View::exists('filament/pending-orders/assessment-card');
-                                    })
-                                    ->hiddenLabel()
-                                    ->getStateUsing(function ($record) {
-                                        // 1) Resolve answers using the same normalized logic as the view above
-                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        $answers = data_get($meta, 'assessment.answers');
-
-                                        if (empty($answers)) {
-                                            $ass = data_get($meta, 'assessment');
-                                            if (is_array($ass)) {
-                                                $answers = array_key_exists('answers', $ass) && is_array($ass['answers'])
-                                                    ? $ass['answers']
-                                                    : $ass;
-                                            }
-                                        }
-                                        if (empty($answers)) {
-                                            $answers = data_get($meta, 'formAnswers')
-                                                ?? data_get($meta, 'form_answers')
-                                                ?? data_get($meta, 'answers');
-                                        }
-                                        if (empty($answers)) {
-                                            $sessionId = data_get($meta, 'consultation_session_id')
-                                                ?? data_get($meta, 'session_id')
-                                                ?? data_get($meta, 'intake.session_id');
-
-                                            $sessionMeta = null;
-                                            if ($sessionId) {
-                                                try {
-                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
-                                                        ->where('id', (int) $sessionId)
-                                                        ->value('meta');
-                                                } catch (\Throwable $e) { $sessionMeta = null; }
-                                            }
-                                            if ($sessionMeta === null && !empty($record->user_id)) {
-                                                try {
-                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
-                                                        ->where('user_id', (int) $record->user_id)
-                                                        ->orderByDesc('id')
-                                                        ->value('meta');
-                                                } catch (\Throwable $e) { $sessionMeta = null; }
-                                            }
-                                            if ($sessionMeta) {
-                                                $sessionMetaArr = is_array($sessionMeta) ? $sessionMeta : (json_decode($sessionMeta, true) ?: []);
-                                                $answers = data_get($sessionMetaArr, 'assessment.answers')
-                                                    ?? (is_array(data_get($sessionMetaArr, 'assessment')) && is_array(data_get($sessionMetaArr, 'assessment.answers', null))
-                                                        ? data_get($sessionMetaArr, 'assessment.answers')
-                                                        : (data_get($sessionMetaArr, 'answers') ?? $sessionMetaArr));
-                                            }
-                                        }
-                                        if (is_array($answers) && array_key_exists('answers', $answers) && is_array($answers['answers'])) {
-                                            $answers = $answers['answers'];
-                                        }
-
-                                        if (empty($answers) || !is_array($answers)) {
-                                            return '&lt;em&gt;No answers submitted&lt;/em&gt;';
-                                        }
-
-                                        // simple flat fallback while Blade view is missing
-                                        $fmt = function ($v) {
-                                            if (is_bool($v)) return $v ? 'Yes' : 'No';
-                                            if (is_array($v)) return implode(', ', array_map(fn($x) => is_scalar($x)? (string)$x : json_encode($x), $v));
-                                            if ($v === null || $v === '') return '—';
-                                            return (string) $v;
-                                        };
-                                        $rows = [];
-                                        foreach ($answers as $k => $v) {
-                                            $label = ucwords(str_replace(['_','-'],' ', (string) $k));
-                                            $rows[] = '&lt;tr&gt;&lt;th class="text-left pr-3 align-top whitespace-nowrap"&gt;'
-                                                . e($label) . ':&lt;/th&gt;&lt;td class="align-top"&gt;'
-                                                . e($fmt($v))
-                                                . '&lt;/td&gt;&lt;/tr&gt;';
-                                        }
-                                        return '&lt;div class="rounded border border-gray-200 p-3"&gt;&lt;table class="text-sm w-full"&gt;' . implode('', $rows) . '&lt;/table&gt;&lt;/div&gt;';
-                                    })
-                                    ->html()
+                                    ->view('filament.pending-orders.consultation-qa')
                                     ->columnSpanFull(),
-                            ])
+                            ]),
                     ])
                     ->extraModalFooterActions([
                         Action::make('approve')

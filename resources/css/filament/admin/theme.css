@@ -1,6 +1,5 @@
-/* Load Filament core styles first */
-@import '../../../../vendor/filament/filament/resources/css/theme.css';
-@import '/vendor/malzariey/filament-lexical-editor/resources/css/index.css';
+@source '../../../../vendor/guava/calendar/resources/**/*';
+@import '../../../../vendor/guava/calendar/resources/css/theme.css';
 
 /* Tailwind v3 entry points */
 @tailwind base;
