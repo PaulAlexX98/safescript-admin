@@ -2,6 +2,10 @@
 
 namespace App\Filament\Resources\Services\Schemas;
 
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Toggle;
+use Filament\Forms\Components\Textarea;
 use Filament\Schemas\Schema;
 use Filament\Forms;
 
@@ -9,20 +13,20 @@ class ServiceForm
 {
     public static function configure(Schema $schema): Schema
     {
-        return $schema->schema([
-            Forms\Components\TextInput::make('name')
+        return $schema->components([
+            TextInput::make('name')
                 ->required()
                 ->maxLength(190),
-            Forms\Components\TextInput::make('code')
+            TextInput::make('code')
                 ->maxLength(50)
                 ->unique(ignoreRecord: true),
-            Forms\Components\TextInput::make('price')
+            TextInput::make('price')
                 ->numeric()
                 ->prefix('£')
                 ->minValue(0)
                 ->step(0.01)
                 ->required(),
-            Forms\Components\Select::make('category')
+            Select::make('category')
                 ->options([
                     'vaccination' => 'Vaccination',
                     'consultation' => 'Consultation',
@@ -30,9 +34,9 @@ class ServiceForm
                     'other' => 'Other',
                 ])
                 ->native(false),
-            Forms\Components\Toggle::make('active')
+            Toggle::make('active')
                 ->default(true),
-            Forms\Components\Textarea::make('description')
+            Textarea::make('description')
                 ->rows(3)
                 ->maxLength(3000)
                 ->columnSpanFull(),

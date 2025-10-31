@@ -2,6 +2,15 @@
 
 namespace App\Filament\Resources\Pages\Schemas;
 
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\RichEditor;
+use App\Models\Page;
+use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Toggle;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+use Filament\Forms\Components\Slider;
 use Filament\Forms;
 use Filament\Schemas\Schema;
 use Filament\Schemas\Components\Section;
@@ -18,35 +27,35 @@ class PageForm
     {
         return $schema
             ->columns(12) // 8/4 layout
-            ->schema([
+            ->components([
 
                 // ===== LEFT COLUMN (8) =====
                 Section::make()
                     ->schema([
 
-                        Forms\Components\TextInput::make('title')
+                        TextInput::make('title')
                             ->label('Title')
                             ->required()
                             ->maxLength(190)
                             ->live(onBlur: true)
                             ->afterStateUpdated(function (Set $set, Get $get, ?string $state) {
-                                $set('slug', $get('slug') ?: \Illuminate\Support\Str::slug($state ?? ''));
+                                $set('slug', $get('slug') ?: Str::slug($state ?? ''));
                             }),
 
-                        Forms\Components\TextInput::make('slug')
+                        TextInput::make('slug')
                             ->label('Permalink')
                             ->prefix(url('/'))
                             ->helperText('Used in the page URL')
                             ->unique(ignoreRecord: true)
                             ->required(),
 
-                        Forms\Components\Textarea::make('description')
+                        Textarea::make('description')
                             ->rows(4)
                             ->helperText('Short summary used in listings.'),
 
                         // Optional visual editor (non-persistent) that live-updates the HTML textarea below
                         (function () {
-                            if (class_exists(\Malzariey\FilamentLexicalEditor\FilamentLexicalEditor::class)) {
+                            if (class_exists(FilamentLexicalEditor::class)) {
                                 return FilamentLexicalEditor::make('content_rich_ui')
                                     ->label('Visual editor (optional)')
                                     ->columnSpanFull()
@@ -66,29 +75,29 @@ class PageForm
                                         $set('content', $html);
                                     })
                                     ->enabledToolbars([
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::UNDO,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::REDO,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::DIVIDER,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::H2,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::H3,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::BOLD,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::ITALIC,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::UNDERLINE,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::STRIKETHROUGH,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::LINK,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::TEXT_COLOR,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::ALIGN_LEFT,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::ALIGN_CENTER,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::ALIGN_RIGHT,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::DIVIDER,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::BULLET_LIST,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::NUMBER_LIST,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::CODE,
-                                        \Malzariey\FilamentLexicalEditor\Enums\ToolbarItem::CLEAR,
+                                        ToolbarItem::UNDO,
+                                        ToolbarItem::REDO,
+                                        ToolbarItem::DIVIDER,
+                                        ToolbarItem::H2,
+                                        ToolbarItem::H3,
+                                        ToolbarItem::BOLD,
+                                        ToolbarItem::ITALIC,
+                                        ToolbarItem::UNDERLINE,
+                                        ToolbarItem::STRIKETHROUGH,
+                                        ToolbarItem::LINK,
+                                        ToolbarItem::TEXT_COLOR,
+                                        ToolbarItem::ALIGN_LEFT,
+                                        ToolbarItem::ALIGN_CENTER,
+                                        ToolbarItem::ALIGN_RIGHT,
+                                        ToolbarItem::DIVIDER,
+                                        ToolbarItem::BULLET_LIST,
+                                        ToolbarItem::NUMBER_LIST,
+                                        ToolbarItem::CODE,
+                                        ToolbarItem::CLEAR,
                                     ]);
                             }
 
-                            return Forms\Components\RichEditor::make('content_rich_ui')
+                            return RichEditor::make('content_rich_ui')
                                 ->label('Visual editor (optional)')
                                 ->columnSpanFull()
                                 ->extraAlpineAttributes([
@@ -121,15 +130,15 @@ class PageForm
                                 ->placeholder('Edit visually — this will live-update the HTML field below.');
                         })(),
 
-                        Forms\Components\Textarea::make('content')
+                        Textarea::make('content')
                             ->label('Page HTML')
                             ->rows(24)
-                            ->default(fn (?\App\Models\Page $record) => is_string($record?->content) ? $record->content : '')
+                            ->default(fn (?Page $record) => is_string($record?->content) ? $record->content : '')
                             ->dehydrated(true)
                             ->columnSpanFull()
                             ->helperText('This saves directly to pages.content. Paste your full HTML here.'),
 
-                        Forms\Components\FileUpload::make('gallery')
+                        FileUpload::make('gallery')
                             ->label('Gallery images')
                             ->image()
                             ->multiple()
@@ -150,7 +159,7 @@ class PageForm
 
                         Section::make('Publish')
                             ->schema([
-                                Forms\Components\Select::make('status')
+                                Select::make('status')
                                     ->options([
                                         'draft'     => 'Draft',
                                         'published' => 'Published',
@@ -158,7 +167,7 @@ class PageForm
                                     ->default('published')
                                     ->required(),
 
-                                Forms\Components\Select::make('template')
+                                Select::make('template')
                                     ->options([
                                         'default' => 'Default',
                                         'WeightLossV1' => 'Weight Loss (V1)',
@@ -166,7 +175,7 @@ class PageForm
                                     ->default('default')
                                     ->required(),
 
-                                Forms\Components\Select::make('visibility')
+                                Select::make('visibility')
                                     ->options([
                                         'public'   => 'Public',
                                         'internal' => 'Internal',
@@ -174,7 +183,7 @@ class PageForm
                                     ])
                                     ->required(),
 
-                                Forms\Components\Toggle::make('active')
+                                Toggle::make('active')
                                     ->label('Active')
                                     ->default(true),
                             ])
@@ -182,11 +191,11 @@ class PageForm
 
                         Section::make('Search Engine Optimize')
                             ->schema([
-                                Forms\Components\TextInput::make('meta_title')
+                                TextInput::make('meta_title')
                                     ->label('Meta title')
                                     ->maxLength(60),
 
-                                Forms\Components\Textarea::make('meta_description')
+                                Textarea::make('meta_description')
                                     ->label('Meta description')
                                     ->rows(3)
                                     ->maxLength(160),
@@ -196,13 +205,13 @@ class PageForm
                         Section::make('Background Image')
                             ->statePath('meta.background')
                             ->schema([
-                                Forms\Components\Toggle::make('enabled')
+                                Toggle::make('enabled')
                                     ->label('Use background')
                                     ->default(true)
                                     ->inline(false)
                                     ->helperText('Turn off to render this page without a background image.'),
 
-                                Forms\Components\FileUpload::make('background_upload')
+                                FileUpload::make('background_upload')
                                     ->label('Upload image')
                                     ->image()
                                     ->directory('pages/backgrounds')
@@ -222,7 +231,7 @@ class PageForm
                                         } elseif (is_array($state)) {
                                             // Filament can return various shapes
                                             $path = $state['path'] ?? $state['url'] ?? $state['name'] ?? '';
-                                        } elseif ($state instanceof \Livewire\Features\SupportFileUploads\TemporaryUploadedFile) {
+                                        } elseif ($state instanceof TemporaryUploadedFile) {
                                             $path = $state->getFilename();
                                         }
 
@@ -236,21 +245,21 @@ class PageForm
                                         }
                                     }),
 
-                                Forms\Components\TextInput::make('url')
+                                TextInput::make('url')
                                     ->label('Image URL')
                                     ->placeholder('https://... or /storage/...')
                                     ->helperText('WebP or AVIF recommended. 200–300 KB target.')
                                     ->live(onBlur: true)
                                     ->dehydrated(true),
 
-                                Forms\Components\Slider::make('blur')
+                                Slider::make('blur')
                                     ->label('Blur')
                                     ->minValue(0)
                                     ->maxValue(24)
                                     ->default(12)
                                     ->helperText('Backdrop blur strength for the glass card.'),
 
-                                Forms\Components\Slider::make('overlay')
+                                Slider::make('overlay')
                                     ->label('Dark overlay')
                                     ->minValue(0)
                                     ->maxValue(80)

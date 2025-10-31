@@ -2,18 +2,18 @@
 
 namespace App\Filament\Pages;
 
+use Filament\Schemas\Schema;
+use Filament\Schemas\Components\Section;
 use Filament\Pages\Page;
-use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
-use Filament\Forms\Form;
 use App\Support\Settings;
 
 class AppearanceSettings extends Page
 {
-    protected static ?string $navigationIcon = 'heroicon-o-swatch';
-    protected static ?string $navigationGroup = 'Front';
+    protected static string | \BackedEnum | null $navigationIcon = 'heroicon-o-swatch';
+    protected static string | \UnitEnum | null $navigationGroup = 'Front';
     protected static ?int $navigationSort = 2;
-    protected static string $view = 'filament.pages.appearance-settings';
+    protected string $view = 'filament.pages.appearance-settings';
     protected static ?string $title = 'Appearance';
     protected ?string $heading = 'Appearance';
     protected ?string $subheading = 'Choose site-wide display options';
@@ -27,10 +27,10 @@ class AppearanceSettings extends Page
         ]);
     }
 
-    public function form(Form $form): Form
+    public function form(Schema $schema): Schema
     {
-        return $form
-            ->schema([
+        return $schema
+            ->components([
                 Section::make('Cards')
                     ->schema([
                         Select::make('card_theme')

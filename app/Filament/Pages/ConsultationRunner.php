@@ -2,6 +2,9 @@
 
 namespace App\Filament\Pages;
 
+use App\Models\User;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Throwable;
 use App\Models\ApprovedOrder;
 use App\Models\ConsultationSession;
 use Filament\Pages\Page;
@@ -45,8 +48,8 @@ class ConsultationRunner extends Page
     public function mount(ConsultationSession $session, ?string $tab = null): void
     {
         // Load order and its user. If the User model uses SoftDeletes, include trashed users.
-        $userClass = \App\Models\User::class;
-        $usesSoftDeletes = in_array(\Illuminate\Database\Eloquent\SoftDeletes::class, class_uses($userClass) ?: []);
+        $userClass = User::class;
+        $usesSoftDeletes = in_array(SoftDeletes::class, class_uses($userClass) ?: []);
 
         if ($usesSoftDeletes) {
             // eager-load user including soft-deleted records
@@ -192,7 +195,7 @@ class ConsultationRunner extends Page
                 try {
                     if (class_exists(Order::class)) {
                         $ref = $this->order->reference ?? $this->order->id;
-                        /** @var \App\Models\Order|null $order */
+                        /** @var Order|null $order */
                         $order = Order::where('reference', $ref)->first();
                         if ($order) {
                             $oMeta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
@@ -221,7 +224,7 @@ class ConsultationRunner extends Page
                             $order->forceFill($payload)->save();
                         }
                     }
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     // swallow to avoid breaking UX; consider logging if required
                 }
             }

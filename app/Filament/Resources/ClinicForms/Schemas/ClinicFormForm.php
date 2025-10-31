@@ -2,6 +2,20 @@
 
 namespace App\Filament\Resources\ClinicForms\Schemas;
 
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\Toggle;
+use Filament\Forms\Components\TagsInput;
+use Filament\Forms\Components\Repeater;
+use Filament\Forms\Components\ViewField;
+use Filament\Forms\Components\RichEditor;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\FileUpload;
+use RuntimeException;
+use Throwable;
+use Filament\Forms\Components\Placeholder;
+use Illuminate\Support\Arr;
+use Illuminate\Support\HtmlString;
 use Filament\Forms;
 use Filament\Schemas\Schema;
 use Filament\Schemas\Components\Section;
@@ -20,9 +34,9 @@ class ClinicFormForm
     {
         return $schema
             ->columns(12) // 8/4 layout
-            ->schema([
+            ->components([
                 // ===== LEFT COLUMN (8) =====
-                \Filament\Schemas\Components\Section::make()
+                Section::make()
                     ->schema([
                         Builder::make('schema')
                             ->label('Form canvas')
@@ -31,298 +45,298 @@ class ClinicFormForm
                             ->blocks([
                                 // Sections
                                 Block::make('section')->label('Section')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Section title')
                                         ->reactive()
                                         ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\Textarea::make('summary')->label('Summary (optional)')->rows(2),
-                                    Forms\Components\TextInput::make('key')
+                                    Textarea::make('summary')->label('Summary (optional)')->rows(2),
+                                    TextInput::make('key')
                                         ->label('Section key')
                                         ->helperText('All fields after this block belong to this section until the next Section block')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 // Inputs
                                 Block::make('text_input')->label('Text Input')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Field Label')
                                         ->reactive()
                                         ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\TextInput::make('placeholder')->label('Placeholder Text'),
-                                    Forms\Components\Textarea::make('help')->label('Help Text')->rows(2),
-                                    Forms\Components\Toggle::make('required')->label('Required')->default(false),
-                                    Forms\Components\Toggle::make('hidden')->label('Hidden')->default(false),
-                                    Forms\Components\Toggle::make('disabled')->label('Disabled')->default(false),
-                                    Forms\Components\TextInput::make('key')
+                                    TextInput::make('placeholder')->label('Placeholder Text'),
+                                    Textarea::make('help')->label('Help Text')->rows(2),
+                                    Toggle::make('required')->label('Required')->default(false),
+                                    Toggle::make('hidden')->label('Hidden')->default(false),
+                                    Toggle::make('disabled')->label('Disabled')->default(false),
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 Block::make('email')->label('Email')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Field Label')
                                         ->reactive()
                                         ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\TextInput::make('placeholder')->label('Placeholder Text'),
-                                    Forms\Components\Textarea::make('help')->label('Help Text')->rows(2),
-                                    Forms\Components\Toggle::make('required')->label('Required')->default(false),
-                                    Forms\Components\TextInput::make('key')
+                                    TextInput::make('placeholder')->label('Placeholder Text'),
+                                    Textarea::make('help')->label('Help Text')->rows(2),
+                                    Toggle::make('required')->label('Required')->default(false),
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 Block::make('number')->label('Number')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Field Label')
                                         ->reactive()
                                         ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\TextInput::make('placeholder')->label('Placeholder Text'),
-                                    Forms\Components\TextInput::make('min')->numeric()->label('Min'),
-                                    Forms\Components\TextInput::make('max')->numeric()->label('Max'),
-                                    Forms\Components\Textarea::make('help')->label('Help Text')->rows(2),
-                                    Forms\Components\Toggle::make('required')->label('Required')->default(false),
-                                    Forms\Components\TextInput::make('key')
+                                    TextInput::make('placeholder')->label('Placeholder Text'),
+                                    TextInput::make('min')->numeric()->label('Min'),
+                                    TextInput::make('max')->numeric()->label('Max'),
+                                    Textarea::make('help')->label('Help Text')->rows(2),
+                                    Toggle::make('required')->label('Required')->default(false),
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 Block::make('textarea')->label('Textarea')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Field Label')
                                         ->reactive()
                                         ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\Textarea::make('placeholder')->label('Placeholder Text')->rows(2),
-                                    Forms\Components\Textarea::make('help')->label('Help Text')->rows(2),
-                                    Forms\Components\Toggle::make('required')->label('Required')->default(false),
-                                    Forms\Components\Toggle::make('hidden')->label('Hidden')->default(false),
-                                    Forms\Components\Toggle::make('disabled')->label('Disabled')->default(false),
-                                    Forms\Components\TextInput::make('key')
+                                    Textarea::make('placeholder')->label('Placeholder Text')->rows(2),
+                                    Textarea::make('help')->label('Help Text')->rows(2),
+                                    Toggle::make('required')->label('Required')->default(false),
+                                    Toggle::make('hidden')->label('Hidden')->default(false),
+                                    Toggle::make('disabled')->label('Disabled')->default(false),
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 Block::make('date')->label('Date')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Field Label')
                                         ->reactive()
                                         ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\DatePicker::make('date')->label('Select Date')->native(false)->displayFormat('d-m-Y'),
-                                    Forms\Components\Textarea::make('help')->label('Help Text')->rows(2),
-                                    Forms\Components\Toggle::make('required')->label('Required')->default(false),
-                                    Forms\Components\TextInput::make('key')
+                                    DatePicker::make('date')->label('Select Date')->native(false)->displayFormat('d-m-Y'),
+                                    Textarea::make('help')->label('Help Text')->rows(2),
+                                    Toggle::make('required')->label('Required')->default(false),
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 // Choices
                                 Block::make('select')->label('Select')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Field Label')
                                         ->reactive()
                                         ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\Repeater::make('options')->label('Options')->schema([
-                                        Forms\Components\TextInput::make('value')->label('Value')->required(),
-                                        Forms\Components\TextInput::make('label')->label('Label'),
+                                    Repeater::make('options')->label('Options')->schema([
+                                        TextInput::make('value')->label('Value')->required(),
+                                        TextInput::make('label')->label('Label'),
                                     ])->addActionLabel('Add option')->reorderable()->minItems(1),
-                                    Forms\Components\Toggle::make('multiple')->label('Allow multiple')->default(false),
-                                    Forms\Components\Toggle::make('required')->label('Required')->default(false),
-                                    Forms\Components\Textarea::make('help')->label('Help Text')->rows(2),
-                                    Forms\Components\TextInput::make('key')
+                                    Toggle::make('multiple')->label('Allow multiple')->default(false),
+                                    Toggle::make('required')->label('Required')->default(false),
+                                    Textarea::make('help')->label('Help Text')->rows(2),
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 Block::make('radio')->label('Radio Buttons')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Field Label')
                                         ->reactive()
                                         ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\Repeater::make('options')->label('Options')->schema([
-                                        Forms\Components\TextInput::make('value')->label('Value')->required(),
-                                        Forms\Components\TextInput::make('label')->label('Label')->required(),
+                                    Repeater::make('options')->label('Options')->schema([
+                                        TextInput::make('value')->label('Value')->required(),
+                                        TextInput::make('label')->label('Label')->required(),
                                     ])->addActionLabel('Add option')->reorderable()->minItems(1),
-                                    Forms\Components\Toggle::make('required')->label('Required')->default(false),
-                                    Forms\Components\Textarea::make('help')->label('Help Text')->rows(2),
-                                    Forms\Components\TextInput::make('key')
+                                    Toggle::make('required')->label('Required')->default(false),
+                                    Textarea::make('help')->label('Help Text')->rows(2),
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 Block::make('checkbox')->label('Checkbox')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Label')
                                         ->reactive()
-                                        ->afterStateUpdated(function (\Filament\Forms\Set $set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                        ->afterStateUpdated(function (Set $set, $state) {
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\Textarea::make('help')->label('Help Text')->rows(2),
-                                    Forms\Components\Toggle::make('required')->label('Required')->default(false),
-                                    Forms\Components\TextInput::make('key')
+                                    Textarea::make('help')->label('Help Text')->rows(2),
+                                    Toggle::make('required')->label('Required')->default(false),
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 // Uploads & Signature
                                 Block::make('file_upload')->label('File Upload')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Field Label')
                                         ->reactive()
-                                        ->afterStateUpdated(function (\Filament\Forms\Set $set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                        ->afterStateUpdated(function (Set $set, $state) {
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\Toggle::make('multiple')->label('Allow multiple')->default(false),
-                                    Forms\Components\Toggle::make('required')->label('Required')->default(false),
-                                    Forms\Components\Textarea::make('help')->label('Help Text')->rows(2),
-                                    Forms\Components\TextInput::make('accept')
+                                    Toggle::make('multiple')->label('Allow multiple')->default(false),
+                                    Toggle::make('required')->label('Required')->default(false),
+                                    Textarea::make('help')->label('Help Text')->rows(2),
+                                    TextInput::make('accept')
                                         ->label('Allowed file types')
                                         ->placeholder('image/*,application/pdf')
                                         ->helperText('Comma-separated, e.g. application/pdf,image/*')
                                         ->default('image/*,application/pdf'),
-                                    Forms\Components\TextInput::make('key')
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 Block::make('signature')->label('Signature')->schema([
                                     // Live signature preview canvas (mouse / touch drawing)
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Field Label')
                                         ->reactive()
-                                        ->afterStateUpdated(function (\Filament\Forms\Set $set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                        ->afterStateUpdated(function (Set $set, $state) {
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\ViewField::make('signature_pad')
+                                    ViewField::make('signature_pad')
                                         ->view('forms.components.signature-pad'),
-                                    Forms\Components\Textarea::make('help')->label('Help Text')->rows(2)->default('Draw your signature above'),
-                                    Forms\Components\Toggle::make('required')->label('Required')->default(true),
-                                    Forms\Components\TextInput::make('key')
+                                    Textarea::make('help')->label('Help Text')->rows(2)->default('Draw your signature above'),
+                                    Toggle::make('required')->label('Required')->default(true),
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 // Content
                                 Block::make('text_block')->label('Text Block')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Block label')
                                         ->reactive()
-                                        ->afterStateUpdated(function (\Filament\Forms\Set $set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                        ->afterStateUpdated(function (Set $set, $state) {
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\RichEditor::make('content')
+                                    RichEditor::make('content')
                                         ->label('Content')
                                         ->toolbarButtons([
                                             'bold',
@@ -339,48 +353,48 @@ class ClinicFormForm
                                             'redo',
                                         ])
                                         ->required(),
-                                    Forms\Components\Select::make('align')->options([
+                                    Select::make('align')->options([
                                         'left' => 'Left',
                                         'center' => 'Center',
                                         'right' => 'Right',
                                     ])->default('left')->label('Alignment'),
-                                    Forms\Components\TextInput::make('key')
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 Block::make('divider')->label('Divider')->schema([]),
                                 Block::make('image')->label('Image')->schema([
-                                    Forms\Components\TextInput::make('label')
+                                    TextInput::make('label')
                                         ->label('Block label')
                                         ->reactive()
-                                        ->afterStateUpdated(function (\Filament\Forms\Set $set, $state) {
-                                            $set('key', \Illuminate\Support\Str::slug((string) $state));
+                                        ->afterStateUpdated(function (Set $set, $state) {
+                                            $set('key', Str::slug((string) $state));
                                         }),
-                                    Forms\Components\FileUpload::make('image')->image()->directory('clinic-forms/blocks')->required(),
-                                    Forms\Components\TextInput::make('alt')->label('Alt text'),
-                                    Forms\Components\TextInput::make('key')
+                                    FileUpload::make('image')->image()->directory('clinic-forms/blocks')->required(),
+                                    TextInput::make('alt')->label('Alt text'),
+                                    TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
                                         ->default(function ($get) {
                                             $lbl = (string) ($get('label') ?? '');
-                                            return $lbl !== '' ? \Illuminate\Support\Str::slug($lbl) : null;
+                                            return $lbl !== '' ? Str::slug($lbl) : null;
                                         }),
-                                    Forms\Components\Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
-                                    Forms\Components\TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
-                                    Forms\Components\Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.enabled')->label('Conditional logic')->reactive(),
+                                    TextInput::make('showIf.field')->label('Depends on field key')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.equals')->label('Equals value')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TagsInput::make('showIf.in')->label('Any of values')->placeholder('Add value and press Enter')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    TextInput::make('showIf.notEquals')->label('Not equals')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
+                                    Toggle::make('showIf.truthy')->label('Truthy')->hidden(fn ($get) => ! (bool) $get('showIf.enabled')),
                                 ]),
                                 Block::make('page_break')->label('Page Break')->schema([]),
                             ])
@@ -391,14 +405,14 @@ class ClinicFormForm
                     ->columnSpan(8),
 
                 // ===== RIGHT COLUMN (4) =====
-                \Filament\Schemas\Components\Section::make()
+                Section::make()
                     ->schema([
-                        \Filament\Schemas\Components\Section::make('Information')
+                        Section::make('Information')
                             ->collapsible()
                             ->collapsed(false)
                             ->schema([
-                                Forms\Components\TextInput::make('name')->label('Form title')->required(),
-                                Forms\Components\Select::make('form_type')
+                                TextInput::make('name')->label('Form title')->required(),
+                                Select::make('form_type')
                                     ->label('Form type')
                                     ->options([
                                         'raf' => 'RAF',
@@ -410,25 +424,25 @@ class ClinicFormForm
                                     ->required()
                                     ->native(false)
                                     ->helperText('Choose what kind of clinic form this is.'),
-                                Forms\Components\Textarea::make('description')->label('Description')->rows(3),
+                                Textarea::make('description')->label('Description')->rows(3),
                             ]),
-                        \Filament\Schemas\Components\Section::make('Form Structure')
+                        Section::make('Form Structure')
                             ->collapsible()
                             ->collapsed(false)
                             ->headerActions([
-                                \Filament\Actions\Action::make('import_json')
+                                Action::make('import_json')
                                     ->label('Import JSON')
                                     ->icon('heroicon-o-arrow-down-tray')
                                     ->modalHeading('Import form from JSON')
                                     ->modalSubmitActionLabel('Import')
-                                    ->form([
-                                        \Filament\Forms\Components\Textarea::make('json')
+                                    ->schema([
+                                        Textarea::make('json')
                                             ->label('Paste JSON here')
                                             ->rows(14)
                                             ->required()
                                             ->helperText('Paste the exported array (e.g. travelClinicRafForm).'),
                                     ])
-                                    ->action(function (array $data, \Filament\Schemas\Components\Utilities\Set $set) {
+                                    ->action(function (array $data, Set $set) {
                                         try {
                                             $raw = $data['json'] ?? '';
                                             $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
@@ -617,18 +631,18 @@ class ClinicFormForm
                                             }
 
                                             if (empty($blocks)) {
-                                                throw new \RuntimeException('No fields found to import.');
+                                                throw new RuntimeException('No fields found to import.');
                                             }
 
                                             $set('schema', $blocks);
-                                            \Filament\Notifications\Notification::make()->title('Form imported')->success()->send();
-                                        } catch (\Throwable $e) {
-                                            \Filament\Notifications\Notification::make()->title('Import failed')->body($e->getMessage())->danger()->send();
+                                            Notification::make()->title('Form imported')->success()->send();
+                                        } catch (Throwable $e) {
+                                            Notification::make()->title('Import failed')->body($e->getMessage())->danger()->send();
                                         }
                                     }),
                             ])
                             ->schema([
-                                Forms\Components\Placeholder::make('structure_help')
+                                Placeholder::make('structure_help')
                                     ->label('Structure')
                                     ->hiddenLabel()
                                     ->content(function (Get $get) {
@@ -640,18 +654,18 @@ class ClinicFormForm
                                         $lines = [];
                                         $n = 1;
                                         foreach (array_values($blocks) as $block) {
-                                            $type = \Illuminate\Support\Arr::get($block, 'type', 'field');
-                                            $label = trim((string) \Illuminate\Support\Arr::get($block, 'data.label', ''));
+                                            $type = Arr::get($block, 'type', 'field');
+                                            $label = trim((string) Arr::get($block, 'data.label', ''));
                                             if ($label === '') {
-                                                $label = \Illuminate\Support\Str::headline((string) $type) . ' ' . $n;
+                                                $label = Str::headline((string) $type) . ' ' . $n;
                                             }
-                                            $isReq = (bool) \Illuminate\Support\Arr::get($block, 'data.required', false);
+                                            $isReq = (bool) Arr::get($block, 'data.required', false);
                                             $reqBadge = $isReq ? ' <span style="display:inline-block;padding:.05rem .35rem;border-radius:.25rem;background:rgba(239,68,68,.12);color:#f87171;font-weight:600;margin-left:.35rem;">required</span>' : '';
                                             $lines[] = $n . '. ' . e($label) . $reqBadge . ' <small style="opacity:.7">(' . e((string) $type) . ')</small>';
                                             $n++;
                                         }
                                     
-                                        return new \Illuminate\Support\HtmlString(implode('<br>', $lines));
+                                        return new HtmlString(implode('<br>', $lines));
                                     }),
                             ])
                             ->columnSpanFull(),

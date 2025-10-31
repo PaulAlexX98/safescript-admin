@@ -1,13 +1,23 @@
-@source '../../../../vendor/guava/calendar/resources/**/*';
-@import '../../../../vendor/guava/calendar/resources/css/theme.css';
+@import "tailwindcss";
 
-/* Tailwind v3 entry points */
+@source "../../../resources/**/*.blade.php";
+@source "../../../../vendor/filament/**/*.blade.php";
+@source "../../../../vendor/guava/calendar/resources/**/*.blade.php";
+@import '../../../../vendor/guava/calendar/resources/css/theme.css';
+@source '../../../../vendor/guava/calendar/resources/**/*';
+
+/* Neutralise Guava calendar colours */
+.ec .ec-today,
+.ec .ec-list-item,
+.ec .ec-event { background: transparent !important; }
+.ec .ec-event { border: 1px solid var(--gray-300); color: inherit !important; }
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Your custom tweaks (optional) */
+@import "../../../../vendor/guava/calendar/resources/css/theme.css";
+
 @layer utilities {
-  /* ensure our tab pills look good */
   .pill { @apply px-5 py-2 text-sm font-medium rounded-full; }
 }

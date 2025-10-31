@@ -2,6 +2,8 @@
 
 namespace App\Providers\Filament;
 
+use Illuminate\Support\HtmlString;
+use App\Filament\Resources\Scheduling\Schedules\ScheduleResource;
 use App\Filament\Pages\ConsultationRunner;
 use Filament\Pages\Dashboard;
 use Filament\Panel;
@@ -14,6 +16,8 @@ use Illuminate\Support\Facades\Schema;
 use App\Filament\Resources\Orders\PendingOrderResource;
 use Illuminate\Support\Facades\Route;
 use Filament\Pages;
+use App\Filament\Widgets\AppointmentsCalendarWidget;
+use Guava\Calendar\CalendarPlugin;
 
 
 class AdminPanelProvider extends PanelProvider
@@ -55,11 +59,17 @@ class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->topbar(false)
             ->login()
+            ->plugins([
+                \Guava\Calendar\CalendarPlugin::make(),
+            ])
+            ->widgets([
+                \App\Filament\Widgets\AppointmentsCalendarWidget::class,
+            ])
             ->authGuard('admin')
             ->profile()  
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->pages([
-                \Filament\Pages\Dashboard::class,    
+                Dashboard::class,    
                 ConsultationRunner::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
@@ -87,7 +97,7 @@ class AdminPanelProvider extends PanelProvider
   html, body { overflow-x: hidden; }
 </style>
 HTML;
-                return \Illuminate\Support\HtmlString::from($style);
+                return HtmlString::from($style);
             })
 
             ->navigationGroups([
@@ -123,7 +133,7 @@ HTML;
                         NavigationItem::make('Schedules')
                             ->icon('heroicon-o-clock')
                             ->url(function () {
-                                $class = \App\Filament\Resources\Scheduling\Schedules\ScheduleResource::class;
+                                $class = ScheduleResource::class;
                                 return class_exists($class) ? $class::getUrl('index') : '/admin';
                             })
                             ->visible(true),
@@ -133,10 +143,11 @@ HTML;
                 NavigationGroup::make('Forms')
                     ->collapsed(true),
             ])
-            ->viteTheme([
+            /*->viteTheme([
                 'resources/css/filament/admin/theme.css',
                 'resources/css/filament/inline-clean.css',
-            ])
+            ])*/
+            
             ->darkMode(true)
             ->colors([
                 'primary' => '#f59e0b',

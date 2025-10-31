@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\ClinicForms\Pages;
 
+use Filament\Actions\Action;
 use App\Filament\Resources\ClinicForms\ClinicFormResource;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\ViewAction;
@@ -15,7 +16,7 @@ class EditClinicForm extends EditRecord
     {
         $actions = parent::getHeaderActions();
 
-        $actions[] = \Filament\Actions\Action::make('raf')
+        $actions[] = Action::make('raf')
             ->label('Risk Assessment Builder')
             ->visible(fn () => $this->record->slug === 'weight-management-service')
             ->url(static::getResource()::getUrl('raf-builder', ['record' => $this->record]));

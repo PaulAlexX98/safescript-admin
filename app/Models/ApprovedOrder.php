@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Support\Arr;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -48,12 +49,12 @@ class ApprovedOrder extends Model
             ];
 
             foreach ($mustKeep as $path) {
-                if (!\Illuminate\Support\Arr::has($incoming, $path) &&
-                    \Illuminate\Support\Arr::has($curr, $path)) {
-                    \Illuminate\Support\Arr::set(
+                if (!Arr::has($incoming, $path) &&
+                    Arr::has($curr, $path)) {
+                    Arr::set(
                         $incoming,
                         $path,
-                        \Illuminate\Support\Arr::get($curr, $path)
+                        Arr::get($curr, $path)
                     );
                 }
             }

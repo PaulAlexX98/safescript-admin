@@ -23,7 +23,7 @@ class Order extends Model
 
     public function patient()
     {
-        return $this->belongsTo(\App\Models\Patient::class);
+        return $this->belongsTo(Patient::class);
     }
 
     public function scopePendingApproval($q)
@@ -53,13 +53,13 @@ class Order extends Model
 
     public function user()
     {
-        return $this->belongsTo(\App\Models\User::class);
+        return $this->belongsTo(User::class);
     }
 
     public function appointment()
     {
         // Temporary: still points to Booking model/table until Appointment model is fully adopted.
-        return $this->hasOne(\App\Models\Booking::class, 'order_id');
+        return $this->hasOne(Booking::class, 'order_id');
     }
 
     /**

@@ -2,19 +2,21 @@
 
 namespace App\Filament\Resources\Orders;
 
+use App\Models\Order;
+use App\Filament\Resources\Orders\Pages\ListUnpaidOrders;
 use BackedEnum;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Database\Eloquent\Builder;
 
 class UnpaidOrderResource extends OrderResource
 {
-    protected static ?string $model = \App\Models\Order::class;
+    protected static ?string $model = Order::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCurrencyPound;
+    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedCurrencyPound;
     protected static ?string $navigationLabel  = 'Unpaid';
     protected static ?string $pluralLabel      = 'Unpaid';
     protected static ?string $modelLabel       = 'Unpaid';
-    protected static \UnitEnum|string|null $navigationGroup = 'Orders';
+    protected static string | \UnitEnum | null $navigationGroup = 'Orders';
     protected static ?int    $navigationSort   = 33;
     protected static bool    $shouldRegisterNavigation = true;
 
@@ -35,7 +37,7 @@ class UnpaidOrderResource extends OrderResource
     public static function getPages(): array
     {
         return [
-            'index' => \App\Filament\Resources\Orders\Pages\ListUnpaidOrders::route('/'),
+            'index' => ListUnpaidOrders::route('/'),
         ];
     }
 }

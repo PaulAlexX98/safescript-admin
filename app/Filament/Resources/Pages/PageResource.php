@@ -2,6 +2,17 @@
 
 namespace App\Filament\Resources\Pages;
 
+use Filament\Tables\Table;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\BadgeColumn;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Actions\Action;
+use Filament\Forms\Components\TextInput;
+use Filament\Actions\EditAction;
+use Filament\Actions\DeleteAction;
+use App\Filament\Resources\Pages\Pages\ListPages;
+use App\Filament\Resources\Pages\Pages\CreatePage;
+use App\Filament\Resources\Pages\Pages\EditPage;
 use App\Filament\Resources\Pages\Pages;
 use App\Filament\Resources\Pages\Schemas\PageForm;
 use App\Models\Page;
@@ -17,8 +28,8 @@ class PageResource extends Resource
 {
     protected static ?string $model = Page::class;
 
-    protected static \UnitEnum|string|null $navigationGroup = 'Front';
-    protected static \BackedEnum|string|null $navigationIcon = 'heroicon-o-document-text';
+    protected static string | \UnitEnum | null $navigationGroup = 'Front';
+    protected static string | \BackedEnum | null $navigationIcon = 'heroicon-o-document-text';
     protected static ?string $recordTitleAttribute = 'title';
     protected static ?int $navigationSort = 10;
 
@@ -27,20 +38,20 @@ class PageResource extends Resource
         return PageForm::configure($schema);
     }
 
-    public static function table(Tables\Table $table): Tables\Table
+    public static function table(Table $table): Table
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('id')->label('ID')->sortable(),
-                Tables\Columns\TextColumn::make('title')
+                TextColumn::make('id')->label('ID')->sortable(),
+                TextColumn::make('title')
                     ->label('Name')
                     ->searchable()
                     ->sortable()
                     ->url(fn ($record) => url('/private-services/' . $record->slug))
                     ->openUrlInNewTab(),
-                Tables\Columns\TextColumn::make('template')->badge()->sortable(),
-                Tables\Columns\TextColumn::make('created_at')->label('Created At')->date('d-m-Y')->sortable(),
-                Tables\Columns\BadgeColumn::make('status')
+                TextColumn::make('template')->badge()->sortable(),
+                TextColumn::make('created_at')->label('Created At')->date('d-m-Y')->sortable(),
+                BadgeColumn::make('status')
                     ->colors([
                         'warning' => fn ($state) => $state === 'draft',
                         'success' => fn ($state) => $state === 'published',
@@ -51,26 +62,26 @@ class PageResource extends Resource
             ])
             ->defaultSort('id', 'desc')
             ->filters([
-                Tables\Filters\SelectFilter::make('status')->options([
+                SelectFilter::make('status')->options([
                     'draft' => 'Draft', 'published' => 'Published',
                 ]),
             ])
-            ->actionsColumnLabel('Operations')
-            ->actions([
-                Actions\Action::make('view')
+            ->recordActionsColumnLabel('Operations')
+            ->recordActions([
+                Action::make('view')
                     ->label('View')
                     ->url(fn ($record) => url('/private-services/' . $record->slug))
                     ->openUrlInNewTab(),
-                Actions\Action::make('duplicate')
+                Action::make('duplicate')
                     ->label('Duplicate')
                     ->icon('heroicon-o-square-2-stack')
                     ->color('gray')
-                    ->form([
-                        Forms\Components\TextInput::make('title')
+                    ->schema([
+                        TextInput::make('title')
                             ->label('New title')
                             ->required()
                             ->maxLength(255),
-                        Forms\Components\TextInput::make('slug')
+                        TextInput::make('slug')
                             ->label('New slug (optional)')
                             ->helperText('Leave blank to auto-generate from title')
                             ->maxLength(255),
@@ -115,17 +126,17 @@ class PageResource extends Resource
                         // Redirect to edit the new page
                         redirect(static::getUrl('edit', ['record' => $clone]));
                     }),
-                Actions\EditAction::make(),
-                Actions\DeleteAction::make(),
+                EditAction::make(),
+                DeleteAction::make(),
             ]);
     }
 
     public static function getPages(): array
     {
         return [
-            'index' => Pages\ListPages::route('/'),
-            'create' => Pages\CreatePage::route('/create'),
-            'edit' => Pages\EditPage::route('/{record}/edit'),
+            'index' => ListPages::route('/'),
+            'create' => CreatePage::route('/create'),
+            'edit' => EditPage::route('/{record}/edit'),
         ];
     }
 }

@@ -2,6 +2,8 @@
 // app/Http/Controllers/Admin/ConsultationPdfController.php
 namespace App\Http\Controllers\Admin;
 
+use Log;
+use Throwable;
 use App\Http\Controllers\Controller;
 use App\Models\ConsultationSession;
 use App\Models\ConsultationFormResponse;
@@ -80,7 +82,7 @@ class ConsultationPdfController extends Controller
         $address = trim(collect([$addr1, $addr2, $city, $pc, $ctry])->filter()->implode(', '));
 
         if ($address === '') {
-            \Log::info('PDF patient address empty', [
+            Log::info('PDF patient address empty', [
                 'session_id' => $session->id,
                 'order_id'   => $order?->id,
                 'resolved_patient_id' => $patientModel?->id,
@@ -90,7 +92,7 @@ class ConsultationPdfController extends Controller
         }
 
         // Items
-        $items = \Illuminate\Support\Arr::wrap(
+        $items = Arr::wrap(
             $meta['items'] ?? $meta['products'] ?? $meta['lines'] ?? $meta['line_items'] ?? []
         );
 
@@ -137,7 +139,7 @@ class ConsultationPdfController extends Controller
                     ?? data_get($rdata, 'signature_image')
                     ?? data_get($rdata, 'field_2');
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // non-fatal; continue without pharmacist details
         }
 

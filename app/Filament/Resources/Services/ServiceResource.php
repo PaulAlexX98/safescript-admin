@@ -2,6 +2,16 @@
 
 namespace App\Filament\Resources\Services;
 
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Placeholder;
+use Throwable;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\BadgeColumn;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Filters\TernaryFilter;
+use Filament\Tables\Filters\SelectFilter;
+use App\Filament\Resources\Services\RelationManagers\ProductsRelationManager;
 use App\Filament\Resources\Services\Pages\CreateService;
 use App\Filament\Resources\Services\Pages\EditService;
 use App\Filament\Resources\Services\Pages\ListServices;
@@ -19,23 +29,23 @@ use Filament\Tables;
 class ServiceResource extends Resource
 {
     protected static ?string $model = Service::class;
-    protected static \BackedEnum|string|null $navigationIcon = 'heroicon-o-rectangle-group';
-    protected static \UnitEnum|string|null $navigationGroup = 'Operations';
+    protected static string | \BackedEnum | null $navigationIcon = 'heroicon-o-rectangle-group';
+    protected static string | \UnitEnum | null $navigationGroup = 'Operations';
     protected static ?int $navigationSort = 5;
 
     public static function form(Schema $schema): Schema
     {
-        return $schema->schema([
+        return $schema->components([
             // Basic Information full width
             Section::make('Basic Information')
                 ->schema([
-                    Forms\Components\TextInput::make('name')
+                    TextInput::make('name')
                         ->label('Name')
                         ->required()
                         ->live(onBlur: true)
                         ->columnSpanFull(),
 
-                    Forms\Components\TextInput::make('slug')
+                    TextInput::make('slug')
                         ->label('Slug')
                         ->required()
                         ->unique(ignoreRecord: true)
@@ -61,45 +71,45 @@ class ServiceResource extends Resource
     {
         return [
             Grid::make()->columns(3)->schema([
-                Forms\Components\Select::make('booking_flow.step1')
+                Select::make('booking_flow.step1')
                     ->label('Step 1')
                     ->options(self::flowOptions())
                     ->default('treatments')
                     ->native(false)
                     ->placeholder('Select a step…'),
 
-                Forms\Components\Select::make('booking_flow.step2')
+                Select::make('booking_flow.step2')
                     ->label('Step 2')
                     ->options(self::flowOptions())
                     ->native(false)
                     ->placeholder('Select a step…'),
 
-                Forms\Components\Select::make('booking_flow.step3')
+                Select::make('booking_flow.step3')
                     ->label('Step 3')
                     ->options(self::flowOptions())
                     ->native(false)
                     ->placeholder('Select a step…'),
 
-                Forms\Components\Select::make('booking_flow.step4')
+                Select::make('booking_flow.step4')
                     ->label('Step 4')
                     ->options(self::flowOptions())
                     ->native(false)
                     ->placeholder('Select a step…'),
 
-                Forms\Components\Select::make('booking_flow.step5')
+                Select::make('booking_flow.step5')
                     ->label('Step 5')
                     ->options(self::flowOptions())
                     ->native(false)
                     ->placeholder('Select a step…'),
 
-                Forms\Components\Select::make('booking_flow.step6')
+                Select::make('booking_flow.step6')
                     ->label('Step 6')
                     ->options(self::flowOptions())
                     ->native(false)
                     ->placeholder('Select a step…'),
             ]),
 
-            Forms\Components\Placeholder::make('flow_preview')
+            Placeholder::make('flow_preview')
                 ->label('Flow preview')
                 ->content('Workflow preview coming soon…'),
         ];
@@ -113,31 +123,31 @@ class ServiceResource extends Resource
         return [
             Grid::make()->columns(2)->schema([
                 // RAF Form  -> 'raf'
-            Forms\Components\Select::make('raf_form_id')
+            Select::make('raf_form_id')
                 ->label('RAF Form')
                 ->options(fn () => self::clinicFormOptionsByType('raf'))
                 ->searchable()->preload()->native(false),
 
             // Consultation Advice Form -> 'advice'
-            Forms\Components\Select::make('advice_form_id')
+            Select::make('advice_form_id')
                 ->label('Consultation Advice Form')
                 ->options(fn () => self::clinicFormOptionsByType('advice'))
                 ->searchable()->preload()->native(false),
 
             // Pharmacist Declaration Form -> 'declaration'
-            Forms\Components\Select::make('pharmacist_declaration_form_id')
+            Select::make('pharmacist_declaration_form_id')
                 ->label('Pharmacist Declaration Form')
                 ->options(fn () => self::clinicFormOptionsByType('pharmacist_declaration'))
                 ->searchable()->preload()->native(false),
 
             // Clinical Notes Form -> use 'clinical_notes'
-            Forms\Components\Select::make('clinical_notes_form_id')
+            Select::make('clinical_notes_form_id')
                 ->label('Clinical Notes Form')
                 ->options(fn () => self::clinicFormOptionsByType('clinical_notes'))
                 ->searchable()->preload()->native(false),
 
             // Reorder Form -> keep 'reorder' (change only if you store a different type)
-            Forms\Components\Select::make('reorder_form_id')
+            Select::make('reorder_form_id')
                 ->label('Reorder Form')
                 ->options(fn () => self::clinicFormOptionsByType('reorder'))
                 ->searchable()->preload()->native(false),
@@ -152,7 +162,7 @@ class ServiceResource extends Resource
     {
         try {
             return ClinicForm::query()->orderBy('name')->pluck('name', 'id')->all();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // In case the table/migration isn't ready yet, fail gracefully
             return [];
         }
@@ -192,7 +202,7 @@ class ServiceResource extends Resource
             });
 
             return $filtered->pluck('name', 'id')->all();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             return [];
         }
     }
@@ -214,12 +224,12 @@ class ServiceResource extends Resource
         return $table
             ->defaultSort('created_at','desc')
             ->columns([
-                Tables\Columns\TextColumn::make('name')->label('Name')->searchable()->sortable(),
-                Tables\Columns\BadgeColumn::make('status')->colors(['success'=>'published','warning'=>'draft'])->sortable(),
-                Tables\Columns\IconColumn::make('active')->boolean()->label('Active'),
-                Tables\Columns\TextColumn::make('updated_at')->date('d-m-Y')->label('Updated')->sortable(),
-                Tables\Columns\TextColumn::make('created_at')->date('d-m-Y')->label('Created')->sortable(),
-                Tables\Columns\TextColumn::make('view_link')
+                TextColumn::make('name')->label('Name')->searchable()->sortable(),
+                BadgeColumn::make('status')->colors(['success'=>'published','warning'=>'draft'])->sortable(),
+                IconColumn::make('active')->boolean()->label('Active'),
+                TextColumn::make('updated_at')->date('d-m-Y')->label('Updated')->sortable(),
+                TextColumn::make('created_at')->date('d-m-Y')->label('Created')->sortable(),
+                TextColumn::make('view_link')
                     ->label('View')
                     ->formatStateUsing(fn () => 'View')
                     ->url(fn ($record) => $record?->slug ? url("/private-services/{$record->slug}") : null)
@@ -228,8 +238,8 @@ class ServiceResource extends Resource
                     ->icon('heroicon-m-arrow-top-right-on-square'),
             ])
             ->filters([
-                Tables\Filters\TernaryFilter::make('active')->label('Active'),
-                Tables\Filters\SelectFilter::make('status')->options(['draft'=>'Draft','published'=>'Published']),
+                TernaryFilter::make('active')->label('Active'),
+                SelectFilter::make('status')->options(['draft'=>'Draft','published'=>'Published']),
             ])
             ->recordUrl(fn ($record) => static::getUrl('edit', ['record' => $record]));
     }
@@ -237,7 +247,7 @@ class ServiceResource extends Resource
     public static function getRelations(): array
     {
         return [
-            \App\Filament\Resources\Services\RelationManagers\ProductsRelationManager::class,
+            ProductsRelationManager::class,
         ];
     }
 

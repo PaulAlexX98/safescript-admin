@@ -2,6 +2,14 @@
 
 namespace App\Filament\Resources\ClinicForms;
 
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\BadgeColumn;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Filters\TernaryFilter;
+use Filament\Actions\EditAction;
+use Filament\Actions\Action;
+use Filament\Actions\DeleteAction;
+use Filament\Actions\DeleteBulkAction;
 use App\Filament\Resources\ClinicForms\Pages\CreateClinicForm;
 use App\Filament\Resources\ClinicForms\Pages\EditClinicForm;
 use App\Filament\Resources\ClinicForms\Pages\ListClinicForms;
@@ -22,9 +30,9 @@ class ClinicFormResource extends Resource
 {
     protected static ?string $model = ClinicForm::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedRectangleStack;
     protected static ?string $recordTitleAttribute = 'name';
-    protected static \UnitEnum|string|null $navigationGroup = 'Forms';
+    protected static string | \UnitEnum | null $navigationGroup = 'Forms';
     protected static ?int $navigationSort = 10;
 
     public static function form(Schema $schema): Schema
@@ -35,7 +43,7 @@ class ClinicFormResource extends Resource
     public static function infolist(Schema $schema): Schema
     {
         // Minimal view to avoid component/version mismatches.
-        return $schema->schema([]);
+        return $schema->components([]);
     }
 
     public static function table(Table $table): Table
@@ -48,27 +56,27 @@ class ClinicFormResource extends Resource
             })
             ->defaultSort('created_at', 'desc')
             ->columns([
-                Tables\Columns\TextColumn::make('id')
+                TextColumn::make('id')
                     ->label('ID')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
 
-                Tables\Columns\TextColumn::make('name')
+                TextColumn::make('name')
                     ->label('Title')
                     ->searchable()
                     ->sortable(),
 
-                Tables\Columns\TextColumn::make('form_type')
+                TextColumn::make('form_type')
                     ->label('Type')
                     ->badge()
                     ->sortable(),
 
-                Tables\Columns\TextColumn::make('raf_version')
+                TextColumn::make('raf_version')
                     ->label('RAF v.')
                     ->sortable()
                     ->toggleable(),
 
-                Tables\Columns\BadgeColumn::make('raf_status')
+                BadgeColumn::make('raf_status')
                     ->label('RAF Status')
                     ->colors([
                         'success' => 'published',
@@ -77,39 +85,39 @@ class ClinicFormResource extends Resource
                     ->sortable()
                     ->toggleable(),
 
-                Tables\Columns\TextColumn::make('updated_at')
+                TextColumn::make('updated_at')
                     ->label('Updated')
                     ->dateTime('d-m-Y')
                     ->sortable(),
 
-                Tables\Columns\TextColumn::make('created_at')
+                TextColumn::make('created_at')
                     ->label('Created')
                     ->dateTime('d-m-Y')
                     ->sortable(),
             ])
             ->filters([
-                Tables\Filters\SelectFilter::make('visibility')
+                SelectFilter::make('visibility')
                     ->options([
                         'public'   => 'Public',
                         'internal' => 'Internal',
                         'private'  => 'Private',
                     ]),
-                Tables\Filters\TernaryFilter::make('active')
+                TernaryFilter::make('active')
                     ->label('Active')
                     ->nullable(),
             ])
-            ->actionsColumnLabel('Operations')
-            ->actions([
-                Actions\EditAction::make(),
-                Actions\Action::make('raf')
+            ->recordActionsColumnLabel('Operations')
+            ->recordActions([
+                EditAction::make(),
+                Action::make('raf')
                     ->label('RAF')
                     ->icon('heroicon-m-wrench-screwdriver')
                     ->url(fn ($record) => RafBuilder::getUrl(['record' => $record]))
                     ->visible(fn ($record) => ($record->type ?? null) === 'raf'),
-                Actions\DeleteAction::make(),
+                DeleteAction::make(),
             ])
-            ->bulkActions([
-                Actions\DeleteBulkAction::make(),
+            ->toolbarActions([
+                DeleteBulkAction::make(),
             ]);
     }
 
@@ -125,7 +133,7 @@ class ClinicFormResource extends Resource
             'create' => CreateClinicForm::route('/create'),
             'view'   => ViewClinicForm::route('/{record}'),
             'edit'   => EditClinicForm::route('/{record}/edit'),
-            'raf-builder' => Pages\RafBuilder::route('/{record}/raf'),
+            'raf-builder' => RafBuilder::route('/{record}/raf'),
         ];
     }
 }

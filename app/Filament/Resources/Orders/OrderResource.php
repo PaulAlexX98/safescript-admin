@@ -2,6 +2,10 @@
 
 namespace App\Filament\Resources\Orders;
 
+use App\Models\Order;
+use Illuminate\Support\Collection;
+use Carbon\Carbon;
+use Throwable;
 use App\Filament\Resources\Orders\Pages\EditOrder;
 use App\Filament\Resources\Orders\Pages\ListOrders;
 use App\Filament\Resources\Orders\Schemas\OrderForm;
@@ -23,9 +27,9 @@ use App\Filament\Resources\Orders\CompletedOrderResource as CompletedOrders;
 
 class OrderResource extends Resource
 {
-    protected static ?string $model = \App\Models\Order::class;
+    protected static ?string $model = Order::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
     protected static ?string $navigationLabel = 'Orders';
     protected static ?string $pluralLabel = 'Orders';
@@ -44,9 +48,9 @@ class OrderResource extends Resource
 
     protected static ?string $recordTitleAttribute = 'reference';
 
-    public static function form(FilamentSchema $schema): FilamentSchema
+    public static function form(FilamentSchema $filamentSchema): FilamentSchema
     {
-        return OrderForm::configure($schema);
+        return OrderForm::configure($filamentSchema);
     }
 
     public static function table(Table $table): Table
@@ -97,7 +101,7 @@ class OrderResource extends Resource
                                 $decoded = json_decode($value, true);
                                 if (json_last_error() === JSON_ERROR_NONE) $value = $decoded;
                             }
-                            if ($value instanceof \Illuminate\Support\Collection) $value = $value->toArray();
+                            if ($value instanceof Collection) $value = $value->toArray();
                             if (is_array($value)) {
                                 if (isset($value['items']) && is_array($value['items'])) return $value['items'];
                                 if (isset($value['lines']) && is_array($value['lines'])) return $value['lines'];
@@ -288,7 +292,7 @@ class OrderResource extends Resource
             ->filters([
                 // No filters by default for generic Orders resource
             ])
-            ->actions([
+            ->recordActions([
                 // For COMPLETED: go to the dedicated details page
                 Action::make('viewDetails')
                     ->label('View')
@@ -308,7 +312,7 @@ class OrderResource extends Resource
                     ->modalCancelActionLabel('Close')
                     ->modalWidth('5xl')
                     ->visible(fn ($record) => in_array(strtolower((string)$record->status), ['rejected','unpaid'], true))
-                    ->infolist([
+                    ->schema([
                         Grid::make(12)->schema([
                             Section::make('Customer')
                                 ->columnSpan(8)
@@ -334,7 +338,7 @@ class OrderResource extends Resource
                                             })
                                             ->formatStateUsing(function ($state) {
                                                 if (empty($state)) return null;
-                                                try { return \Carbon\Carbon::parse($state)->format('d-m-Y'); } catch (\Throwable) { return (string)$state; }
+                                                try { return Carbon::parse($state)->format('d-m-Y'); } catch (Throwable) { return (string)$state; }
                                             }),
                                         TextEntry::make('meta.email')
                                             ->label('Email')

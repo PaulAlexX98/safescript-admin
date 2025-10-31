@@ -2,6 +2,10 @@
 
 namespace App\Filament\Resources\Orders\Pages;
 
+use Filament\Actions\ActionGroup;
+use Filament\Actions\Action;
+use Throwable;
+use Carbon\Carbon;
 use App\Filament\Resources\Orders\CompletedOrderResource;
 use App\Models\ConsultationFormResponse;
 use Filament\Actions;
@@ -31,8 +35,8 @@ class CompletedOrderDetails extends ViewRecord
         $hasSession = !empty($sessionId);
 
         return [
-            Actions\ActionGroup::make([
-                Actions\Action::make('pdf_full')
+            ActionGroup::make([
+                Action::make('pdf_full')
                     ->label('Full Consultation Record')
                     ->icon('heroicon-o-document-text')
                     ->url(function () use ($sessionId) {
@@ -42,7 +46,7 @@ class CompletedOrderDetails extends ViewRecord
                             : url("/admin/consultations/{$sessionId}/pdf/full");
                     })
                     ->openUrlInNewTab(),
-                Actions\Action::make('pdf_pre')
+                Action::make('pdf_pre')
                     ->label('Private Prescription')
                     ->icon('heroicon-o-clipboard-document-check')
                     ->url(function () use ($sessionId) {
@@ -52,7 +56,7 @@ class CompletedOrderDetails extends ViewRecord
                             : url("/admin/consultations/{$sessionId}/pdf/private-prescription");
                     })
                     ->openUrlInNewTab(),
-                Actions\Action::make('pdf_ros')
+                Action::make('pdf_ros')
                     ->label('Record of Supply')
                     ->icon('heroicon-o-clipboard-document')
                     ->url(function () use ($sessionId) {
@@ -62,7 +66,7 @@ class CompletedOrderDetails extends ViewRecord
                             : url("/admin/consultations/{$sessionId}/pdf/record-of-supply");
                     })
                     ->openUrlInNewTab(),
-                Actions\Action::make('pdf_invoice')
+                Action::make('pdf_invoice')
                     ->label('Invoice')
                     ->icon('heroicon-o-receipt-refund')
                     ->url(function () use ($sessionId) {
@@ -79,7 +83,7 @@ class CompletedOrderDetails extends ViewRecord
                 ->button()
                 ->visible($hasSession),
 
-            Actions\Action::make('email_patient')
+            Action::make('email_patient')
                 ->label('Send Email')
                 ->icon('heroicon-o-paper-airplane')
                 ->action(function () {
@@ -87,14 +91,14 @@ class CompletedOrderDetails extends ViewRecord
                 })
                 ->visible($hasSession),
 
-            Actions\Action::make('follow_up')
+            Action::make('follow_up')
                 ->label('Create Follow-up')
                 ->icon('heroicon-o-plus-circle')
                 ->url(fn () => $hasSession ? url("/admin/follow-ups/create?order={$this->record->getKey()}") : null)
                 ->openUrlInNewTab()
                 ->visible($hasSession),
 
-            Actions\Action::make('archive')
+            Action::make('archive')
                 ->label('Archive')
                 ->icon('heroicon-o-archive-box')
                 ->requiresConfirmation()
@@ -126,10 +130,10 @@ class CompletedOrderDetails extends ViewRecord
                     "consultations.form.$action",
                 ];
                 foreach ($candidates as $name) {
-                    if (\Illuminate\Support\Facades\Route::has($name)) {
+                    if (Route::has($name)) {
                         try {
                             return route($name, ['session' => $sessionId, 'form' => $formId]);
-                        } catch (\Throwable $e) {}
+                        } catch (Throwable $e) {}
                     }
                 }
                 return "/admin/consultations/{$sessionId}/forms/{$formId}/{$action}";
@@ -216,16 +220,16 @@ class CompletedOrderDetails extends ViewRecord
                 $editUrl    = url("/admin/consultations/{$sessionId}/forms/{$id}/edit");
                 $historyUrl = url("/admin/consultations/{$sessionId}/forms/{$id}/history");
 
-                $formQuickActions[] = Actions\ActionGroup::make([
-                    Actions\Action::make("view_{$id}")
+                $formQuickActions[] = ActionGroup::make([
+                    Action::make("view_{$id}")
                         ->label('View')
                         ->url($viewUrl . (str_contains($viewUrl, '?') ? '&' : '?') . 'inline=1')
                         ->extraAttributes(['data-inline-modal' => true, 'data-title' => $title . ' – View']),
-                    Actions\Action::make("edit_{$id}")
+                    Action::make("edit_{$id}")
                         ->label('Edit')
                         ->url($editUrl . (str_contains($editUrl, '?') ? '&' : '?') . 'inline=1')
                         ->extraAttributes(['data-inline-modal' => true, 'data-title' => $title . ' – Edit']),
-                    Actions\Action::make("history_{$id}")
+                    Action::make("history_{$id}")
                         ->label('History')
                         ->url($historyUrl . (str_contains($historyUrl, '?') ? '&' : '?') . 'inline=1')
                         ->extraAttributes(['data-inline-modal' => true, 'data-title' => $title . ' – History']),
@@ -256,7 +260,7 @@ class CompletedOrderDetails extends ViewRecord
         );
         if ($items && !is_numeric(array_key_first($items)) && isset($items['name'])) $items = [$items];
 
-        return $schema->schema([
+        return $schema->components([
             // Row 1: Customer, Payment, Status
             Section::make('Order Overview')
                 ->extraAttributes(['class' => 'bg-transparent shadow-none ring-0 border-0'])
@@ -276,7 +280,7 @@ class CompletedOrderDetails extends ViewRecord
                                     })
                                     ->formatStateUsing(function ($state) {
                                         if (empty($state)) return null;
-                                        try { return \Carbon\Carbon::parse($state)->format('d-m-Y'); } catch (\Throwable) { return (string)$state; }
+                                        try { return Carbon::parse($state)->format('d-m-Y'); } catch (Throwable) { return (string)$state; }
                                     }),
                                 TextEntry::make('email')->label('Email')
                                     ->state(fn () => data_get($meta,'email') ?? $rec->user?->email),
@@ -576,8 +580,8 @@ class CompletedOrderDetails extends ViewRecord
                     ...array_map(function ($f) use ($sessionId, $formUrl) {
                         $id = $f['id'];
                         $title = $f['title'];
-                        return \Filament\Actions\ActionGroup::make([
-                            \Filament\Actions\Action::make("view_{$id}")
+                        return ActionGroup::make([
+                            Action::make("view_{$id}")
                                 ->label('View')
                                 ->icon('heroicon-o-eye')
                                 ->modalHeading($title . ' – View')
@@ -597,7 +601,7 @@ class CompletedOrderDetails extends ViewRecord
                                     }
                                     $iframeId = 'inline-form-view-' . $id;
 
-                                    return new \Illuminate\Support\HtmlString(
+                                    return new HtmlString(
                                         '<style>
                                             .fi-modal-body { padding: 0 !important; background: #0b0b0b !important; }
                                             .fi-modal-content { background: #0b0b0b !important; box-shadow: none !important; }
@@ -676,7 +680,7 @@ class CompletedOrderDetails extends ViewRecord
 </script>'
                                     );
                                 }),
-                            \Filament\Actions\Action::make("edit_{$id}")
+                            Action::make("edit_{$id}")
                                 ->label('Edit')
                                 ->icon('heroicon-o-pencil-square')
                                 ->modalHeading($title . ' – Edit')
@@ -690,7 +694,7 @@ class CompletedOrderDetails extends ViewRecord
                                     if (!str_contains($src, 'inline=1')) {
                                         $src .= (str_contains($src, '?') ? '&' : '?') . 'inline=1';
                                     }
-                                    return new \Illuminate\Support\HtmlString(
+                                    return new HtmlString(
                                         '<style>
                                             .fi-modal-body { padding: 0 !important; background: #0b0b0b !important; }
                                             .fi-modal-content { background: #0b0b0b !important; box-shadow: none !important; }
@@ -704,7 +708,7 @@ class CompletedOrderDetails extends ViewRecord
                                         . '</div>'
                                     );
                                 }),
-                            \Filament\Actions\Action::make("history_{$id}")
+                            Action::make("history_{$id}")
                                 ->label('History')  
                                 ->icon('heroicon-o-clock')
                                 ->modalHeading($title . ' – History')
@@ -718,7 +722,7 @@ class CompletedOrderDetails extends ViewRecord
                                     if (!str_contains($src, 'inline=1')) {
                                         $src .= (str_contains($src, '?') ? '&' : '?') . 'inline=1';
                                     }
-                                    return new \Illuminate\Support\HtmlString(
+                                    return new HtmlString(
                                         '<style>
                                             .fi-modal-body { padding: 0 !important; background: #0b0b0b !important; }
                                             .fi-modal-content { background: #0b0b0b !important; box-shadow: none !important; }

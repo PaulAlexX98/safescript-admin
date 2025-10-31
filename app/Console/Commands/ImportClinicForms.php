@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use Storage;
 use Illuminate\Console\Command;
 use App\Models\ClinicForm;
 
@@ -13,7 +14,7 @@ class ImportClinicForms extends Command
     public function handle(): int
     {
         $path = $this->argument('path');
-        $contents = \Storage::get(str_starts_with($path, 'storage/') ? substr($path, 8) : $path);
+        $contents = Storage::get(str_starts_with($path, 'storage/') ? substr($path, 8) : $path);
         $rows = json_decode($contents, true) ?? [];
         if ($this->option('truncate')) {
             ClinicForm::truncate();

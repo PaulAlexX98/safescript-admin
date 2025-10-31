@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Pages\Tables;
 
+use Filament\Forms\Components\RichEditor;
 use Filament\Forms;
 
 class PagesTable
@@ -11,7 +12,7 @@ class PagesTable
         return [
             // Other form fields...
 
-            Forms\Components\RichEditor::make('content')
+            RichEditor::make('content')
                 ->label('Content')
                 ->extraAttributes([
                     'style' => 'height: 420px; overflow: auto;',

@@ -15,6 +15,22 @@ class PendingOrder extends Model
 
     protected $table = 'orders';
 
+    public function getReferenceAttribute(): ?string
+    {
+        // Prefer real DB columns if present
+        foreach (['reference','ref'] as $col) {
+            if (isset($this->attributes[$col]) && is_string($this->attributes[$col])) {
+                $v = trim($this->attributes[$col]);
+                if ($v !== '') return $v;
+            }
+        }
+
+        // Fallback to meta keys
+        try { $m = is_array($this->meta) ? $this->meta : (json_decode($this->meta ?? '[]', true) ?: []); } catch (\Throwable) { $m = []; }
+        $ref = data_get($m, 'ref') ?? data_get($m, 'reference');
+        return is_string($ref) && trim($ref) !== '' ? trim($ref) : null;
+    }
+
     /**
      * Normalize meta on read:
      * - Ensure products/items/lines are always a list of items (wrap single associative item)
@@ -172,6 +188,70 @@ class PendingOrder extends Model
         return $meta;
     }
 
+    public function getAppointmentDatetimeAttribute(): string
+    {
+        try { $m = is_array($this->meta) ? $this->meta : (json_decode($this->meta ?? '[]', true) ?: []); } catch (\Throwable) { $m = []; }
+        $s = data_get($m, 'appointment_start_at')
+            ?? data_get($m, 'appointment.start_at')
+            ?? data_get($m, 'appointment_at');
+        $e = data_get($m, 'appointment_end_at')
+            ?? data_get($m, 'appointment.end_at');
+
+        if ($s) return $this->formatAppt($s, $e);
+
+        if (!empty($this->reference)) {
+            try {
+                $om = \App\Models\Order::where('reference', $this->reference)->value('meta');
+                $om = is_array($om) ? $om : (json_decode($om ?? '[]', true) ?: []);
+                $s = data_get($om, 'appointment_start_at')
+                    ?? data_get($om, 'appointment.start_at')
+                    ?? data_get($om, 'appointment_at');
+                $e = data_get($om, 'appointment_end_at')
+                    ?? data_get($om, 'appointment.end_at');
+                if ($s) return $this->formatAppt($s, $e);
+            } catch (\Throwable) {}
+        }
+
+        return '—';
+    }
+
+    private function toLondonDateTime($val): ?\DateTimeImmutable
+    {
+        if ($val instanceof \DateTimeInterface) {
+            try {
+                return \DateTimeImmutable::createFromInterface($val)->setTimezone(new \DateTimeZone('Europe/London'));
+            } catch (\Throwable) { return null; }
+        }
+        if ($val === null) return null;
+        $s = trim((string) $val);
+        if ($s === '') return null;
+        $tzAware = (bool) preg_match('/(Z|[+\-]\d{2}:?\d{2})$/', $s);
+        try {
+            if ($tzAware) {
+                $dt = new \DateTimeImmutable($s);
+                return $dt->setTimezone(new \DateTimeZone('Europe/London'));
+            } else {
+                // treat naive strings as already in Europe/London
+                return new \DateTimeImmutable($s, new \DateTimeZone('Europe/London'));
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function formatAppt($start, $end = null): string
+    {
+        $sd = $this->toLondonDateTime($start);
+        if (!$sd) return '—';
+        $ed = $this->toLondonDateTime($end);
+        if ($ed) {
+            return $sd->format('Y-m-d') === $ed->format('Y-m-d')
+                ? $sd->format('d M Y, H:i') . ' — ' . $ed->format('H:i')
+                : $sd->format('d M Y, H:i') . ' — ' . $ed->format('d M Y, H:i');
+        }
+        return $sd->format('d M Y, H:i');
+    }
+
     public function getProductsTotalMinorAttribute(): int
     {
         $meta = is_array($this->meta) ? $this->meta : [];
@@ -268,10 +348,10 @@ class PendingOrder extends Model
 
     public function user()
     {
-        return $this->belongsTo(\App\Models\User::class);
+        return $this->belongsTo(User::class);
     }
     public function booking()
     {
-        return $this->hasOne(\App\Models\Booking::class, 'order_id');
+        return $this->hasOne(Booking::class, 'order_id');
     }
 }

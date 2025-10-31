@@ -2,6 +2,12 @@
 
 namespace App\Filament\Resources\Patients\Tables;
 
+use Filament\Tables\Columns\TextColumn;
+use App\Filament\Resources\Patients\PatientResource;
+use App\Models\Order;
+use Throwable;
+use Carbon\Carbon;
+use Illuminate\Support\Collection;
 use Filament\Tables\Table;
 use Filament\Tables;
 use Illuminate\Database\Eloquent\Builder;
@@ -16,33 +22,33 @@ class PatientsTable
             ->columns([
 
                 // Left-most: computed 4-digit internal id
-                Tables\Columns\TextColumn::make('computed_internal_id')
+                TextColumn::make('computed_internal_id')
                     ->label('Internal ID')
                     ->state(fn ($record) => str_pad((string)($record->id ?? 0), 4, '0', STR_PAD_LEFT))
                     ->sortable(query: fn ($query, $direction) => $query->orderBy('id', $direction))
                     ->toggleable(),
 
-                Tables\Columns\TextColumn::make('first_name')->label('First Name')->searchable()->toggleable(),
-                Tables\Columns\TextColumn::make('last_name')->label('Last Name')->searchable()->toggleable(),
-                Tables\Columns\TextColumn::make('gender')->label('Gender')->toggleable(),
-                Tables\Columns\TextColumn::make('email')->label('Email')->searchable()->toggleable(),
-                Tables\Columns\TextColumn::make('phone')->label('Phone')->searchable()->toggleable(),
-                Tables\Columns\TextColumn::make('dob')->label('DOB')->date()->toggleable(),
-                Tables\Columns\TextColumn::make('address1')->label('Street')->toggleable(),
-                Tables\Columns\TextColumn::make('city')->label('City')->toggleable(),
-                Tables\Columns\TextColumn::make('postcode')->label('Postcode')->toggleable(),
-                Tables\Columns\TextColumn::make('country')->label('Country')->toggleable(),
+                TextColumn::make('first_name')->label('First Name')->searchable()->toggleable(),
+                TextColumn::make('last_name')->label('Last Name')->searchable()->toggleable(),
+                TextColumn::make('gender')->label('Gender')->toggleable(),
+                TextColumn::make('email')->label('Email')->searchable()->toggleable(),
+                TextColumn::make('phone')->label('Phone')->searchable()->toggleable(),
+                TextColumn::make('dob')->label('DOB')->date()->toggleable(),
+                TextColumn::make('address1')->label('Street')->toggleable(),
+                TextColumn::make('city')->label('City')->toggleable(),
+                TextColumn::make('postcode')->label('Postcode')->toggleable(),
+                TextColumn::make('country')->label('Country')->toggleable(),
             ])
             ->defaultSort('id', 'desc')
 
-            ->actions([
+            ->recordActions([
                 // Edit action opens the resource edit page
                 Action::make('edit')
                     ->label('Edit')
                     ->icon('heroicon-m-pencil-square')
                     ->color('primary')
                     ->button()
-                    ->url(fn ($record) => \App\Filament\Resources\Patients\PatientResource::getUrl('edit', ['record' => $record]))
+                    ->url(fn ($record) => PatientResource::getUrl('edit', ['record' => $record]))
                     ->openUrlInNewTab(false),
 
                 // Orders action opens a modal listing recent orders for the patient
@@ -62,7 +68,7 @@ class PatientsTable
                             if (method_exists($record, 'orders')) {
                                 $orders = $record->orders()->latest('created_at')->take(150)->get(['id','reference','status','payment_status','created_at','meta','user_id']);
                             } else {
-                                $query = \App\Models\Order::query();
+                                $query = Order::query();
                                 $query->where(function ($w) use ($record) {
                                     $hasAny = false;
                                     if (!empty($record->user_id)) {
@@ -82,17 +88,17 @@ class PatientsTable
                                 });
                                 $orders = $query->latest('created_at')->take(150)->get(['id','reference','status','payment_status','created_at','meta','user_id']);
                             }
-                        } catch (\Throwable $e) {
+                        } catch (Throwable $e) {
                             $orders = collect();
                         }
   
                         if ($orders->isEmpty()) {
-                            return new \Illuminate\Support\HtmlString('<p class="text-sm text-gray-500">No orders found for this patient</p>');
+                            return new HtmlString('<p class="text-sm text-gray-500">No orders found for this patient</p>');
                         }
   
                         // Helpers
                         $formatDate = function ($dt) {
-                            try { return optional(\Carbon\Carbon::parse($dt))->format('D j M Y · H:i'); } catch (\Throwable) { return (string) $dt; }
+                            try { return optional(Carbon::parse($dt))->format('D j M Y · H:i'); } catch (Throwable) { return (string) $dt; }
                         };
                         $money = function ($value) {
                             if ($value === null || $value === '') return null;
@@ -112,7 +118,7 @@ class PatientsTable
                                 $decoded = json_decode($value, true);
                                 if (json_last_error() === JSON_ERROR_NONE) $value = $decoded;
                             }
-                            if ($value instanceof \Illuminate\Support\Collection) $value = $value->toArray();
+                            if ($value instanceof Collection) $value = $value->toArray();
                             if (is_array($value)) {
                                 if (isset($value['items']) && is_array($value['items'])) return $value['items'];
                                 if (isset($value['lines']) && is_array($value['lines'])) return $value['lines'];
@@ -330,10 +336,10 @@ class PatientsTable
                             <tbody>{$rows}</tbody>
                         </table></div>";
 
-                        return new \Illuminate\Support\HtmlString($css . $table);
+                        return new HtmlString($css . $table);
                     })
             ])
 
-            ->bulkActions([]);
+            ->toolbarActions([]);
     }
 }

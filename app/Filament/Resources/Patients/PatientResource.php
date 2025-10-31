@@ -20,24 +20,24 @@ use Filament\Schemas\Components\TextEntry;
 
 class PatientResource extends Resource
 {
-    protected static ?string $model = \App\Models\Patient::class;
+    protected static ?string $model = Patient::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedUsers;
+    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedUsers;
     protected static ?string $navigationLabel = 'Patients';
     protected static ?string $pluralLabel = 'Patients';
     protected static ?string $modelLabel = 'Patient';
     protected static ?string $recordTitleAttribute = 'name';
-    protected static \UnitEnum|string|null $navigationGroup = 'People';
+    protected static string | \UnitEnum | null $navigationGroup = 'People';
     protected static ?int $navigationSort = 9;
 
-    public static function form(FilamentSchema $schema): FilamentSchema
+    public static function form(FilamentSchema $filamentSchema): FilamentSchema
     {
-        return PatientForm::configure($schema);
+        return PatientForm::configure($filamentSchema);
     }
 
-    public static function infolist(FilamentSchema $schema): FilamentSchema
+    public static function infolist(FilamentSchema $filamentSchema): FilamentSchema
     {
-        return $schema->components([
+        return $filamentSchema->components([
             Section::make('Patient Details')->schema([
                 TextEntry::make('internal_id')->label('Internal ID'),
                 TextEntry::make('first_name')->label('First Name'),

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Scheduling\Schedules\ScheduleResource\Pages;
 
+use Filament\Actions\CreateAction;
 use App\Filament\Resources\Scheduling\Schedules\ScheduleResource;
 use Filament\Resources\Pages\ListRecords;
 use Filament\Actions;
@@ -12,7 +13,7 @@ class ListSchedules extends ListRecords
     protected function getHeaderActions(): array
     {
         return [
-            Actions\CreateAction::make(),
+            CreateAction::make(),
         ];
     }
 }

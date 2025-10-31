@@ -2,7 +2,13 @@
 
 namespace App\Services\Consultations;
 
+use RuntimeException;
+use App\Models\PendingOrder;
+use Throwable;
+use Log;
+use DB;
 use App\Models\ApprovedOrder;
+use App\Models\Service;
 use App\Models\ClinicForm;
 use App\Models\ConsultationSession;
 use Illuminate\Support\Arr;
@@ -50,37 +56,108 @@ class StartConsultation
 
         // We’re strict: a treatment must be present.
         if (! $treat) {
-            throw new \RuntimeException('Missing treatment for this service; cannot start consultation.');
+            throw new RuntimeException('Missing treatment for this service; cannot start consultation.');
         }
 
         // Ensure the session is tied to a user (column is NOT NULL in DB)
         if (empty($order->user_id)) {
-            throw new \RuntimeException('Cannot start consultation because order has no user_id. Link the order to a user.');
+            throw new RuntimeException('Cannot start consultation because order has no user_id. Link the order to a user.');
         }
 
-        // Helper to fetch a specific form_type for the exact service+treatment
+        // Helper to fetch a specific form_type with sensible fallbacks:
+        // 1) exact match service + treatment
+        // 2) service-only generic (no treatment)
+        // 3) global generic (no service, no treatment)
         $pick = function (string $type) use ($service, $treat) {
-            return ClinicForm::query()
+            $aliases = [
+                'raf'         => ['raf'],
+                'advice'      => ['advice', 'consultation_advice'],
+                'declaration' => ['pharmacist_declaration', 'declaration'],
+                'supply'      => ['supply', 'record_of_supply', 'record-of-supply'],
+                'reorder'     => ['reorder'],
+            ];
+            $types = $aliases[$type] ?? [$type];
+
+            $base = fn () => \App\Models\ClinicForm::query()
                 ->where('is_active', true)
-                ->where('form_type', $type)
-                ->where('service_slug', $service)
-                ->where('treatment_slug', $treat)
+                ->whereIn('form_type', $types)
                 ->orderByDesc('version')
+                ->orderByDesc('id');
+
+            // 1 exact match
+            $q1 = $base();
+            $exact = $q1->where('service_slug', $service)->where('treatment_slug', $treat)->first();
+            if ($exact) {
+                return $exact;
+            }
+
+            // 2 service-only generic
+            $q2 = $base();
+            $serviceOnly = $q2->where('service_slug', $service)
+                ->where(function ($q) {
+                    $q->whereNull('treatment_slug')->orWhere('treatment_slug', '');
+                })
                 ->first();
+            if ($serviceOnly) {
+                return $serviceOnly;
+            }
+
+            // 3 global generic
+            $q3 = $base();
+            $global = $q3->where(function ($q) {
+                    $q->whereNull('service_slug')->orWhere('service_slug', '');
+                })
+                ->where(function ($q) {
+                    $q->whereNull('treatment_slug')->orWhere('treatment_slug', '');
+                })
+                ->first();
+
+            return $global;
         };
 
-        // Allow missing RAF for now; require at least one available template
+        // Determine if this is a reorder style flow
+        $isReorder = (bool) (
+            Arr::get($order->meta ?? [], 'is_reorder')
+            || Arr::get($order->meta ?? [], 'reorder')
+            || Str::contains((string) $treat, ['reorder','repeat','maintenance'])
+            || Str::contains((string) $service, ['reorder','repeat'])
+        );
+
+        // Service-first templates
         $orderedKeys = ['raf', 'advice', 'declaration', 'supply'];
-        $templates = [
-            'raf'         => $pick('raf'),
-            'advice'      => $pick('advice'),
-            'declaration' => $pick('declaration'),
-            'supply'      => $pick('supply'),
-        ];
+        $templates = array_fill_keys($orderedKeys, null);
+
+        $svc = $order->service ?? optional($order->product)->service ?? Service::where('slug', $service)->first();
+
+        if ($svc) {
+            // RAF or Reorder depending on flow
+            $templates['raf'] = $isReorder
+                ? ($svc->reorderForm ?? null)
+                : ($svc->rafForm ?? null);
+
+            $templates['advice']      = $svc->adviceForm ?? null;
+            $templates['declaration'] = $svc->pharmacistDeclarationForm ?? null;
+            // Record of Supply is mapped to the Clinical Notes assignment
+            $templates['supply']      = $svc->clinicalNotesForm ?? null;
+        }
+
+        // Fill any missing steps using ClinicForm templates with sensible fallbacks
+        if (empty($templates['raf'])) {
+            $templates['raf'] = $isReorder ? ($pick('reorder') ?: $pick('raf')) : $pick('raf');
+        }
+        if (empty($templates['advice'])) {
+            $templates['advice'] = $pick('advice');
+        }
+        if (empty($templates['declaration'])) {
+            $templates['declaration'] = $pick('declaration');
+        }
+        if (empty($templates['supply'])) {
+            $templates['supply'] = $pick('supply');
+        }
 
         $available = array_filter($templates, fn ($t) => (bool) $t);
         if (empty($available)) {
-            throw new \RuntimeException("No consultation templates found for service='{$service}' treatment='" . ($treat ?: 'generic') . "'.");
+            throw new RuntimeException("No consultation templates found for service='{$service}' treatment='" . ($treat ?: 'generic') . "'. Assign service-level forms or create ClinicForm templates.");
         }
 
         $stepKeys = array_values(array_intersect($orderedKeys, array_keys($available)));
@@ -95,6 +172,18 @@ class StartConsultation
                 'version' => $form->version,
                 'schema'  => $form->schema,
             ];
+        }
+
+        // If a session already exists, sync its templates and steps without resetting progress
+        if ($session) {
+            $session->templates = $snapshot;
+            $session->steps     = array_values($stepKeys);
+            // keep current pointer in range
+            $maxIndex = max(0, count($session->steps) - 1);
+            if (! is_int($session->current) || $session->current > $maxIndex) {
+                $session->current = 0;
+            }
+            $session->save();
         }
 
         // Reuse existing session for this order if one exists; otherwise create a new one
@@ -120,23 +209,22 @@ class StartConsultation
         // 2) If missing, read ONLY the CURRENT session DB row.
         // 3) As a last resort, use answers already present on the APPROVED order snapshot.
         $answers = null;
-
         // (1) PendingOrder (same reference only)
         try {
-            $pending = \App\Models\PendingOrder::where('reference', $order->reference)->first();
+            $pending = PendingOrder::where('reference', $order->reference)->first();
             if ($pending) {
                 $pm = is_array($pending->meta) ? $pending->meta : (json_decode($pending->meta ?? '[]', true) ?: []);
-                $answers = \Illuminate\Support\Arr::get($pm, 'assessment.answers')
-                        ?? \Illuminate\Support\Arr::get($pm, 'assessment_snapshot');
+                $answers = Arr::get($pm, 'assessment.answers')
+                        ?? Arr::get($pm, 'assessment_snapshot');
             }
-        } catch (\Throwable $e) {
-            \Log::warning('Unable to read PendingOrder answers for same reference: ' . $e->getMessage());
+        } catch (Throwable $e) {
+            Log::warning('Unable to read PendingOrder answers for same reference: ' . $e->getMessage());
         }
 
         // (2) Current-session DB row only
         if (empty($answers)) {
             try {
-                $existing = \DB::table('consultation_form_responses')
+                $existing = DB::table('consultation_form_responses')
                     ->where('consultation_session_id', $session->id)
                     ->whereIn('form_type', ['assessment','intake','risk_assessment'])
                     ->orderByDesc('id')
@@ -147,8 +235,8 @@ class StartConsultation
                         ? (json_decode($existing, true) ?: [])
                         : $existing;
                 }
-            } catch (\Throwable $e) {
-                \Log::warning('Unable to read current-session answers: ' . $e->getMessage());
+            } catch (Throwable $e) {
+                Log::warning('Unable to read current-session answers: ' . $e->getMessage());
             }
         }
 
@@ -167,7 +255,7 @@ class StartConsultation
 
             // Persist to this session's consultation_form_responses row (idempotent)
             try {
-                \DB::table('consultation_form_responses')->updateOrInsert(
+                DB::table('consultation_form_responses')->updateOrInsert(
                     ['consultation_session_id' => $session->id, 'form_type' => 'risk_assessment'],
                     [
                         'clinic_form_id' => null,
@@ -178,8 +266,8 @@ class StartConsultation
                         'created_at'    => now(),
                     ]
                 );
-            } catch (\Throwable $e) {
-                \Log::warning('Unable to persist answers for this session: ' . $e->getMessage());
+            } catch (Throwable $e) {
+                Log::warning('Unable to persist answers for this session: ' . $e->getMessage());
             }
         }
 
@@ -188,8 +276,8 @@ class StartConsultation
 
         // Keep PendingOrder snapshot in sync so the admin card always renders answers
         try {
-            $pending = \App\Models\PendingOrder::where('reference', $order->reference)->first()
-                ?: \App\Models\PendingOrder::where('user_id', $order->user_id)->latest()->first();
+            $pending = PendingOrder::where('reference', $order->reference)->first()
+                ?: PendingOrder::where('user_id', $order->user_id)->latest()->first();
 
             if ($pending) {
                 $pm = is_array($pending->meta) ? $pending->meta : (json_decode($pending->meta ?? '[]', true) ?: []);
@@ -203,17 +291,17 @@ class StartConsultation
                 $pending->meta = $pm;
                 $pending->save();
             }
-        } catch (\Throwable $e) {
-            \Log::warning('Unable to sync PendingOrder snapshot: ' . $e->getMessage());
+        } catch (Throwable $e) {
+            Log::warning('Unable to sync PendingOrder snapshot: ' . $e->getMessage());
         }
 
         // Snapshot patient fields (fallback to user record if not in meta)
-        $meta['firstName'] = $meta['firstName'] ?? ($order->user->first_name ?? (\Illuminate\Support\Arr::get($order->meta ?? [], 'patient.firstName') ?? null));
-        $meta['lastName']  = $meta['lastName']  ?? ($order->user->last_name  ?? (\Illuminate\Support\Arr::get($order->meta ?? [], 'patient.lastName')  ?? null));
-        $meta['email']     = $meta['email']     ?? ($order->user->email      ?? (\Illuminate\Support\Arr::get($order->meta ?? [], 'patient.email')     ?? null));
-        $meta['phone']     = $meta['phone']     ?? ($order->user->phone      ?? (\Illuminate\Support\Arr::get($order->meta ?? [], 'patient.phone')     ?? null));
-        $meta['dob']       = $meta['dob']       ?? (\Illuminate\Support\Arr::get($order->meta ?? [], 'dateOfBirth')
-                                                    ?? \Illuminate\Support\Arr::get($order->meta ?? [], 'patient.dob')
+        $meta['firstName'] = $meta['firstName'] ?? ($order->user->first_name ?? (Arr::get($order->meta ?? [], 'patient.firstName') ?? null));
+        $meta['lastName']  = $meta['lastName']  ?? ($order->user->last_name  ?? (Arr::get($order->meta ?? [], 'patient.lastName')  ?? null));
+        $meta['email']     = $meta['email']     ?? ($order->user->email      ?? (Arr::get($order->meta ?? [], 'patient.email')     ?? null));
+        $meta['phone']     = $meta['phone']     ?? ($order->user->phone      ?? (Arr::get($order->meta ?? [], 'patient.phone')     ?? null));
+        $meta['dob']       = $meta['dob']       ?? (Arr::get($order->meta ?? [], 'dateOfBirth')
+                                                    ?? Arr::get($order->meta ?? [], 'patient.dob')
                                                     ?? ($order->user->dob ?? null));
 
         // Snapshot payment status from the column so the UI doesn't have to guess where to read it
@@ -222,26 +310,26 @@ class StartConsultation
         }
 
         // Normalise items so each item has a `variation` string even if only `variations/optionLabel/dose/strength` were set
-        $items = \Illuminate\Support\Arr::get($meta, 'items')
-              ?? \Illuminate\Support\Arr::get($meta, 'line_items')
-              ?? \Illuminate\Support\Arr::get($meta, 'lines')
-              ?? \Illuminate\Support\Arr::get($meta, 'cart.items');
+        $items = Arr::get($meta, 'items')
+              ?? Arr::get($meta, 'line_items')
+              ?? Arr::get($meta, 'lines')
+              ?? Arr::get($meta, 'cart.items');
 
         if (empty($items)) {
-            $sp = \Illuminate\Support\Arr::get($meta, 'selectedProduct') ?? [];
+            $sp = Arr::get($meta, 'selectedProduct') ?? [];
             if (!empty($sp)) {
                 $items = [[
-                    'name'       => $sp['name'] ?? (\Illuminate\Support\Arr::get($sp, 'title', 'Item')),
+                    'name'       => $sp['name'] ?? (Arr::get($sp, 'title', 'Item')),
                     'qty'        => (int) ($sp['qty'] ?? 1),
-                    'variation'  => (string) (\Illuminate\Support\Arr::get($sp, 'variation')
-                                        ?? \Illuminate\Support\Arr::get($sp, 'variations')
-                                        ?? \Illuminate\Support\Arr::get($sp, 'optionLabel')
-                                        ?? \Illuminate\Support\Arr::get($sp, 'variant')
-                                        ?? \Illuminate\Support\Arr::get($sp, 'dose')
-                                        ?? \Illuminate\Support\Arr::get($sp, 'strength')
+                    'variation'  => (string) (Arr::get($sp, 'variation')
+                                        ?? Arr::get($sp, 'variations')
+                                        ?? Arr::get($sp, 'optionLabel')
+                                        ?? Arr::get($sp, 'variant')
+                                        ?? Arr::get($sp, 'dose')
+                                        ?? Arr::get($sp, 'strength')
                                         ?? ''),
-                    'unitMinor'  => \Illuminate\Support\Arr::get($sp, 'unitMinor'),
-                    'totalMinor' => \Illuminate\Support\Arr::get($sp, 'totalMinor'),
+                    'unitMinor'  => Arr::get($sp, 'unitMinor'),
+                    'totalMinor' => Arr::get($sp, 'totalMinor'),
                 ]];
             }
         }
@@ -249,17 +337,17 @@ class StartConsultation
         if (is_array($items)) {
             foreach ($items as &$it) {
                 if (empty($it['variation'])) {
-                    $it['variation'] = (string) (\Illuminate\Support\Arr::get($it, 'variation')
-                                        ?? \Illuminate\Support\Arr::get($it, 'variations')
-                                        ?? \Illuminate\Support\Arr::get($it, 'optionLabel')
-                                        ?? \Illuminate\Support\Arr::get($it, 'variant')
-                                        ?? \Illuminate\Support\Arr::get($it, 'dose')
-                                        ?? \Illuminate\Support\Arr::get($it, 'strength')
+                    $it['variation'] = (string) (Arr::get($it, 'variation')
+                                        ?? Arr::get($it, 'variations')
+                                        ?? Arr::get($it, 'optionLabel')
+                                        ?? Arr::get($it, 'variant')
+                                        ?? Arr::get($it, 'dose')
+                                        ?? Arr::get($it, 'strength')
                                         ?? '');
                 }
                 // keep qty sane
                 if (!isset($it['qty'])) {
-                    $it['qty'] = (int) (\Illuminate\Support\Arr::get($it, 'quantity', 1));
+                    $it['qty'] = (int) (Arr::get($it, 'quantity', 1));
                 }
                 if ($it['qty'] < 1) { $it['qty'] = 1; }
             }

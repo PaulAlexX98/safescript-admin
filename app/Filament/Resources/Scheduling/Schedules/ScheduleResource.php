@@ -2,6 +2,10 @@
 
 namespace App\Filament\Resources\Scheduling\Schedules;
 
+use Filament\Tables\Columns\TextColumn;
+use App\Filament\Resources\Scheduling\Schedules\ScheduleResource\Pages\ListSchedules;
+use App\Filament\Resources\Scheduling\Schedules\ScheduleResource\Pages\CreateSchedule;
+use App\Filament\Resources\Scheduling\Schedules\ScheduleResource\Pages\EditSchedule;
 use App\Filament\Resources\Scheduling\Schedules\ScheduleResource\Pages;
 use App\Models\Schedule;
 use Filament\Resources\Resource;
@@ -19,8 +23,8 @@ class ScheduleResource extends Resource
     protected static ?string $model = Schedule::class;
 
     protected static ?string $navigationLabel = 'Schedules';
-    protected static \BackedEnum|string|null $navigationIcon = 'heroicon-o-clock';
-    protected static \UnitEnum|string|null $navigationGroup = 'Scheduling';
+    protected static string | \BackedEnum | null $navigationIcon = 'heroicon-o-clock';
+    protected static string | \UnitEnum | null $navigationGroup = 'Scheduling';
     protected static ?int $navigationSort = 2;
 
     public static function form(Schema $schema): Schema
@@ -35,7 +39,7 @@ class ScheduleResource extends Resource
             'sun' => 'Sunday',
         ];
 
-        return $schema->schema([
+        return $schema->components([
             TextInput::make('name')->label('Schedule name')->required()->maxLength(120),
             TextInput::make('service_slug')->label('Service key (optional)')->placeholder('e.g. travel-clinic'),
             TextInput::make('timezone')->default('Europe/London')->required(),
@@ -96,12 +100,12 @@ class ScheduleResource extends Resource
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('name')->sortable()->searchable(),
-                Tables\Columns\TextColumn::make('service_slug')->label('Service')->toggleable()->searchable(),
-                Tables\Columns\TextColumn::make('slot_minutes')->label('Slot (min)')->sortable(),
-                Tables\Columns\TextColumn::make('capacity')->label('Cap.')->sortable(),
-                Tables\Columns\TextColumn::make('timezone')->toggleable(),
-                Tables\Columns\TextColumn::make('updated_at')->dateTime('d M Y, H:i')->label('Updated'),
+                TextColumn::make('name')->sortable()->searchable(),
+                TextColumn::make('service_slug')->label('Service')->toggleable()->searchable(),
+                TextColumn::make('slot_minutes')->label('Slot (min)')->sortable(),
+                TextColumn::make('capacity')->label('Cap.')->sortable(),
+                TextColumn::make('timezone')->toggleable(),
+                TextColumn::make('updated_at')->dateTime('d M Y, H:i')->label('Updated'),
             ])
             // Make row clickable to Edit (avoids missing action classes)
             ->recordUrl(fn ($record) => static::getUrl('edit', ['record' => $record]));
@@ -110,9 +114,9 @@ class ScheduleResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index'  => Pages\ListSchedules::route('/'),
-            'create' => Pages\CreateSchedule::route('/create'),
-            'edit'   => Pages\EditSchedule::route('/{record}/edit'),
+            'index'  => ListSchedules::route('/'),
+            'create' => CreateSchedule::route('/create'),
+            'edit'   => EditSchedule::route('/{record}/edit'),
         ];
     }
 }

@@ -38,7 +38,7 @@ class Patient extends Model
      */
     public function orders()
     {
-        return $this->hasMany(\App\Models\Order::class, 'user_id');
+        return $this->hasMany(Order::class, 'user_id');
     }
 
     /**
@@ -47,8 +47,8 @@ class Patient extends Model
     public function bookings()
     {
         return $this->hasManyThrough(
-            \App\Models\Booking::class, // Final related
-            \App\Models\Order::class,   // Through
+            Booking::class, // Final related
+            Order::class,   // Through
             'user_id',  // Foreign key on orders table...
             'order_id', // Foreign key on bookings table...
             'id',       // Local key on users table

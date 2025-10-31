@@ -2,6 +2,9 @@
 
 namespace App\Filament\Resources\Orders;
 
+use App\Models\Order;
+use App\Filament\Resources\Orders\Pages\ListCompletedOrders;
+use App\Filament\Resources\Orders\Pages\CompletedOrderDetails;
 use BackedEnum;
 use Filament\Support\Icons\Heroicon;
 use Filament\Resources\Resource;
@@ -13,11 +16,11 @@ class CompletedOrderResource extends OrderResource
     protected static ?string $navigationLabel  = 'Completed';
     protected static ?string $pluralLabel      = 'Completed';
     protected static ?string $modelLabel       = 'Completed';
-    protected static \UnitEnum|string|null $navigationGroup = 'Orders';
+    protected static string | \UnitEnum | null $navigationGroup = 'Orders';
     protected static ?int    $navigationSort   = 1;
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCheckCircle;
+    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedCheckCircle;
     protected static bool $shouldRegisterNavigation = true;
-    protected static ?string $model = \App\Models\Order::class;
+    protected static ?string $model = Order::class;
 
     public static function shouldRegisterNavigation(): bool
     {
@@ -32,8 +35,8 @@ class CompletedOrderResource extends OrderResource
     public static function getPages(): array
     {
         return [
-            'index'   => Pages\ListCompletedOrders::route('/'),
-            'details' => Pages\CompletedOrderDetails::route('/{record}/details'),
+            'index'   => ListCompletedOrders::route('/'),
+            'details' => CompletedOrderDetails::route('/{record}/details'),
         ];
     }
 }

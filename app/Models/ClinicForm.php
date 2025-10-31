@@ -17,18 +17,12 @@ class ClinicForm extends Model
         'treatment_slug',
         'version',
         'is_active',
-        'raf_schema',
-        'raf_version',
-        'raf_status',
     ];
 
     protected $casts = [
         'schema'    => 'array',
         'is_active' => 'boolean',
         'version'   => 'integer',
-        'raf_version' => 'integer',
-        'raf_schema' => 'array',
-        'form_type' => 'string',
     ];
 
     /* ---------------------------
@@ -75,4 +69,3 @@ class ClinicForm extends Model
         return is_array($this->schema) ? count($this->schema) : 0;
     }
 }
-

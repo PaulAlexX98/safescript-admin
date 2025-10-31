@@ -2,6 +2,18 @@
 
 namespace App\Filament\Admin\Resources\ClinicLogs;
 
+use Filament\Schemas\Schema;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\TimePicker;
+use Filament\Forms\Components\Textarea;
+use Filament\Tables\Columns\BadgeColumn;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Actions\ViewAction;
+use Filament\Actions\EditAction;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\DeleteBulkAction;
 use App\Filament\Admin\Resources\ClinicLogs\ClinicLogResource\Pages\CreateClinicLog;
 use App\Filament\Admin\Resources\ClinicLogs\ClinicLogResource\Pages\EditClinicLog;
 use App\Filament\Admin\Resources\ClinicLogs\ClinicLogResource\Pages\ListClinicLogs;
@@ -9,7 +21,6 @@ use App\Filament\Admin\Resources\ClinicLogs\ClinicLogResource\Pages\ViewClinicLo
 use App\Models\ClinicLog;
 use BackedEnum;
 use Filament\Forms;
-use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables;
@@ -19,15 +30,15 @@ class ClinicLogResource extends Resource
 {
     protected static ?string $model = ClinicLog::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
     protected static ?string $recordTitleAttribute = 'id';
 
-    public static function form(Form $form): Form
+    public static function form(Schema $schema): Schema
     {
-        return $form
-            ->schema([
-                Forms\Components\Select::make('type')
+        return $schema
+            ->components([
+                Select::make('type')
                     ->options([
                         'Fridge' => 'Fridge',
                         'RP' => 'RP',
@@ -35,12 +46,12 @@ class ClinicLogResource extends Resource
                     ])
                     ->required()
                     ->native(false),
-                Forms\Components\TextInput::make('branch')->maxLength(120),
-                Forms\Components\TextInput::make('pharmacist')->maxLength(120),
-                Forms\Components\DatePicker::make('date'),
-                Forms\Components\TimePicker::make('start_time')->label('Start'),
-                Forms\Components\TimePicker::make('end_time')->label('End'),
-                Forms\Components\Textarea::make('notes')->rows(4),
+                TextInput::make('branch')->maxLength(120),
+                TextInput::make('pharmacist')->maxLength(120),
+                DatePicker::make('date'),
+                TimePicker::make('start_time')->label('Start'),
+                TimePicker::make('end_time')->label('End'),
+                Textarea::make('notes')->rows(4),
             ])->columns(2);
     }
 
@@ -48,31 +59,31 @@ class ClinicLogResource extends Resource
     {
         return $table
             ->columns([
-                Tables\Columns\BadgeColumn::make('type')
+                BadgeColumn::make('type')
                     ->colors([
                         'info' => 'Fridge',
                         'warning' => 'RP',
                         'success' => 'Handover',
                     ])
                     ->sortable(),
-                Tables\Columns\TextColumn::make('branch')->sortable()->searchable(),
-                Tables\Columns\TextColumn::make('pharmacist')->sortable()->toggleable(),
-                Tables\Columns\TextColumn::make('date')->date('d-m-Y')->sortable(),
-                Tables\Columns\TextColumn::make('start_time')->label('Start'),
-                Tables\Columns\TextColumn::make('end_time')->label('End'),
-                Tables\Columns\TextColumn::make('notes')->limit(40)->toggleable(isToggledHiddenByDefault: true),
-                Tables\Columns\TextColumn::make('updated_at')->dateTime('d-m-Y H:i')->label('Updated')->sortable(),
+                TextColumn::make('branch')->sortable()->searchable(),
+                TextColumn::make('pharmacist')->sortable()->toggleable(),
+                TextColumn::make('date')->date('d-m-Y')->sortable(),
+                TextColumn::make('start_time')->label('Start'),
+                TextColumn::make('end_time')->label('End'),
+                TextColumn::make('notes')->limit(40)->toggleable(isToggledHiddenByDefault: true),
+                TextColumn::make('updated_at')->dateTime('d-m-Y H:i')->label('Updated')->sortable(),
             ])
             ->filters([
                 // add filters here if needed
             ])
-            ->actions([
-                Tables\Actions\ViewAction::make(),
-                Tables\Actions\EditAction::make(),
+            ->recordActions([
+                ViewAction::make(),
+                EditAction::make(),
             ])
-            ->bulkActions([
-                Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+            ->toolbarActions([
+                BulkActionGroup::make([
+                    DeleteBulkAction::make(),
                 ]),
             ])
             ->defaultSort('updated_at', 'desc');

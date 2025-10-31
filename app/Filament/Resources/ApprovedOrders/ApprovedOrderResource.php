@@ -2,9 +2,21 @@
 
 namespace App\Filament\Resources\ApprovedOrders;
 
+use Carbon\Carbon;
+use Throwable;
+use Illuminate\Support\Collection;
+use Filament\Tables\Filters\SelectFilter;
+use Illuminate\Support\HtmlString;
+use Filament\Infolists\Components\RepeatableEntry;
+use Filament\Infolists\Components\ViewEntry;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\View;
+use Log;
+use Filament\Forms\Components\Textarea;
 use App\Filament\Resources\ApprovedOrders\Pages\ListApprovedOrders;
 use App\Filament\Resources\ApprovedOrders\Schemas\ApprovedOrderForm;
 use App\Models\ApprovedOrder;
+use App\Models\Order;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\TextEntry;
@@ -23,9 +35,9 @@ use App\Models\ConsultationSession;
 class ApprovedOrderResource extends Resource
 {
     // ✅ point to orders model (scoped to approved)
-    protected static ?string $model = \App\Models\ApprovedOrder::class;
+    protected static ?string $model = ApprovedOrder::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
     protected static ?string $navigationLabel = 'Approved Orders';
     protected static ?string $pluralLabel = 'Approved Orders';
@@ -57,7 +69,7 @@ class ApprovedOrderResource extends Resource
                         if (! $start) return null;
 
                         $fmt = function ($dt, $format = 'd-m-Y H:i') {
-                            try { return \Carbon\Carbon::parse($dt)->format($format); } catch (\Throwable) { return (string) $dt; }
+                            try { return Carbon::parse($dt)->format($format); } catch (Throwable) { return (string) $dt; }
                         };
 
                         return $end ? ($fmt($start) . ' — ' . $fmt($end)) : $fmt($start);
@@ -91,7 +103,7 @@ class ApprovedOrderResource extends Resource
                                     $value = $decoded;
                                 }
                             }
-                            if ($value instanceof \Illuminate\Support\Collection) {
+                            if ($value instanceof Collection) {
                                 $value = $value->toArray();
                             }
                             if (is_array($value)) {
@@ -321,7 +333,7 @@ class ApprovedOrderResource extends Resource
                     ->toggleable(),
             ])
             ->filters([
-                Tables\Filters\SelectFilter::make('type')
+                SelectFilter::make('type')
                     ->label('Type')
                     ->options([
                         'new' => 'New Patient',
@@ -372,7 +384,7 @@ class ApprovedOrderResource extends Resource
                         });
                     }),
             ])
-            ->actions([
+            ->recordActions([
                 Action::make('viewOrder')
                     ->label('View Order')
                     ->button()
@@ -386,13 +398,13 @@ class ApprovedOrderResource extends Resource
                             ?: 'Weight Management Service';
                         return $name ?: 'Order Details';
                     })
-                    ->modalDescription(fn ($record) => new \Illuminate\Support\HtmlString(
+                    ->modalDescription(fn ($record) => new HtmlString(
                         '<span class="text-xs text-gray-400">Order Ref: ' . e($record->reference ?? '—') . '</span>'
                     ))
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('Close')
                     ->modalWidth('5xl')
-                    ->infolist([
+                    ->schema([
                         Grid::make(12)->schema([
                             Section::make('Patient Details')
                                 ->columnSpan(8)
@@ -430,7 +442,7 @@ class ApprovedOrderResource extends Resource
                                             })
                                             ->formatStateUsing(function ($state) {
                                                 if (empty($state)) return null;
-                                                try { return \Carbon\Carbon::parse($state)->format('d-m-Y'); } catch (\Throwable) { return $state; }
+                                                try { return Carbon::parse($state)->format('d-m-Y'); } catch (Throwable) { return $state; }
                                             }),
                                         TextEntry::make('meta.email')
                                             ->label('Email')
@@ -480,7 +492,7 @@ class ApprovedOrderResource extends Resource
                                                     $end   = data_get($meta, 'appointment_end_at');
                                                     if (! $start) return null;
                                                     $fmt = function ($dt) {
-                                                        try { return \Carbon\Carbon::parse($dt)->format('d-m-Y H:i'); } catch (\Throwable) { return (string) $dt; }
+                                                        try { return Carbon::parse($dt)->format('d-m-Y H:i'); } catch (Throwable) { return (string) $dt; }
                                                     };
                                                     return $end ? ($fmt($start) . ' — ' . $fmt($end)) : $fmt($start);
                                                 }),
@@ -530,7 +542,7 @@ class ApprovedOrderResource extends Resource
                             ->collapsible()
                             ->collapsed()
                             ->schema([
-                                \Filament\Infolists\Components\RepeatableEntry::make('products')
+                                RepeatableEntry::make('products')
                                     ->hiddenLabel()
                                     ->getStateUsing(function ($record) {
                                         // Normalize various meta shapes into a uniform array of { name, variation, qty, priceMinor, priceFormatted }
@@ -790,19 +802,19 @@ class ApprovedOrderResource extends Resource
                                         return $out;
                                     })
                                     ->schema([
-                                        \Filament\Schemas\Components\Grid::make(12)->schema([
-                                            \Filament\Infolists\Components\TextEntry::make('name')
+                                        Grid::make(12)->schema([
+                                            TextEntry::make('name')
                                                 ->label('Product')
                                                 ->columnSpan(6),
-                                            \Filament\Infolists\Components\TextEntry::make('variation')
+                                            TextEntry::make('variation')
                                                 ->label('Variation')
                                                 ->formatStateUsing(fn ($state) => $state ?: '—')
                                                 ->columnSpan(3),
-                                            \Filament\Infolists\Components\TextEntry::make('qty')
+                                            TextEntry::make('qty')
                                                 ->label('Qty')
                                                 ->formatStateUsing(fn ($state) => (string) $state)
                                                 ->columnSpan(1),
-                                            \Filament\Infolists\Components\TextEntry::make('priceFormatted')
+                                            TextEntry::make('priceFormatted')
                                                 ->label('Price')
                                                 ->columnSpan(2)
                                                 ->formatStateUsing(fn ($state) => (string) $state)
@@ -810,15 +822,15 @@ class ApprovedOrderResource extends Resource
                                         ]),
                                     ])
                                     ->columnSpanFull(),
-                                \Filament\Schemas\Components\Grid::make(12)
+                                Grid::make(12)
                                     ->columnSpanFull()
                                     ->schema([
-                                        \Filament\Infolists\Components\TextEntry::make('products_total_label')
+                                        TextEntry::make('products_total_label')
                                             ->hiddenLabel()
                                             ->default('Total')
                                             ->columnSpan(10)
                                             ->extraAttributes(['class' => 'text-right font-medium']),
-                                        \Filament\Infolists\Components\TextEntry::make('products_total_minor')
+                                        TextEntry::make('products_total_minor')
                                             ->hiddenLabel()
                                             ->label('')
                                             ->columnSpan(2)
@@ -832,141 +844,29 @@ class ApprovedOrderResource extends Resource
                             ->collapsible()
                             ->collapsed()
                             ->schema([
-                                // Prefer a Blade view renderer if present; it receives $state = answers array
-                                \Filament\Infolists\Components\ViewEntry::make('assessment_answers')
+                                ViewEntry::make('consultation_qa')
                                     ->label(false)
                                     ->getStateUsing(function ($record) {
-                                        // --- compute raw answers array (no formatting) ---
+                                        // First try formsQA from the ApprovedOrder meta
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        
-                                        // Prefer flat answers first, then snapshot, then other fallbacks
-                                        $answers = data_get($meta, 'assessment.answers')
-                                            ?? data_get($meta, 'assessment_snapshot')
-                                            ?? data_get($meta, 'formAnswers')
-                                            ?? data_get($meta, 'form_answers')
-                                            ?? data_get($meta, 'answers');
-                                        
-                                        // normalize if it came in as JSON string
-                                        if (is_string($answers)) {
-                                            $decoded = json_decode($answers, true);
-                                            if (json_last_error() === JSON_ERROR_NONE) {
-                                                $answers = $decoded;
-                                            }
-                                        }
-                                        // If a container like ['answers' => [...]] slipped through, unwrap it
-                                        if (is_array($answers) && array_key_exists('answers', $answers) && is_array($answers['answers'])) {
-                                            $answers = $answers['answers'];
-                                        }
-                                        
-                                        if (empty($answers)) {
-                                            $sessionId = data_get($meta, 'consultation_session_id')
-                                                ?? data_get($meta, 'session_id')
-                                                ?? data_get($meta, 'intake.session_id');
+                                        $forms = data_get($meta, 'formsQA', []);
 
-                                            $sessionMeta = null;
-                                            if ($sessionId) {
-                                                try {
-                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
-                                                        ->where('id', (int) $sessionId)
-                                                        ->value('meta');
-                                                } catch (\Throwable $e) { $sessionMeta = null; }
-                                            }
-                                            if ($sessionMeta === null && !empty($record->user_id)) {
-                                                try {
-                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
-                                                        ->where('user_id', (int) $record->user_id)
-                                                        ->orderByDesc('id')
-                                                        ->value('meta');
-                                                } catch (\Throwable $e) { $sessionMeta = null; }
-                                            }
-                                            if ($sessionMeta) {
-                                                $sessionMetaArr = is_array($sessionMeta) ? $sessionMeta : (json_decode($sessionMeta, true) ?: []);
-                                                $answers = data_get($sessionMetaArr, 'answers') ?? $sessionMetaArr;
+                                        // If empty, fall back to the real Order row by reference
+                                        if (empty($forms)) {
+                                            try {
+                                                $order = Order::where('reference', $record->reference)->first();
+                                                if ($order) {
+                                                    $ometa = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                                    $forms = data_get($ometa, 'formsQA', []);
+                                                }
+                                            } catch (Throwable $e) {
+                                                // ignore
                                             }
                                         }
 
-                                        return (is_array($answers) ? $answers : []);
+                                        return $forms;
                                     })
-                                    ->view('filament/pending-orders/assessment-card') // reuse the same Blade view
-                                    ->columnSpanFull()
-                                    ->hidden(function () {
-                                        return ! \Illuminate\Support\Facades\View::exists('filament/pending-orders/assessment-card');
-                                    }),
-
-                                // Fallback renderer (shown only if the Blade view does not exist yet)
-                                \Filament\Infolists\Components\TextEntry::make('assessment_render_fallback')
-                                    ->hidden(function () {
-                                        return \Illuminate\Support\Facades\View::exists('filament/pending-orders/assessment-card');
-                                    })
-                                    ->hiddenLabel()
-                                    ->getStateUsing(function ($record) {
-                                        // 1) Load answers from order meta, else from consultation_sessions
-                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        $answers = data_get($meta, 'assessment.answers')
-                                            ?? data_get($meta, 'assessment_snapshot')
-                                            ?? data_get($meta, 'formAnswers')
-                                            ?? data_get($meta, 'form_answers')
-                                            ?? data_get($meta, 'answers');
-                                        
-                                        if (is_string($answers)) {
-                                            $decoded = json_decode($answers, true);
-                                            if (json_last_error() === JSON_ERROR_NONE) {
-                                                $answers = $decoded;
-                                            }
-                                        }
-                                        if (is_array($answers) && array_key_exists('answers', $answers) && is_array($answers['answers'])) {
-                                            $answers = $answers['answers'];
-                                        }
-
-                                        if (empty($answers)) {
-                                            $sessionId = data_get($meta, 'consultation_session_id')
-                                                ?? data_get($meta, 'session_id')
-                                                ?? data_get($meta, 'intake.session_id');
-
-                                            $sessionMeta = null;
-                                            if ($sessionId) {
-                                                try {
-                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
-                                                        ->where('id', (int) $sessionId)
-                                                        ->value('meta');
-                                                } catch (\Throwable $e) { $sessionMeta = null; }
-                                            }
-                                            if ($sessionMeta === null && !empty($record->user_id)) {
-                                                try {
-                                                    $sessionMeta = \Illuminate\Support\Facades\DB::table('consultation_sessions')
-                                                        ->where('user_id', (int) $record->user_id)
-                                                        ->orderByDesc('id')
-                                                        ->value('meta');
-                                                } catch (\Throwable $e) { $sessionMeta = null; }
-                                            }
-                                            if ($sessionMeta) {
-                                                $sessionMetaArr = is_array($sessionMeta) ? $sessionMeta : (json_decode($sessionMeta, true) ?: []);
-                                                $answers = data_get($sessionMetaArr, 'answers') ?? $sessionMetaArr;
-                                            }
-                                        }
-
-                                        if (empty($answers) || !is_array($answers)) {
-                                            return '&lt;em&gt;No answers submitted&lt;/em&gt;';
-                                        }
-
-                                        // simple flat fallback while Blade view is missing
-                                        $fmt = function ($v) {
-                                            if (is_bool($v)) return $v ? 'Yes' : 'No';
-                                            if (is_array($v)) return implode(', ', array_map(fn($x) => is_scalar($x)? (string)$x : json_encode($x), $v));
-                                            if ($v === null || $v === '') return '—';
-                                            return (string) $v;
-                                        };
-                                        $rows = [];
-                                        foreach ($answers as $k => $v) {
-                                            $label = ucwords(str_replace(['_','-'],' ', (string) $k));
-                                            $rows[] = '&lt;tr&gt;&lt;th class="text-left pr-3 align-top whitespace-nowrap"&gt;'
-                                                . e($label) . ':&lt;/th&gt;&lt;td class="align-top"&gt;'
-                                                . e($fmt($v))
-                                                . '&lt;/td&gt;&lt;/tr&gt;';
-                                        }
-                                        return '&lt;div class="rounded border border-gray-200 p-3"&gt;&lt;table class="text-sm w-full"&gt;' . implode('', $rows) . '&lt;/table&gt;&lt;/div&gt;';
-                                    })
-                                    ->html()
+                                    ->view('filament.pending-orders.consultation-qa')
                                     ->columnSpanFull(),
                             ]),
                     ])
@@ -976,7 +876,7 @@ class ApprovedOrderResource extends Resource
                             ->label('Start Consultation')
                             ->color('success')
                             ->icon('heroicon-o-play')
-                            ->action(function (\App\Models\ApprovedOrder $record) {
+                            ->action(function (ApprovedOrder $record) {
                                 // --- Preserve a snapshot of assessment answers BEFORE starting the consultation ---
                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                 $answers = data_get($meta, 'assessment.answers')
@@ -993,7 +893,7 @@ class ApprovedOrderResource extends Resource
                                     if ($sid > 0) {
                                         try {
                                             $payload = is_string($answers) ? $answers : json_encode($answers);
-                                            \Illuminate\Support\Facades\DB::table('consultation_form_responses')->updateOrInsert(
+                                            DB::table('consultation_form_responses')->updateOrInsert(
                                                 ['consultation_session_id' => $sid, 'form_type' => 'risk_assessment'],
                                                 [
                                                     'clinic_form_id' => null,
@@ -1004,8 +904,8 @@ class ApprovedOrderResource extends Resource
                                                     'created_at'    => now(),
                                                 ]
                                             );
-                                        } catch (\Throwable $e) {
-                                            \Log::warning('Unable to persist assessment answers snapshot to consultation_form_responses: ' . $e->getMessage());
+                                        } catch (Throwable $e) {
+                                            Log::warning('Unable to persist assessment answers snapshot to consultation_form_responses: ' . $e->getMessage());
                                         }
                                     }
 
@@ -1015,14 +915,14 @@ class ApprovedOrderResource extends Resource
                                 }
 
                                 // --- Now start the consultation (this may create a new session) ---
-                                /** @var \App\Models\ConsultationSession $session */
-                                $session = app(\App\Services\Consultations\StartConsultation::class)($record);
+                                /** @var ConsultationSession $session */
+                                $session = app(StartConsultation::class)($record);
 
                                 // If a new session was created AND we have answers, persist them into that session as well
                                 if (isset($session) && isset($session->id) && !empty($answers)) {
                                     try {
                                         $payload = is_string($answers) ? $answers : json_encode($answers);
-                                        \Illuminate\Support\Facades\DB::table('consultation_form_responses')->updateOrInsert(
+                                        DB::table('consultation_form_responses')->updateOrInsert(
                                             ['consultation_session_id' => (int) $session->id, 'form_type' => 'risk_assessment'],
                                             [
                                                 'clinic_form_id' => null,
@@ -1033,8 +933,8 @@ class ApprovedOrderResource extends Resource
                                                 'created_at'    => now(),
                                             ]
                                         );
-                                    } catch (\Throwable $e) {
-                                        \Log::warning('Unable to persist assessment answers to newly created session: ' . $e->getMessage());
+                                    } catch (Throwable $e) {
+                                        Log::warning('Unable to persist assessment answers to newly created session: ' . $e->getMessage());
                                     }
                                 }
 
@@ -1045,13 +945,13 @@ class ApprovedOrderResource extends Resource
                             ->label('Add Admin Note')
                             ->color('primary')
                             ->icon('heroicon-o-document-check')
-                            ->form([
-                                \Filament\Forms\Components\Textarea::make('new_note')
+                            ->schema([
+                                Textarea::make('new_note')
                                     ->label('Add New Note')
                                     ->rows(4)
                                     ->columnSpanFull(),
                             ])
-                            ->action(function (\App\Models\ApprovedOrder $record, array $data, Action $action) {
+                            ->action(function (ApprovedOrder $record, array $data, Action $action) {
                                 $newNote = trim($data['new_note'] ?? '');
                                 if ($newNote === '') {
                                     return;
@@ -1073,7 +973,7 @@ class ApprovedOrderResource extends Resource
                             ->color('warning')
                             ->icon('heroicon-o-trash')
                             ->requiresConfirmation()
-                            ->action(function (\App\Models\ApprovedOrder $record, Action $action) {
+                            ->action(function (ApprovedOrder $record, Action $action) {
                                 $meta = $record->meta ?? [];
                                 if (is_array($meta)) {
                                     unset($meta['admin_notes']);
@@ -1112,7 +1012,7 @@ class ApprovedOrderResource extends Resource
     {
         try {
             $count = static::getEloquentQuery()->count();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $count = 0;
         }
         return $count > 0 ? (string) $count : null;
@@ -1122,7 +1022,7 @@ class ApprovedOrderResource extends Resource
     {
         try {
             $count = static::getEloquentQuery()->count();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $count = 0;
         }
         return $count > 0 ? 'primary' : 'gray';

@@ -2,20 +2,20 @@
 
 namespace App\Filament\Resources\ClinicForms\Schemas;
 
-use Filament\Infolists\Infolist;
-use Filament\Infolists\Components\Section as InfoSection;
-use Filament\Infolists\Components\Grid as InfoGrid;
+use Filament\Schemas\Schema;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Grid;
 use Filament\Infolists\Components\TextEntry;
 use Illuminate\Support\Str;
 
 class ClinicFormInfolist
 {
-    public static function build(Infolist $infolist): Infolist
+    public static function build(Schema $schema): Schema
     {
-        return $infolist->schema([
-            InfoSection::make('Overview')
+        return $schema->components([
+            Section::make('Overview')
                 ->schema([
-                    InfoGrid::make(2)->schema([
+                    Grid::make(2)->schema([
                         TextEntry::make('name')
                             ->label('Title'),
                         TextEntry::make('visibility')
@@ -25,7 +25,7 @@ class ClinicFormInfolist
                 ])
                 ->collapsible(),
 
-            InfoSection::make('Form Structure')
+            Section::make('Form Structure')
                 ->schema([
                     TextEntry::make('schema_count')
                         ->label('Total fields')

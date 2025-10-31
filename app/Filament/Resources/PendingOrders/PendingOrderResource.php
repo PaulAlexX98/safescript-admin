@@ -2,6 +2,10 @@
 
 namespace App\Filament\Resources\PendingOrders;
 
+use Carbon\Carbon;
+use Throwable;
+use Illuminate\Support\Collection;
+use Filament\Tables\Filters\SelectFilter;
 use App\Filament\Resources\PendingOrders\Pages\CreatePendingOrder;
 use App\Filament\Resources\PendingOrders\Pages\EditPendingOrder;
 use App\Filament\Resources\PendingOrders\Pages\ListPendingOrders;
@@ -9,6 +13,7 @@ use App\Filament\Resources\PendingOrders\Schemas\PendingOrderForm;
 use App\Filament\Resources\PendingOrders\Tables\PendingOrdersTable;
 use Filament\Actions\Action;
 use App\Models\PendingOrder;
+use App\Models\Appointment;
 use App\Models\Order;
 use Illuminate\Support\Facades\Schema as DBSchema;
 use Illuminate\Database\Eloquent\Builder;
@@ -33,7 +38,7 @@ class PendingOrderResource extends Resource
 {
     protected static ?string $model = PendingOrder::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
     protected static ?string $navigationLabel = 'Pending Approval';
     protected static ?string $pluralLabel = 'Pending Approval';
@@ -43,40 +48,22 @@ class PendingOrderResource extends Resource
 
     protected static ?string $recordTitleAttribute = 'title';
 
-    public static function form(FilamentSchema $schema): FilamentSchema
+    public static function form(FilamentSchema $filamentSchema): FilamentSchema
     {
-        return PendingOrderForm::configure($schema);
+        return PendingOrderForm::configure($filamentSchema);
     }
 
     public static function table(Table $table): Table
     {
         return $table
             ->columns([
-                TextColumn::make('order_datetime')
-                    ->label('Order Date & Time')
-                    ->getStateUsing(function ($record) {
-                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                        $start = data_get($meta, 'appointment_start_at') ?: $record->created_at;
-                        $end   = data_get($meta, 'appointment_end_at');
-
-                        if (! $start) return null;
-
-                        $fmt = function ($dt, $format = 'd-m-Y H:i') {
-                            try { return \Carbon\Carbon::parse($dt)->format($format); } catch (\Throwable) { return (string) $dt; }
-                        };
-
-                        return $end ? ($fmt($start) . ' — ' . $fmt($end)) : $fmt($start);
-                    })
-                    ->sortable(query: function (Builder $query, string $direction) {
-                        // Sort by meta->appointment_start_at (if present), otherwise created_at.
-                        // We JSON_EXTRACT the ISO timestamp stored in meta and coalesce to created_at.
-                        $dir = strtolower($direction) === 'asc' ? 'asc' : 'desc';
-                        $query->orderByRaw(
-                            "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.appointment_start_at')), created_at) {$dir}"
-                        );
-                    })
+                TextColumn::make('created_at')
+                    ->label('Order Created')
+                    ->dateTime('d M Y, H:i')
+                    ->sortable()
                     ->toggleable(),
 
+                
                 TextColumn::make('service_name')
                     ->label('Order Service')
                     ->getStateUsing(function ($record) {
@@ -92,7 +79,7 @@ class PendingOrderResource extends Resource
 
                         if ($sid) {
                             try {
-                                $slug = \Illuminate\Support\Facades\DB::table('consultation_sessions')
+                                $slug = DB::table('consultation_sessions')
                                     ->where('id', $sid)
                                     ->value('service_slug');
 
@@ -103,7 +90,7 @@ class PendingOrderResource extends Resource
                                         $name = $fromSlug;
                                     }
                                 }
-                            } catch (\Throwable $e) {
+                            } catch (Throwable $e) {
                                 // ignore
                             }
                         }
@@ -122,7 +109,7 @@ class PendingOrderResource extends Resource
                                     $value = $decoded;
                                 }
                             }
-                            if ($value instanceof \Illuminate\Support\Collection) {
+                            if ($value instanceof Collection) {
                                 $value = $value->toArray();
                             }
                             if (is_array($value)) {
@@ -337,30 +324,59 @@ class PendingOrderResource extends Resource
                     ->label('Customer')
                     ->getStateUsing(function ($record) {
                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                        $first = null;
-                        $last  = null;
-                        foreach (['firstName', 'first_name', 'patient.firstName', 'patient.first_name'] as $k) {
-                            $v = data_get($meta, $k);
-                            if ($v) { $first = $v; break; }
+
+                        $pick = function ($arr, array $keys) {
+                            foreach ($keys as $k) {
+                                $v = data_get($arr, $k);
+                                if (is_string($v) && trim($v) !== '') {
+                                    return trim($v);
+                                }
+                            }
+                            return null;
+                        };
+
+                        // Try structured first and last names across many common shapes
+                        $first = $pick($meta, [
+                            'firstName', 'first_name', 'patient.firstName', 'patient.first_name',
+                            'customer.first_name', 'customer.given_name', 'contact.first_name', 'answers.first_name',
+                            'personal.first_name', 'personal.firstName', 'form.personal.first_name', 'form.personal.firstName',
+                            'billingAddress.first_name', 'shippingAddress.first_name', 'patient.first',
+                        ]);
+
+                        $last = $pick($meta, [
+                            'lastName', 'last_name', 'patient.lastName', 'patient.last_name',
+                            'customer.last_name', 'customer.family_name', 'contact.last_name', 'answers.last_name',
+                            'personal.last_name', 'personal.lastName', 'form.personal.last_name', 'form.personal.lastName',
+                            'billingAddress.last_name', 'shippingAddress.last_name', 'patient.last',
+                        ]);
+
+                        // Full name fields if present
+                        $full = $pick($meta, [
+                            'name', 'full_name', 'fullName',
+                            'patient.name', 'patient.full_name',
+                            'customer.name', 'contact.name', 'answers.name',
+                        ]);
+
+                        if (!$full) {
+                            $combined = trim(trim((string) $first) . ' ' . trim((string) $last));
+                            if ($combined !== '') {
+                                $full = $combined;
+                            }
                         }
-                        foreach (['lastName', 'last_name', 'patient.lastName', 'patient.last_name'] as $k) {
-                            $v = data_get($meta, $k);
-                            if ($v) { $last = $v; break; }
+
+                        // Fall back to the related user, if any
+                        if (!$full && isset($record->user)) {
+                            $userCombined = trim(trim((string) ($record->user->first_name ?? '')) . ' ' . trim((string) ($record->user->last_name ?? '')));
+                            $full = $userCombined !== '' ? $userCombined : ($record->user->name ?? null);
                         }
-                        if (!$first && isset($record->user)) { $first = $record->user->first_name ?? null; }
-                        if (!$last && isset($record->user))  { $last  = $record->user->last_name  ?? null; }
-                        $name = trim(trim((string)$first) . ' ' . trim((string)$last));
-                        if ($name === '') {
-                            // Fallback to a single name field if present
-                            $name = $record->user->name ?? (data_get($meta, 'patient.name') ?? null);
-                        }
-                        return $name ?: '—';
+
+                        return $full ?: '—';
                     })
                     ->searchable()
                     ->toggleable(),
             ])
             ->filters([
-                Tables\Filters\SelectFilter::make('type')
+                SelectFilter::make('type')
                     ->label('Type')
                     ->options([
                         'new' => 'New Patient',
@@ -421,7 +437,7 @@ class PendingOrderResource extends Resource
                         });
                     }),
             ])
-            ->actions([
+            ->recordActions([
                 Action::make('viewOrder')
                     ->label('View Order')
                     ->button()
@@ -437,12 +453,12 @@ class PendingOrderResource extends Resource
                     })
                     ->modalDescription(function ($record) {
                         $ref = e($record->reference ?? '—');
-                        return new \Illuminate\Support\HtmlString('<span class="text-xs text-gray-400">Order Ref: ' . $ref . '</span>');
+                        return new HtmlString('<span class="text-xs text-gray-400">Order Ref: ' . $ref . '</span>');
                     })
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('Close')
                     ->modalWidth('5xl')
-                    ->infolist([
+                    ->schema([
                         // Top two-column layout to "squeeze" content
                         Grid::make(12)->schema([
                             // LEFT COLUMN: Patient first
@@ -482,7 +498,7 @@ class PendingOrderResource extends Resource
                                             })
                                             ->formatStateUsing(function ($state) {
                                                 if (empty($state)) return null;
-                                                try { return \Carbon\Carbon::parse($state)->format('d-m-Y'); } catch (\Throwable) { return $state; }
+                                                try { return Carbon::parse($state)->format('d-m-Y'); } catch (Throwable) { return $state; }
                                             }),
                                         TextEntry::make('meta.email')
                                             ->label('Email')
@@ -525,37 +541,12 @@ class PendingOrderResource extends Resource
                                                 }),
                                         ]),
                                     Section::make('Appointment Date & Time')
-                                        ->schema([
-                                            TextEntry::make('order_datetime')
-                                                ->hiddenLabel()
-                                                ->getStateUsing(function ($record) {
-                                                    $meta = is_array($record->meta)
-                                                        ? $record->meta
-                                                        : (json_decode($record->meta ?? '[]', true) ?: []);
-
-                                                    // try multiple meta paths for start and end
-                                                    $start = data_get($meta, 'appointment_start_at')
-                                                        ?? data_get($meta, 'appointment.start_at')
-                                                        ?? data_get($meta, 'appointment_at')
-                                                        ?? data_get($meta, 'booking.start_at');
-
-                                                    $end   = data_get($meta, 'appointment_end_at')
-                                                        ?? data_get($meta, 'appointment.end_at')
-                                                        ?? data_get($meta, 'booking.end_at');
-
-                                                    if (! $start) return null;
-
-                                                    $fmt = function ($dt) {
-                                                        try { return \Carbon\Carbon::parse($dt)->format('d-m-Y H:i'); }
-                                                        catch (\Throwable) { return (string) $dt; }
-                                                    };
-
-                                                    return $end ? ($fmt($start) . ' — ' . $fmt($end)) : $fmt($start);
-                                                }),
-                                        ]),
+                                    ->schema([
+                                        \Filament\Infolists\Components\TextEntry::make('appointment_datetime')->hiddenLabel(),
+                                    ]),
                                 ]),
                         ]),
-                        // Notes & Comments (patient notes above admin notes)
+                        // Noftes & Comments (patient notes above admin notes)
                         Section::make('Notes & Comments')
                             ->columnSpanFull()
                             ->schema([
@@ -572,7 +563,7 @@ class PendingOrderResource extends Resource
                                     ]),
                                 Section::make('Admin Notes')
                                     ->schema([
-                                        \Filament\Infolists\Components\TextEntry::make('meta.admin_notes')
+                                        TextEntry::make('meta.admin_notes')
                                             ->hiddenLabel()
                                             ->getStateUsing(function ($record) {
                                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
@@ -920,12 +911,12 @@ class PendingOrderResource extends Resource
                                 Grid::make(12)
                                     ->columnSpanFull()
                                     ->schema([
-                                        \Filament\Infolists\Components\TextEntry::make('products_total_label')
+                                        TextEntry::make('products_total_label')
                                             ->hiddenLabel()
                                             ->default('Total')
                                             ->columnSpan(10)
                                             ->extraAttributes(['class' => 'text-right font-medium']),
-                                        \Filament\Infolists\Components\TextEntry::make('products_total_minor')
+                                        TextEntry::make('products_total_minor')
                                             ->label('') // no header over value cell
                                             ->hiddenLabel()
                                             ->columnSpan(2)
@@ -950,12 +941,12 @@ class PendingOrderResource extends Resource
                                         // If empty, fall back to the real Order row by reference
                                         if (empty($forms)) {
                                             try {
-                                                $order = \App\Models\Order::where('reference', $record->reference)->first();
+                                                $order = Order::where('reference', $record->reference)->first();
                                                 if ($order) {
                                                     $ometa = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
                                                     $forms = data_get($ometa, 'formsQA', []);
                                                 }
-                                            } catch (\Throwable $e) {
+                                            } catch (Throwable $e) {
                                                 // ignore
                                             }
                                         }
@@ -993,13 +984,119 @@ class PendingOrderResource extends Resource
                                             'meta'           => $orderMeta,
                                         ])->save();
                                     }
-                                } catch (\Throwable $e) {
+                                } catch (Throwable $e) {
                                     // swallow to avoid breaking the UI; consider logging if needed
+                                }
+                                // After syncing the Order, approve or create the matching appointment so it only shows once approved
+                                try {
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                    // Extract appointment window from meta
+                                    $start = data_get($meta, 'appointment_start_at')
+                                        ?? data_get($meta, 'appointment.start_at')
+                                        ?? data_get($meta, 'appointment_at')
+                                        ?? data_get($meta, 'booking.start_at');
+
+                                    $end = data_get($meta, 'appointment_end_at')
+                                        ?? data_get($meta, 'appointment.end_at')
+                                        ?? data_get($meta, 'booking.end_at');
+
+                                    // Build candidate service slugs
+                                    $serviceCandidates = [];
+                                    $sid = data_get($meta, 'consultation_session_id')
+                                        ?? data_get($meta, 'consultation.sessionId');
+                                    if ($sid) {
+                                        $slug = DB::table('consultation_sessions')
+                                            ->where('id', $sid)
+                                            ->value('service_slug');
+                                        if (is_string($slug) && $slug !== '') {
+                                            $serviceCandidates[] = $slug;
+                                        }
+                                    }
+                                    foreach (['service_slug','service','serviceName','title','treatment'] as $k) {
+                                        $v = data_get($meta, $k);
+                                        if (is_string($v) && $v !== '') {
+                                            $serviceCandidates[] = \Illuminate\Support\Str::slug($v);
+                                        }
+                                    }
+                                    $serviceCandidates = array_values(array_unique(array_filter($serviceCandidates)));
+
+                                    $startAt = null;
+                                    $endAt = null;
+                                    try { if ($start) { $startAt = Carbon::parse($start); } } catch (Throwable $e) { $startAt = null; }
+                                    try { if ($end)   { $endAt   = Carbon::parse($end);   } } catch (Throwable $e) { $endAt = null; }
+
+                                    // First try a direct match via order_reference if the column exists
+                                    $updatedAny = false;
+                                    if (DBSchema::hasColumn('appointments', 'order_reference')) {
+                                        $rows = DB::table('appointments')->where('order_reference', $record->reference)->get();
+                                        if ($rows->count() > 0) {
+                                            $update = [];
+                                            if (DBSchema::hasColumn('appointments', 'status'))         $update['status'] = 'approved';
+                                            if (DBSchema::hasColumn('appointments', 'booking_status')) $update['booking_status'] = 'approved';
+                                            if (DBSchema::hasColumn('appointments', 'is_visible'))     $update['is_visible'] = 1;
+                                            if (DBSchema::hasColumn('appointments', 'visible'))        $update['visible'] = 1;
+                                            if (DBSchema::hasColumn('appointments', 'updated_at'))     $update['updated_at'] = now();
+
+                                            DB::table('appointments')->where('order_reference', $record->reference)->update($update);
+                                            $updatedAny = true;
+                                        }
+                                    }
+
+                                    // Otherwise, match by service and near start time
+                                    if (!$updatedAny && !empty($serviceCandidates) && $startAt) {
+                                        $q = DB::table('appointments')->whereIn('service', $serviceCandidates);
+                                        // Match a 30-minute window to be resilient to seconds
+                                        $q->whereBetween('start_at', [
+                                            $startAt->copy()->subMinutes(30),
+                                            $startAt->copy()->addMinutes(30),
+                                        ]);
+                                        $rows = $q->get();
+                                        if ($rows->count() > 0) {
+                                            $update = [];
+                                            if (DBSchema::hasColumn('appointments', 'status'))         $update['status'] = 'approved';
+                                            if (DBSchema::hasColumn('appointments', 'booking_status')) $update['booking_status'] = 'approved';
+                                            if (DBSchema::hasColumn('appointments', 'is_visible'))     $update['is_visible'] = 1;
+                                            if (DBSchema::hasColumn('appointments', 'visible'))        $update['visible'] = 1;
+                                            if (DBSchema::hasColumn('appointments', 'order_reference')) $update['order_reference'] = $record->reference;
+                                            if (DBSchema::hasColumn('appointments', 'user_id') && isset($record->user_id)) $update['user_id'] = $record->user_id;
+                                            if (DBSchema::hasColumn('appointments', 'updated_at'))     $update['updated_at'] = now();
+
+                                            DB::table('appointments')
+                                                ->whereIn('service', $serviceCandidates)
+                                                ->whereBetween('start_at', [
+                                                    $startAt->copy()->subMinutes(30),
+                                                    $startAt->copy()->addMinutes(30),
+                                                ])
+                                                ->update($update);
+                                            $updatedAny = true;
+                                        }
+                                    }
+
+                                    // If nothing matched, create a row so it appears only post-approval
+                                    if (!$updatedAny && ($startAt || !empty($serviceCandidates))) {
+                                        $insert = [];
+                                        $insert['service']  = $serviceCandidates[0] ?? (\Illuminate\Support\Str::slug((string) (data_get($meta, 'service') ?? data_get($meta, 'serviceName') ?? data_get($meta, 'title') ?? data_get($meta, 'treatment') ?? 'service')));
+                                        if ($startAt) $insert['start_at'] = $startAt->toDateTimeString();
+                                        if ($endAt)   $insert['end_at']   = $endAt->toDateTimeString();
+                                        if (DBSchema::hasColumn('appointments', 'status'))         $insert['status'] = 'approved';
+                                        if (DBSchema::hasColumn('appointments', 'booking_status')) $insert['booking_status'] = 'approved';
+                                        if (DBSchema::hasColumn('appointments', 'is_visible'))     $insert['is_visible'] = 1;
+                                        if (DBSchema::hasColumn('appointments', 'visible'))        $insert['visible'] = 1;
+                                        if (DBSchema::hasColumn('appointments', 'order_reference')) $insert['order_reference'] = $record->reference;
+                                        if (DBSchema::hasColumn('appointments', 'user_id') && isset($record->user_id)) $insert['user_id'] = $record->user_id;
+                                        if (DBSchema::hasColumn('appointments', 'created_at'))     $insert['created_at'] = now();
+                                        if (DBSchema::hasColumn('appointments', 'updated_at'))     $insert['updated_at'] = now();
+
+                                        DB::table('appointments')->insert($insert);
+                                    }
+                                } catch (Throwable $e) {
+                                    // swallow
                                 }
                                 $action->success();
                                 $action->getLivewire()->dispatch('$refresh');
                                 $action->getLivewire()->dispatch('refreshTable');
-                                return redirect(\App\Filament\Resources\PendingOrders\Pages\ListPendingOrders::getUrl());
+                                return redirect(ListPendingOrders::getUrl());
                             }),
                         Action::make('reject')
                             ->label('Reject')
@@ -1009,8 +1106,8 @@ class PendingOrderResource extends Resource
                             ->modalDescription('Please provide a reason. This note will be saved with the order.')
                             ->modalSubmitActionLabel('Reject')
                             ->requiresConfirmation(false)
-                            ->form([
-                                \Filament\Forms\Components\Textarea::make('rejection_note')
+                            ->schema([
+                                Textarea::make('rejection_note')
                                     ->label('Rejection Note')
                                     ->rows(4)
                                     ->required()
@@ -1073,21 +1170,91 @@ class PendingOrderResource extends Resource
                                             'meta'           => $orderMeta,
                                         ])->save();
                                     }
-                                } catch (\Throwable $e) {
+                                } catch (Throwable $e) {
                                     // swallow to avoid breaking the UI; consider logging if needed
+                                }
+
+                                // On rejection, remove or hide any matching appointment so it disappears from the list
+                                // On rejection, mark any matching appointment as rejected (don't delete)
+                                try {
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                    $start = data_get($meta, 'appointment_start_at')
+                                        ?? data_get($meta, 'appointment.start_at')
+                                        ?? data_get($meta, 'appointment_at')
+                                        ?? data_get($meta, 'booking.start_at');
+
+                                    // Build candidate service slugs
+                                    $serviceCandidates = [];
+                                    $sid = data_get($meta, 'consultation_session_id')
+                                        ?? data_get($meta, 'consultation.sessionId');
+                                    if ($sid) {
+                                        $slug = DB::table('consultation_sessions')
+                                            ->where('id', $sid)
+                                            ->value('service_slug');
+                                        if (is_string($slug) && $slug !== '') {
+                                            $serviceCandidates[] = $slug;
+                                        }
+                                    }
+                                    foreach (['service_slug','service','serviceName','title','treatment'] as $k) {
+                                        $v = data_get($meta, $k);
+                                        if (is_string($v) && $v !== '') {
+                                            $serviceCandidates[] = \Illuminate\Support\Str::slug($v);
+                                        }
+                                    }
+                                    $serviceCandidates = array_values(array_unique(array_filter($serviceCandidates)));
+
+                                    $startAt = null;
+                                    try { if ($start) { $startAt = Carbon::parse($start); } } catch (Throwable $e) { $startAt = null; }
+
+                                    // Build update payload
+                                    $update = [];
+                                    if (DBSchema::hasColumn('appointments', 'status'))         $update['status'] = 'rejected';
+                                    if (DBSchema::hasColumn('appointments', 'booking_status')) $update['booking_status'] = 'rejected';
+                                    if (DBSchema::hasColumn('appointments', 'is_visible'))     $update['is_visible'] = 1; // keep visible so you can see it’s rejected
+                                    if (DBSchema::hasColumn('appointments', 'visible'))        $update['visible'] = 1;
+                                    if (DBSchema::hasColumn('appointments', 'updated_at'))     $update['updated_at'] = now();
+
+                                    $updatedAny = false;
+
+                                    // Prefer a direct match via order_reference if present
+                                    if (DBSchema::hasColumn('appointments', 'order_reference')) {
+                                        $affected = DB::table('appointments')
+                                            ->where('order_reference', $record->reference)
+                                            ->update($update);
+                                        $updatedAny = $affected > 0;
+                                    }
+
+                                    // Otherwise match by service and near start time
+                                    if (!$updatedAny && !empty($serviceCandidates) && $startAt) {
+                                        $payload = $update;
+                                        if (DBSchema::hasColumn('appointments', 'order_reference')) {
+                                            $payload['order_reference'] = $record->reference;
+                                        }
+
+                                        DB::table('appointments')
+                                            ->whereIn('service', $serviceCandidates)
+                                            ->whereBetween('start_at', [
+                                                $startAt->copy()->subMinutes(30),
+                                                $startAt->copy()->addMinutes(30),
+                                            ])
+                                            ->update($payload);
+                                    }
+                                } catch (Throwable $e) {
+                                    // swallow
                                 }
 
                                 $action->success();
                                 $action->getLivewire()->dispatch('$refresh');
                                 $action->getLivewire()->dispatch('refreshTable');
 
-                                return redirect(\App\Filament\Resources\PendingOrders\Pages\ListPendingOrders::getUrl());
+                                return redirect(ListPendingOrders::getUrl());
                             }),
                         Action::make('addAdminNote')
                             ->label('Add Admin Note')
                             ->color('primary')
                             ->icon('heroicon-o-document-check')
-                            ->form([
+                            ->schema([
                                 Textarea::make('new_note')
                                     ->label('Add New Note')
                                     ->rows(4)
@@ -1161,7 +1328,7 @@ class PendingOrderResource extends Resource
     {
         try {
             $count = static::getEloquentQuery()->count();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $count = 0;
         }
 
@@ -1172,7 +1339,7 @@ class PendingOrderResource extends Resource
     {
         try {
             $count = static::getEloquentQuery()->count();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $count = 0;
         }
 

@@ -2,6 +2,10 @@
 
 namespace App\Filament\Resources\Services\Tables;
 
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Filters\SelectFilter;
+use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Filament\Tables;
 
@@ -11,26 +15,26 @@ class ServicesTable
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('name')->searchable()->sortable(),
-                Tables\Columns\TextColumn::make('code')->badge()->copyable()->toggleable(),
-                Tables\Columns\TextColumn::make('category')->sortable()->toggleable(),
-                Tables\Columns\TextColumn::make('price')->money('gbp', true)->sortable(),
-                Tables\Columns\IconColumn::make('active')->boolean()->sortable(),
+                TextColumn::make('name')->searchable()->sortable(),
+                TextColumn::make('code')->badge()->copyable()->toggleable(),
+                TextColumn::make('category')->sortable()->toggleable(),
+                TextColumn::make('price')->money('gbp', true)->sortable(),
+                IconColumn::make('active')->boolean()->sortable(),
             ])
             ->defaultSort('name')
             ->filters([
-                Tables\Filters\SelectFilter::make('category')->options([
+                SelectFilter::make('category')->options([
                     'vaccination' => 'Vaccination',
                     'consultation' => 'Consultation',
                     'screening' => 'Screening',
                     'other' => 'Other',
                 ]),
-                Tables\Filters\TernaryFilter::make('active')->nullable(),
+                TernaryFilter::make('active')->nullable(),
             ])
-            ->actions([
+            ->recordActions([
                 
             ])
-            ->bulkActions([
+            ->toolbarActions([
          
             ]);
     }

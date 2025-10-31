@@ -41,13 +41,13 @@ class Product extends Model
 
     public function services()
     {
-        return $this->belongsToMany(\App\Models\Service::class, 'product_service')
+        return $this->belongsToMany(Service::class, 'product_service')
             ->withPivot(['active', 'sort_order', 'min_qty', 'max_qty', 'price'])
             ->withTimestamps();
     }
 
     public function variations()
     {
-        return $this->hasMany(\App\Models\ProductVariation::class);
+        return $this->hasMany(ProductVariation::class);
     }
 }

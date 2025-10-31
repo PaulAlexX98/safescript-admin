@@ -2,6 +2,12 @@
 
 namespace App\Filament\Resources\ClinicForms\Pages;
 
+use Log;
+use Filament\Forms\Components\Repeater;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Toggle;
+use Filament\Schemas\Schema;
+use Filament\Actions\Action;
 use App\Filament\Resources\ClinicForms\ClinicFormResource;
 use Filament\Resources\Pages\Page;
 use Filament\Forms\Concerns\InteractsWithForms;
@@ -28,7 +34,7 @@ class RafBuilder extends Page
         $this->record = $record;
 
         // Only allow RAF builder on the Weight Management form
-        \Log::debug('RAF service slug check', ['id' => $this->record->id, 'service_slug' => $this->record->service_slug]);
+        Log::debug('RAF service slug check', ['id' => $this->record->id, 'service_slug' => $this->record->service_slug]);
         if ($this->record->service_slug !== 'weight-management-service') {
             abort(404);
         }
@@ -51,25 +57,25 @@ class RafBuilder extends Page
     protected function getFormSchema(): array
     {
         return [
-            \Filament\Forms\Components\TextInput::make('name')->label('Form title')->disabled(),
-            \Filament\Forms\Components\TextInput::make('service_slug')->label('Service ID')->disabled(),
+            TextInput::make('name')->label('Form title')->disabled(),
+            TextInput::make('service_slug')->label('Service ID')->disabled(),
 
-            \Filament\Forms\Components\Repeater::make('raf_schema.stages')
+            Repeater::make('raf_schema.stages')
                 ->label('Form sections')
                 ->collapsed()
                 ->addActionLabel('Add section')
                 ->orderable()
                 ->schema([
-                    \Filament\Forms\Components\TextInput::make('title')->label('Section title')->required(),
-                    \Filament\Forms\Components\TextInput::make('order')->numeric()->label('Order')->default(0),
+                    TextInput::make('title')->label('Section title')->required(),
+                    TextInput::make('order')->numeric()->label('Order')->default(0),
 
-                    \Filament\Forms\Components\Repeater::make('fields')
+                    Repeater::make('fields')
                         ->label('Questions')
                         ->collapsed()
                         ->addActionLabel('Add question')
                         ->orderable()
                         ->schema([
-                            \Filament\Forms\Components\Select::make('type')->label('Type')->options([
+                            Select::make('type')->label('Type')->options([
                                 'text' => 'Text',
                                 'textarea' => 'Textarea',
                                 'number' => 'Number',
@@ -81,9 +87,9 @@ class RafBuilder extends Page
                                 'notice' => 'Notice',
                             ])->required(),
 
-                            \Filament\Forms\Components\TextInput::make('label')->label('Label')->required(),
-                            \Filament\Forms\Components\TextInput::make('key')->label('Key')->helperText('Stable key used to save answers')->required(),
-                            \Filament\Forms\Components\Textarea::make('help')->label('Help text')->rows(2),
+                            TextInput::make('label')->label('Label')->required(),
+                            TextInput::make('key')->label('Key')->helperText('Stable key used to save answers')->required(),
+                            Textarea::make('help')->label('Help text')->rows(2),
 
                             TagsInput::make('options')
                                 ->label('Options')
@@ -91,12 +97,12 @@ class RafBuilder extends Page
                                 ->helperText('Used for select, radio, checkbox and multi-select fields')
                                 ->visible(fn ($get) => in_array($get('type'), ['select','radio','multiselect','checkbox'])),
 
-                            \Filament\Forms\Components\TextInput::make('validation')->label('Validation rule')->placeholder('numeric|min:0|max:100'),
-                            \Filament\Forms\Components\Toggle::make('required')->label('Required')->default(false),
-                            \Filament\Forms\Components\Toggle::make('pharmacist_editable')->label('Pharmacist editable')->default(false),
-                            \Filament\Forms\Components\TextInput::make('order')->numeric()->label('Order')->default(0),
-                            \Filament\Forms\Components\Textarea::make('show_if')->label('Show if JSON')->rows(2),
-                            \Filament\Forms\Components\Textarea::make('meta')->label('Meta JSON')->rows(2),
+                            TextInput::make('validation')->label('Validation rule')->placeholder('numeric|min:0|max:100'),
+                            Toggle::make('required')->label('Required')->default(false),
+                            Toggle::make('pharmacist_editable')->label('Pharmacist editable')->default(false),
+                            TextInput::make('order')->numeric()->label('Order')->default(0),
+                            Textarea::make('show_if')->label('Show if JSON')->rows(2),
+                            Textarea::make('meta')->label('Meta JSON')->rows(2),
                         ]),
                 ]),
         ];
@@ -107,28 +113,28 @@ class RafBuilder extends Page
         return 'data';
     }
 
-    public static function form(\Filament\Schemas\Schema $schema): \Filament\Schemas\Schema
+    public static function form(Schema $schema): Schema
     {
-        return $schema->schema([
-            \Filament\Forms\Components\TextInput::make('name')->label('Form title')->disabled(),
-            \Filament\Forms\Components\TextInput::make('service_slug')->label('Service ID')->disabled(),
+        return $schema->components([
+            TextInput::make('name')->label('Form title')->disabled(),
+            TextInput::make('service_slug')->label('Service ID')->disabled(),
 
-            \Filament\Forms\Components\Repeater::make('raf_schema.stages')
+            Repeater::make('raf_schema.stages')
                 ->label('Form sections')
                 ->collapsed()
                 ->addActionLabel('Add section')
                 ->orderable()
                 ->schema([
-                    \Filament\Forms\Components\TextInput::make('title')->label('Section title')->required(),
-                    \Filament\Forms\Components\TextInput::make('order')->numeric()->label('Order')->default(0),
+                    TextInput::make('title')->label('Section title')->required(),
+                    TextInput::make('order')->numeric()->label('Order')->default(0),
 
-                    \Filament\Forms\Components\Repeater::make('fields')
+                    Repeater::make('fields')
                         ->label('Questions')
                         ->collapsed()
                         ->addActionLabel('Add question')
                         ->orderable()
                         ->schema([
-                            \Filament\Forms\Components\Select::make('type')->label('Type')->options([
+                            Select::make('type')->label('Type')->options([
                                 'text' => 'Text',
                                 'textarea' => 'Textarea',
                                 'number' => 'Number',
@@ -140,9 +146,9 @@ class RafBuilder extends Page
                                 'notice' => 'Notice',
                             ])->required(),
 
-                            \Filament\Forms\Components\TextInput::make('label')->label('Label')->required(),
-                            \Filament\Forms\Components\TextInput::make('key')->label('Key')->helperText('Stable key used to save answers')->required(),
-                            \Filament\Forms\Components\Textarea::make('help')->label('Help text')->rows(2),
+                            TextInput::make('label')->label('Label')->required(),
+                            TextInput::make('key')->label('Key')->helperText('Stable key used to save answers')->required(),
+                            Textarea::make('help')->label('Help text')->rows(2),
 
                             TagsInput::make('options')
                                 ->label('Options')
@@ -150,12 +156,12 @@ class RafBuilder extends Page
                                 ->helperText('Used for select, radio, checkbox and multi-select fields')
                                 ->visible(fn ($get) => in_array($get('type'), ['select','radio','multiselect','checkbox'])),
 
-                            \Filament\Forms\Components\TextInput::make('validation')->label('Validation rule')->placeholder('numeric|min:0|max:100'),
-                            \Filament\Forms\Components\Toggle::make('required')->label('Required')->default(false),
-                            \Filament\Forms\Components\Toggle::make('pharmacist_editable')->label('Pharmacist editable')->default(false),
-                            \Filament\Forms\Components\TextInput::make('order')->numeric()->label('Order')->default(0),
-                            \Filament\Forms\Components\Textarea::make('show_if')->label('Show if JSON')->rows(2),
-                            \Filament\Forms\Components\Textarea::make('meta')->label('Meta JSON')->rows(2),
+                            TextInput::make('validation')->label('Validation rule')->placeholder('numeric|min:0|max:100'),
+                            Toggle::make('required')->label('Required')->default(false),
+                            Toggle::make('pharmacist_editable')->label('Pharmacist editable')->default(false),
+                            TextInput::make('order')->numeric()->label('Order')->default(0),
+                            Textarea::make('show_if')->label('Show if JSON')->rows(2),
+                            Textarea::make('meta')->label('Meta JSON')->rows(2),
                         ]),
                 ]),
         ])->statePath('data');
@@ -237,7 +243,7 @@ class RafBuilder extends Page
     protected function getHeaderActions(): array
     {
         return [
-            Actions\Action::make('exportJson')
+            Action::make('exportJson')
                 ->label('Export JSON')
                 ->icon('heroicon-m-arrow-up-tray')
                 ->modalHeading('Export RAF JSON')
@@ -248,11 +254,11 @@ class RafBuilder extends Page
                     Storage::disk('local')->put($file, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
                     Notification::make()->success()->title('Exported to storage/app/' . $file)->send();
                 }),
-            Actions\Action::make('importJson')
+            Action::make('importJson')
                 ->label('Import JSON')
                 ->icon('heroicon-m-arrow-down-tray')
                 ->modalHeading('Import RAF JSON')
-                ->form([
+                ->schema([
                     Textarea::make('json')
                         ->rows(14)
                         ->required()
@@ -283,11 +289,11 @@ class RafBuilder extends Page
                     Notification::make()->success()->title("Imported RAF (v{$newVersion}).")->send();
                 }),
 
-            Actions\Action::make('importFromFile')
+            Action::make('importFromFile')
                 ->label('Load from file')
                 ->icon('heroicon-m-folder-arrow-down')
                 ->modalHeading('Load RAF JSON from server file path')
-                ->form([
+                ->schema([
                     TextInput::make('path')
                         ->default(base_path('backups/raf_builder.json'))
                         ->required()
@@ -334,7 +340,7 @@ class RafBuilder extends Page
                     Notification::make()->success()->title("Loaded from file and saved (v{$newVersion}).")->send();
                 }),
 
-            Actions\Action::make('save')
+            Action::make('save')
                 ->label('Save')
                 ->color('success')
                 ->action('save'),

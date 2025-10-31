@@ -8,7 +8,7 @@ class ConsultationSession extends Model
 {
     public function order()
     {
-        return $this->belongsTo(\App\Models\ApprovedOrder::class, 'order_id');
+        return $this->belongsTo(ApprovedOrder::class, 'order_id');
     }
 
     protected $fillable = [
@@ -27,6 +27,8 @@ class ConsultationSession extends Model
     protected $casts = [
         'templates' => 'array',
         'steps'     => 'array',
-        'answers'   => 'array'
+        'answers'   => 'array',
+        'current'   => 'integer'
+        
     ];
 }

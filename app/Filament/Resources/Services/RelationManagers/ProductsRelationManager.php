@@ -2,6 +2,15 @@
 
 namespace App\Filament\Resources\Services\RelationManagers;
 
+use Filament\Tables\Table;
+use Filament\Actions\Action;
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\RichEditor;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Repeater;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms;
 use Filament\Tables;
 use Filament\Actions;
@@ -18,7 +27,7 @@ class ProductsRelationManager extends RelationManager
     protected static ?string $title = 'Products';
     protected static ?string $recordTitleAttribute = 'name';
 
-    public function table(Tables\Table $table): Tables\Table
+    public function table(Table $table): Table
     {
         return $table
             // Drag to reorder by pivot.sort_order
@@ -27,18 +36,18 @@ class ProductsRelationManager extends RelationManager
 
             // Header actions: Add product, Remove product
             ->headerActions([
-                Actions\Action::make('create_and_attach_product')
+                Action::make('create_and_attach_product')
                     ->label('Add product')
                     ->icon('heroicon-m-plus')
                     ->modalHeading('Add Product')
                     ->modalWidth('7xl')
-                    ->form([
+                    ->schema([
                         // Basic product fields
-                        Forms\Components\TextInput::make('name')
+                        TextInput::make('name')
                             ->label('Product Name')
                             ->required(),
 
-                        Forms\Components\RichEditor::make('description')
+                        RichEditor::make('description')
                             ->label('Description')
                             ->toolbarButtons(['bold','italic','link','bulletList','orderedList','blockquote','redo','undo']),
 
@@ -51,43 +60,43 @@ class ProductsRelationManager extends RelationManager
                             ->imageEditor()                // optional: allow crop/resize
                             ->hint('PNG/JPG, up to ~3MB'),
 
-                        Forms\Components\Select::make('status')
+                        Select::make('status')
                             ->label('Status')
                             ->options(['draft' => 'Draft', 'published' => 'Published'])
                             ->default('draft'),
 
 
                         // Variations table-style editor
-                        Forms\Components\Repeater::make('variations')
+                        Repeater::make('variations')
                             ->label('Product Variations')
                             ->defaultItems(1)
                             ->minItems(1)
                             ->columns(6)
                             ->schema([
-                                Forms\Components\TextInput::make('title')
+                                TextInput::make('title')
                                     ->label('Title')
                                     ->required()
                                     ->columnSpan(2),
 
-                                Forms\Components\TextInput::make('price')
+                                TextInput::make('price')
                                     ->label('Price')
                                     ->prefix('£')
                                     ->numeric()
                                     ->columnSpan(1),
 
-                                Forms\Components\TextInput::make('stock')
+                                TextInput::make('stock')
                                     ->label('Stock')
                                     ->numeric()
                                     ->default(0)
                                     ->columnSpan(1),
 
-                                Forms\Components\TextInput::make('max_qty')
+                                TextInput::make('max_qty')
                                     ->label('Max Qty')
                                     ->numeric()
                                     ->default(0)
                                     ->columnSpan(1),
 
-                                Forms\Components\Select::make('status')
+                                Select::make('status')
                                     ->label('Status')
                                     ->options(['draft' => 'Draft', 'published' => 'Published'])
                                     ->default('published')
@@ -99,7 +108,7 @@ class ProductsRelationManager extends RelationManager
                     ])
                     ->action(function (array $data): void {
                         // 1) Create the product
-                        /** @var \App\Models\Product $product */
+                        /** @var Product $product */
                         $product = Product::create([
                             'name'        => $data['name'],
                             'description' => $data['description'] ?? null,
@@ -133,12 +142,12 @@ class ProductsRelationManager extends RelationManager
                         $this->dispatch('refresh');
                     }),
 
-                Actions\Action::make('remove_product')
+                Action::make('remove_product')
                     ->label('Remove product')
                     ->icon('heroicon-m-trash')
                     ->color('danger')
-                    ->form([
-                        Forms\Components\Select::make('product_id')
+                    ->schema([
+                        Select::make('product_id')
                             ->label('Product')
                             ->options(fn () => $this->getRelationship()->pluck('name', 'id'))
                             ->searchable()
@@ -154,38 +163,38 @@ class ProductsRelationManager extends RelationManager
 
             // Columns
             ->columns([
-                Tables\Columns\TextColumn::make('name')
+                TextColumn::make('name')
                     ->label('Product')
                     ->searchable()
                     ->sortable(),
 
-                Tables\Columns\IconColumn::make('pivot.active')
+                IconColumn::make('pivot.active')
                     ->label('Active')
                     ->boolean(),
 
-                Tables\Columns\TextColumn::make('variations_count')
+                TextColumn::make('variations_count')
                     ->label('Variations')
                     ->sortable(),
             ])
 
             // Row actions (using \Filament\Actions\Action)
-            ->actions([
-                Actions\Action::make('manage_product')
+            ->recordActions([
+                Action::make('manage_product')
                     ->label('Edit product')
                     ->icon('heroicon-m-pencil-square')
                     ->modalHeading('Edit Product')
                     ->modalWidth('7xl')
-                    ->form([
-                        Forms\Components\TextInput::make('name')
+                    ->schema([
+                        TextInput::make('name')
                             ->label('Product Name')
                             ->required(),
 
 
-                        Forms\Components\RichEditor::make('description')
+                        RichEditor::make('description')
                             ->label('Description')
                             ->toolbarButtons(['bold','italic','link','bulletList','orderedList','blockquote','redo','undo']),
                         
-                        Forms\Components\FileUpload::make('image_path')
+                        FileUpload::make('image_path')
                             ->label('Image')
                             ->image()
                             ->disk('public')
@@ -196,43 +205,43 @@ class ProductsRelationManager extends RelationManager
                             ->imageEditor()
                             ->columnSpanFull(),
 
-                        Forms\Components\Select::make('status')
+                        Select::make('status')
                             ->label('Status')
                             ->options(['draft' => 'Draft', 'published' => 'Published'])
                             ->default('draft'),
 
-                        Forms\Components\Repeater::make('variations')
+                        Repeater::make('variations')
                             ->label('Product Variations')
                             ->reorderable('sort_order')
                             ->defaultItems(0)
                             ->columns(6)
                             ->schema([
-                                Forms\Components\Hidden::make('id'),
+                                Hidden::make('id'),
 
-                                Forms\Components\TextInput::make('title')
+                                TextInput::make('title')
                                     ->label('Title')
                                     ->required()
                                     ->columnSpan(2),
 
-                                Forms\Components\TextInput::make('price')
+                                TextInput::make('price')
                                     ->label('Price')
                                     ->prefix('£')
                                     ->numeric()
                                     ->columnSpan(1),
 
-                                Forms\Components\TextInput::make('stock')
+                                TextInput::make('stock')
                                     ->label('Stock')
                                     ->numeric()
                                     ->default(0)
                                     ->columnSpan(1),
 
-                                Forms\Components\TextInput::make('max_qty')
+                                TextInput::make('max_qty')
                                     ->label('Max Qty')
                                     ->numeric()
                                     ->default(0)
                                     ->columnSpan(1),
 
-                                Forms\Components\Select::make('status')
+                                Select::make('status')
                                     ->label('Status')
                                     ->options(['draft'=>'Draft','published'=>'Published'])
                                     ->default('draft')
@@ -304,7 +313,7 @@ class ProductsRelationManager extends RelationManager
 
                         $this->dispatch('refresh');
                     }),
-                Actions\Action::make('remove_from_service')
+                Action::make('remove_from_service')
                     ->label('Remove')
                     ->icon('heroicon-m-trash')
                     ->color('danger')

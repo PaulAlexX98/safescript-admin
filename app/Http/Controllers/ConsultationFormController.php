@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use Log;
 use Illuminate\Http\Request;
 use App\Models\ClinicForm;
 use App\Models\ConsultationFormResponse;
@@ -33,7 +34,7 @@ class ConsultationFormController extends Controller
         $userId       = auth()->id();
 
         // Ensure the consultation session exists before using it
-        $session = \App\Models\ConsultationSession::query()->findOrFail($sessionId);
+        $session = ConsultationSession::query()->findOrFail($sessionId);
 
         // Derive non-null identifiers for DB scope
         $derivedFormType = $form->form_type;
@@ -193,7 +194,7 @@ class ConsultationFormController extends Controller
             'treatment_slug'          => $treatmentSlugForForm,
         ];
 
-        /** @var \App\Models\ConsultationFormResponse|null $existing */
+        /** @var ConsultationFormResponse|null $existing */
         $existing = ConsultationFormResponse::query()->where($scope)->first();
 
         // Preserve completion timestamp unless transitioning to complete
@@ -259,14 +260,14 @@ class ConsultationFormController extends Controller
         $formType = null;
         $nameHint = null;
 
-        if ($form instanceof \App\Models\ConsultationFormResponse) {
+        if ($form instanceof ConsultationFormResponse) {
             $formType = $form->form_type ?? null;
             if ($form->clinic_form_id) {
-                $cf = \App\Models\ClinicForm::find($form->clinic_form_id);
+                $cf = ClinicForm::find($form->clinic_form_id);
                 $nameHint = $cf?->name;
                 $formType = $formType ?: $cf?->form_type;
             }
-        } elseif ($form instanceof \App\Models\ClinicForm) {
+        } elseif ($form instanceof ClinicForm) {
             $formType = $form->form_type ?? null;
             $nameHint = $form->name ?? null;
         }
@@ -292,7 +293,7 @@ class ConsultationFormController extends Controller
             'advice', 'pharmacist_advice', 'pharmacist-advice'     => 'pharmacist-advice',
             'pharmacist_declaration', 'declaration'                => 'pharmacist-declaration',
             'risk', 'risk_assessment', 'risk-assessment'           => 'risk-assessment',
-            default                                                => \Illuminate\Support\Str::slug($t ?: 'form', '-'),
+            default                                                => Str::slug($t ?: 'form', '-'),
         };
     }
 
@@ -316,26 +317,26 @@ class ConsultationFormController extends Controller
      */
     public function view(Request $request, ConsultationSession $session, ConsultationFormResponse $form)
     {
-        \Log::info('forms.view enter', [
+        Log::info('forms.view enter', [
             'session_param_type' => is_object($session) ? get_class($session) : gettype($session),
-            'session_id'         => $session instanceof \App\Models\ConsultationSession ? $session->id : $session,
+            'session_id'         => $session instanceof ConsultationSession ? $session->id : $session,
             'form_param_type'    => is_object($form) ? get_class($form) : gettype($form),
-            'form_id'            => $form instanceof \App\Models\ConsultationFormResponse ? $form->id : null,
-            'form_session_id'    => $form instanceof \App\Models\ConsultationFormResponse ? $form->consultation_session_id : null,
+            'form_id'            => $form instanceof ConsultationFormResponse ? $form->id : null,
+            'form_session_id'    => $form instanceof ConsultationFormResponse ? $form->consultation_session_id : null,
             'inline'             => $request->boolean('inline'),
             'has_inline'         => $request->has('inline'),
         ]);
         if ((int) $form->consultation_session_id !== (int) $session->id) {
             abort(404);
         }
-        \Log::info('forms.view guard passed', [
+        Log::info('forms.view guard passed', [
             'session_id' => $session->id,
             'form_id'    => $form->id,
         ]);
 
         // Inline modal content (treat presence of the param as true to be safe)
         if ($request->has('inline')) {
-$cf      = \App\Models\ClinicForm::find($form->clinic_form_id);
+$cf      = ClinicForm::find($form->clinic_form_id);
 $title   = ($cf?->name ?: 'Form') . ' – View';
 $version = $form->form_version ? ('v' . (int) $form->form_version) : '—';
 $updated = optional($form->updated_at)->format('d-m-Y H:i');
@@ -386,7 +387,7 @@ $style = <<<HTML
 </style>
 HTML;
 
-$html = new \Illuminate\Support\HtmlString(<<<HTML
+$html = new HtmlString(<<<HTML
     {$style}
     <div style="background:#0b0b0b;overflow:hidden;border-radius:8px;min-width:560px">
       <div class="p-4 text-gray-100">
@@ -416,7 +417,7 @@ HTML);
         }
 
         // If not explicitly inline, still render the same read-only HTML directly
-$cf      = \App\Models\ClinicForm::find($form->clinic_form_id);
+$cf      = ClinicForm::find($form->clinic_form_id);
 $title   = ($cf?->name ?: 'Form') . ' – View';
 $version = $form->form_version ? ('v' . (int) $form->form_version) : '—';
 $updated = optional($form->updated_at)->format('d-m-Y H:i');
@@ -467,7 +468,7 @@ $style = <<<HTML
 </style>
 HTML;
 
-$html = new \Illuminate\Support\HtmlString(<<<HTML
+$html = new HtmlString(<<<HTML
     {$style}
     <div style="background:#0b0b0b;overflow:hidden;border-radius:8px;min-width:560px">
       <div class="p-4 text-gray-100">
@@ -593,12 +594,12 @@ HTML);
         $routeParam = $request->route('form');
         $formId = null;
 
-        if ($form instanceof \App\Models\ConsultationFormResponse) {
+        if ($form instanceof ConsultationFormResponse) {
             $formId = $form->getKey();
-        } elseif ($routeParam instanceof \App\Models\ConsultationFormResponse) {
+        } elseif ($routeParam instanceof ConsultationFormResponse) {
             $formId = $routeParam->getKey();
-        } elseif ($routeParam instanceof \App\Models\ClinicForm) {
-            $formId = \App\Models\ConsultationFormResponse::where('consultation_session_id', $session->id)
+        } elseif ($routeParam instanceof ClinicForm) {
+            $formId = ConsultationFormResponse::where('consultation_session_id', $session->id)
                 ->where('clinic_form_id', $routeParam->getKey())
                 ->orderByDesc('id')
                 ->value('id');
@@ -607,7 +608,7 @@ HTML);
         }
 
         if (!$formId) {
-            $formId = \App\Models\ConsultationFormResponse::where('consultation_session_id', $session->id)
+            $formId = ConsultationFormResponse::where('consultation_session_id', $session->id)
                 ->orderByDesc('id')
                 ->value('id');
         }
@@ -628,7 +629,7 @@ HTML);
             abort(404);
         }
 
-        $rows = \App\Models\ConsultationFormResponse::query()
+        $rows = ConsultationFormResponse::query()
             ->where('consultation_session_id', $session->id)
             ->where('form_type', $form->form_type)
             ->orderByDesc('updated_at')

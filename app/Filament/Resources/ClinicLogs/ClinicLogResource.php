@@ -20,9 +20,9 @@ class ClinicLogResource extends Resource
 {
     protected static ?string $model = ClinicLog::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedClipboardDocumentList;
+    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedClipboardDocumentList;
     protected static ?string $recordTitleAttribute = 'id';
-    protected static \UnitEnum|string|null $navigationGroup = 'Logs';
+    protected static string | \UnitEnum | null $navigationGroup = 'Logs';
     protected static ?int $navigationSort = 11;
 
     public static function form(Schema $schema): Schema
