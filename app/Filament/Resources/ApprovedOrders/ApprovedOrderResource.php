@@ -25,6 +25,7 @@ use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
+use Filament\Notifications\Notification;
 use Filament\Tables;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
@@ -877,24 +878,54 @@ class ApprovedOrderResource extends Resource
                             ->color('success')
                             ->icon('heroicon-o-play')
                             ->action(function (ApprovedOrder $record) {
-                                // --- Preserve a snapshot of assessment answers BEFORE starting the consultation ---
-                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                $answers = data_get($meta, 'assessment.answers')
-                                    ?? data_get($meta, 'assessment_answers')
-                                    ?? data_get($meta, 'answers');
+                                try {
+                                    // --- Preserve a snapshot of assessment answers BEFORE starting the consultation ---
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                    $answers = data_get($meta, 'assessment.answers')
+                                        ?? data_get($meta, 'assessment_answers')
+                                        ?? data_get($meta, 'answers');
 
-                                // If we have answers, store a durable snapshot and optionally persist into an existing session
-                                if (!empty($answers) && (is_array($answers) || is_string($answers))) {
-                                    // Save a non-destructive snapshot copy on the order meta so later updates can't wipe it
-                                    data_set($meta, 'assessment_snapshot', is_string($answers) ? (json_decode($answers, true) ?: $answers) : $answers);
+                                    // If we have answers, store a durable snapshot and optionally persist into an existing session
+                                    if (!empty($answers) && (is_array($answers) || is_string($answers))) {
+                                        // Save a non-destructive snapshot copy on the order meta so later updates can't wipe it
+                                        data_set($meta, 'assessment_snapshot', is_string($answers) ? (json_decode($answers, true) ?: $answers) : $answers);
 
-                                    // If a session already exists on the order, upsert into consultation_form_responses for durability
-                                    $sid = (int) (data_get($meta, 'consultation_session_id') ?? 0);
-                                    if ($sid > 0) {
+                                        // If a session already exists on the order, upsert into consultation_form_responses for durability
+                                        $sid = (int) (data_get($meta, 'consultation_session_id') ?? 0);
+                                        if ($sid > 0) {
+                                            try {
+                                                $payload = is_string($answers) ? $answers : json_encode($answers);
+                                                DB::table('consultation_form_responses')->updateOrInsert(
+                                                    ['consultation_session_id' => $sid, 'form_type' => 'risk_assessment'],
+                                                    [
+                                                        'clinic_form_id' => null,
+                                                        'data'          => $payload,
+                                                        'is_complete'   => 1,
+                                                        'completed_at'  => now(),
+                                                        'updated_at'    => now(),
+                                                        'created_at'    => now(),
+                                                    ]
+                                                );
+                                            } catch (Throwable $e) {
+                                                Log::warning('Unable to persist assessment answers snapshot to consultation_form_responses: ' . $e->getMessage());
+                                            }
+                                        }
+
+                                        // Write back the meta with the snapshot preserved
+                                        $record->meta = $meta;
+                                        $record->save();
+                                    }
+
+                                    // --- Now start the consultation (this may create a new session) ---
+                                    /** @var ConsultationSession $session */
+                                    $session = app(StartConsultation::class)($record);
+
+                                    // If a new session was created AND we have answers, persist them into that session as well
+                                    if (isset($session) && isset($session->id) && !empty($answers)) {
                                         try {
                                             $payload = is_string($answers) ? $answers : json_encode($answers);
                                             DB::table('consultation_form_responses')->updateOrInsert(
-                                                ['consultation_session_id' => $sid, 'form_type' => 'risk_assessment'],
+                                                ['consultation_session_id' => (int) $session->id, 'form_type' => 'risk_assessment'],
                                                 [
                                                     'clinic_form_id' => null,
                                                     'data'          => $payload,
@@ -905,41 +936,21 @@ class ApprovedOrderResource extends Resource
                                                 ]
                                             );
                                         } catch (Throwable $e) {
-                                            Log::warning('Unable to persist assessment answers snapshot to consultation_form_responses: ' . $e->getMessage());
+                                            Log::warning('Unable to persist assessment answers to newly created session: ' . $e->getMessage());
                                         }
                                     }
 
-                                    // Write back the meta with the snapshot preserved
-                                    $record->meta = $meta;
-                                    $record->save();
+                                    // Prefer model accessor if StartConsultation saved session id to meta, else fall back to named route with $session->id
+                                    $url = $record->consultation_url ?: route('consultations.runner.risk_assessment', ['session' => $session->id]);
+                                    return redirect()->to($url);
+                                } catch (Throwable $e) {
+                                    Notification::make()
+                                        ->title('Unable to start consultation')
+                                        ->body($e->getMessage())
+                                        ->danger()
+                                        ->send();
+                                    return;
                                 }
-
-                                // --- Now start the consultation (this may create a new session) ---
-                                /** @var ConsultationSession $session */
-                                $session = app(StartConsultation::class)($record);
-
-                                // If a new session was created AND we have answers, persist them into that session as well
-                                if (isset($session) && isset($session->id) && !empty($answers)) {
-                                    try {
-                                        $payload = is_string($answers) ? $answers : json_encode($answers);
-                                        DB::table('consultation_form_responses')->updateOrInsert(
-                                            ['consultation_session_id' => (int) $session->id, 'form_type' => 'risk_assessment'],
-                                            [
-                                                'clinic_form_id' => null,
-                                                'data'          => $payload,
-                                                'is_complete'   => 1,
-                                                'completed_at'  => now(),
-                                                'updated_at'    => now(),
-                                                'created_at'    => now(),
-                                            ]
-                                        );
-                                    } catch (Throwable $e) {
-                                        Log::warning('Unable to persist assessment answers to newly created session: ' . $e->getMessage());
-                                    }
-                                }
-
-                                // Use the split-page route
-                                return redirect()->to("/admin/consultations/{$session->id}/pharmacist-advice");
                             }),
                         Action::make('addAdminNote')
                             ->label('Add Admin Note')
@@ -1029,7 +1040,18 @@ class ApprovedOrderResource extends Resource
     }
     public function startConsultationAction($record)
     {
-        $session = app(StartConsultation::class)($record);
-        return redirect()->to("/admin/consultations/{$session->id}/pharmacist-advice");
+        try {
+            /** @var ConsultationSession $session */
+            $session = app(StartConsultation::class)($record);
+            $url = $record->consultation_url ?: route('consultations.runner.risk_assessment', ['session' => $session->id]);
+            return redirect()->to($url);
+        } catch (Throwable $e) {
+            Notification::make()
+                ->title('Unable to start consultation')
+                ->body($e->getMessage())
+                ->danger()
+                ->send();
+            return;
+        }
     }
 }

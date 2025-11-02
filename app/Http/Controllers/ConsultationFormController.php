@@ -67,8 +67,8 @@ class ConsultationFormController extends Controller
         $formService       = Str::slug((string) ($form->service_slug ?? ''));
         $formTreatment     = Str::slug((string) ($form->treatment_slug ?? ''));
         
-        $serviceMismatch   = $sessionService   !== '' && $formService   !== $sessionService;
-        $treatmentMismatch = $sessionTreatment !== '' && $formTreatment !== $sessionTreatment;
+        $serviceMismatch   = $sessionService   !== '' && $formService   !== '' && $formService   !== $sessionService;
+        $treatmentMismatch = $sessionTreatment !== '' && $formTreatment !== '' && $formTreatment !== $sessionTreatment;
         
         if ($serviceMismatch || $treatmentMismatch) {
             abort(422, 'Form does not match the current consultation session.');
@@ -90,8 +90,12 @@ class ConsultationFormController extends Controller
             // from schema->name, from a slugged label, or fall back to field_{idx}.
             $labelRaw   = $cfg['label'] ?? ($fld['label'] ?? null);
             $slugLabel  = $labelRaw ? Str::slug($labelRaw, '_') : null;
+            // honour explicit keys from builder or importer
+            $schemaKey  = $cfg['key'] ?? ($fld['key'] ?? null);
+
             $candidates = array_values(array_filter([
                 $fld['name'] ?? null,
+                $schemaKey,
                 $slugLabel,
                 ($type === 'text_block' ? ('block_'.$idx) : ('field_'.$idx)),
             ]));
@@ -124,20 +128,29 @@ class ConsultationFormController extends Controller
                         $rules[$name] = 'required|date';
                         break;
                     case 'select':
-                        // If options exist, constrain to provided values using Rule::in (handles commas safely)
-                        $options = (array)($cfg['options'] ?? ($fld['options'] ?? []));
-                        $values = [];
-                        foreach ($options as $ov => $ol) {
-                            $values[] = is_array($ol) ? ($ol['value'] ?? $ov) : $ov;
-                        }
-                        // Treat common placeholder values as invalid for required selects
-                        $notAllowed = [];
-                        if (in_array('0', $values, true)) { $notAllowed[] = '0'; }
-                        if (in_array('',  $values, true)) { $notAllowed[] = ''; }
-                        $rules[$name] = empty($values)
-                            ? ['required']
-                            : array_filter(['required', Rule::in($values), $notAllowed ? Rule::notIn($notAllowed) : null]);
-                        break;
+                      // support single and multiple selections
+                      $options = (array)($cfg['options'] ?? ($fld['options'] ?? []));
+                      $values = [];
+                      foreach ($options as $ov => $ol) {
+                          $values[] = is_array($ol) ? ($ol['value'] ?? $ov) : $ov;
+                      }
+                      $isMultiple = (bool)($cfg['multiple'] ?? ($fld['multiple'] ?? false));
+
+                      $notAllowed = [];
+                      if (in_array('0', $values, true)) { $notAllowed[] = '0'; }
+                      if (in_array('',  $values, true)) { $notAllowed[] = ''; }
+
+                      if ($isMultiple) {
+                          $rules[$name] = ['required', 'array'];
+                          if (!empty($values)) {
+                              $rules[$name . '.*'] = array_filter([Rule::in($values), $notAllowed ? Rule::notIn($notAllowed) : null]);
+                          }
+                      } else {
+                          $rules[$name] = empty($values)
+                              ? ['required']
+                              : array_filter(['required', Rule::in($values), $notAllowed ? Rule::notIn($notAllowed) : null]);
+                      }
+                      break;
                     case 'signature':
                         $rules[$name] = 'required';
                         break;
@@ -161,30 +174,109 @@ class ConsultationFormController extends Controller
             }
         }
 
-        // 4) Build the payload (exclude internal meta fields)
-        $payload = $request->except(['_token', '_method', '__reason', '__mark_complete', '__step_slug']);
+        // 4) Build a schema-driven payload with stable keys and normalised types
+        //    This ensures fields are saved under explicit schema keys and that
+        //    unchecked checkboxes/toggles are persisted as 0, and multi-selects
+        //    round-trip as arrays.
+        $rawSchema = is_array($form->schema) ? $form->schema : (json_decode($form->schema ?? '[]', true) ?: []);
 
-        // Trim scalar strings to avoid whitespace-only values passing validation/UI
-        foreach ($payload as $k => $v) {
-            if (is_string($v)) {
-                $payload[$k] = trim($v);
+        // Build a field map of candidate post names -> single stable store key
+        $fields = [];
+        foreach ($rawSchema as $idx => $fld) {
+            $type = strtolower($fld['type'] ?? 'text_input');
+            $cfg  = (array)($fld['data'] ?? []);
+
+            // Skip non-input content blocks
+            if ($type === 'text_block') {
+                continue;
+            }
+
+            $labelRaw   = $cfg['label'] ?? ($fld['label'] ?? null);
+            $slugLabel  = $labelRaw ? Str::slug($labelRaw, '_') : null;
+            $schemaKey  = $cfg['key'] ?? ($fld['key'] ?? null);
+
+            // Posted name candidates as they may differ between renderers
+            $candidates = array_values(array_filter([
+                $fld['name'] ?? null,
+                $schemaKey,
+                $slugLabel,
+                ($type === 'text_block' ? ('block_'.$idx) : ('field_'.$idx)),
+            ]));
+
+            // Stable storage key prioritises explicit key, then name, then slug(label), then field_{n}
+            $storeKey = $schemaKey ?: ($fld['name'] ?? ($slugLabel ?: ('field_'.$idx)));
+
+            $fields[] = [
+                'type'       => $type,
+                'multiple'   => (bool)($cfg['multiple'] ?? ($fld['multiple'] ?? false)),
+                'candidates' => $candidates,
+                'store'      => $storeKey,
+            ];
+        }
+
+        // Pull values from the request using any candidate name and normalise types
+        $submitted = [];
+
+        foreach ($fields as $f) {
+            $nameFound = null;
+            foreach ($f['candidates'] as $cand) {
+                // has() won't catch empty strings for some inputs, include array_key_exists
+                if ($request->has($cand) || array_key_exists($cand, $request->all())) {
+                    $nameFound = $cand;
+                    break;
+                }
+            }
+
+            // Checkbox/toggle are omitted when unchecked: store 0 explicitly
+            if (in_array($f['type'], ['checkbox', 'toggle', 'switch'], true)) {
+                $submitted[$f['store']] = $nameFound ? (int) $request->boolean($nameFound) : 0;
+                continue;
+            }
+
+            // Multi-select should always be an array
+            if ($f['type'] === 'select' && $f['multiple']) {
+                $submitted[$f['store']] = $nameFound ? (array) $request->input($nameFound, []) : [];
+                continue;
+            }
+
+            // Regular inputs
+            if ($nameFound !== null) {
+                $val = $request->input($nameFound);
+                if (is_string($val)) {
+                    $val = trim($val);
+                    if ($val === '') {
+                        $val = null;
+                    }
+                }
+                $submitted[$f['store']] = $val;
             }
         }
 
-        // 4a) Normalize any uploaded files to stored paths and inject back into payload
-        // This keeps JSON casting happy and avoids storing UploadedFile instances.
+        // 4a) Normalise any uploaded files to stored public paths under the correct store key
         if ($request->allFiles()) {
             foreach ($request->allFiles() as $key => $file) {
+                // Persist files to the public disk so thumbnails can render
+                $stored = null;
                 if (is_array($file)) {
-                    // Support nested arrays of files (e.g., repeaters)
-                    $payload[$key] = array_map(function ($f) {
+                    $stored = array_values(array_filter(array_map(function ($f) {
                         return $f ? $f->store('consultations', ['disk' => 'public']) : null;
-                    }, $file);
+                    }, $file)));
                 } else {
-                    $payload[$key] = $file ? $file->store('consultations', ['disk' => 'public']) : null;
+                    $stored = $file ? $file->store('consultations', ['disk' => 'public']) : null;
+                }
+
+                // Map the posted upload field name to its schema "store" key
+                foreach ($fields as $f) {
+                    if (in_array($key, $f['candidates'], true)) {
+                        $submitted[$f['store']] = $stored;
+                        break;
+                    }
                 }
             }
         }
+
+        // 4b) Final payload for persistence
+        $payload = $submitted;
 
         // 5) Upsert by unique scope (with robust fallbacks)
         $scope = [
@@ -211,7 +303,58 @@ class ConsultationFormController extends Controller
             $formVersion = 1;
         }
 
-        // 6) Save (update or create)
+        // 6) Merge with existing data and save
+        $persistData = $existing
+            ? array_replace_recursive((array) $existing->data, $payload)
+            : $payload;
+
+        // 6a) Remove values for fields whose showIf conditions are not satisfied
+        $evalShowIf = function (array $cond, array $data): bool {
+            $field = (string)($cond['field'] ?? '');
+            if ($field === '') return true; // no field -> treat as visible
+            $val = $data[$field] ?? null;
+
+            if (array_key_exists('equals', $cond)) {
+                return (string)$val === (string)$cond['equals'];
+            }
+            if (!empty($cond['in']) && is_array($cond['in'])) {
+                return in_array((string)$val, array_map('strval', $cond['in']), true);
+            }
+            if (array_key_exists('notEquals', $cond)) {
+                return (string)$val !== (string)$cond['notEquals'];
+            }
+            if (!empty($cond['truthy'])) {
+                return !empty($val);
+            }
+            return true; // unknown condition -> keep
+        };
+
+        foreach ($rawSchema as $idx => $fld) {
+            $type = $fld['type'] ?? 'text_input';
+            $cfg  = (array)($fld['data'] ?? []);
+            $cond = (array)($cfg['showIf'] ?? []);
+            if (empty($cond)) continue;
+
+            $labelRaw  = $cfg['label'] ?? ($fld['label'] ?? null);
+            $slugLabel = $labelRaw ? Str::slug($labelRaw, '_') : null;
+            $schemaKey = $cfg['key'] ?? ($fld['key'] ?? null);
+            $name      = $fld['name'] ?? $schemaKey ?? $slugLabel ?? (($type === 'text_block') ? ('block_'.$idx) : ('field_'.$idx));
+
+            // If condition not met, drop the value so it doesn't display later
+            if ($name && array_key_exists($name, $persistData) && !$evalShowIf($cond, $persistData)) {
+                unset($persistData[$name]);
+            }
+        }
+
+        // Helpful debug for tracking saves
+        \Log::info('consultation.save.persist', [
+            'session_id' => $session->id,
+            'form_id'    => $form->id,
+            'step'       => $stepSlug,
+            'saved_keys' => array_keys($persistData),
+            'count'      => count($persistData),
+        ]);
+
         $values = [
             'clinic_form_id' => $form->id,
             'form_type'      => $derivedFormType,
@@ -219,7 +362,7 @@ class ConsultationFormController extends Controller
             'treatment_slug' => $treatmentSlugForForm,
             'step_slug'      => $stepSlug,
             'form_version'   => $formVersion,
-            'data'           => $payload,
+            'data'           => $persistData,
             'is_complete'    => $isComplete,
             'completed_at'   => $completedAt,
             'updated_by'     => $userId,

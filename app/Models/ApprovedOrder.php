@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Support\Arr;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Route;
 
 /**
  * App\Models\ApprovedOrder
@@ -346,7 +347,7 @@ class ApprovedOrder extends Model
     }
     /**
      * Direct URL to start or continue the consultation on the new split pages.
-     * Defaults to Pharmacist Advice as the first step.
+     * Defaults to Risk Assessment as the first step.
      */
     public function getConsultationUrlAttribute(): ?string
     {
@@ -361,6 +362,19 @@ class ApprovedOrder extends Model
             return null;
         }
 
-        return route('consultations.runner.pharmacist_advice', ['session' => $sessionId]);
+        $names = [
+            'consultations.risk_assessment',            // admin route (exists)
+            'consultations.runner.risk_assessment',     // public alias with underscore
+            'consultations.runner.risk-assessment',     // public alias with hyphen
+        ];
+
+        foreach ($names as $name) {
+            if (Route::has($name)) {
+                return route($name, ['session' => $sessionId]);
+            }
+        }
+
+        // Final fallback
+        return url("/admin/consultations/{$sessionId}/risk-assessment");
     }
 }

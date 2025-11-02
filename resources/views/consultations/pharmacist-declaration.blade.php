@@ -1,278 +1,390 @@
-@php
-    $form    = $form    ?? null;
-    $schema  = $schema  ?? [];
-    $oldData = $oldData ?? [];
-
-    $serviceFor = $serviceSlugForForm ?? ($session->service_slug ?? 'weight-management-service');
-    $treatFor   = $treatmentSlugForForm ?? ($session->treatment_slug ?? 'mounjaro');
-
-    // Resolve the form if not provided
-    if (!$form) {
-        $form = \App\Models\ClinicForm::query()
-            ->where('form_type','declaration')
-            ->where('service_slug', $serviceFor)
-            ->where('treatment_slug', $treatFor)
-            ->where('is_active', 1)
-            ->orderByDesc('version')
-            ->first();
-    }
-
-    // Decode schema if needed
-    if ((empty($schema) || !is_array($schema)) && $form) {
-        $schema = is_array($form->schema) ? $form->schema : (json_decode($form->schema ?? '[]', true) ?: []);
-    }
-
-    // Prefill data from previous response
-    if ((empty($oldData) || !is_array($oldData)) && $form) {
-        $resp = \App\Models\ConsultationFormResponse::query()->where([
-            'consultation_session_id' => $session->id,
-            'form_type'               => 'declaration',
-            'service_slug'            => $serviceFor,
-            'treatment_slug'          => $treatFor,
-        ])->first();
-        $oldData = $resp?->data ?? [];
-    }
-
-@endphp
+{{-- resources/views/consultations/pharmacist-declaration.blade.php --}}
+{{-- Service-first Pharmacist Declaration page matching the Risk Assessment and Pharmacist Advice layout --}}
 
 @php
-    // Prefill pharmacist details if fields exist and are empty
-    if (is_array($schema)) {
-        foreach ($schema as $i => $field) {
-            $type = $field['type'] ?? 'text_input';
-            $cfg  = (array)($field['data'] ?? []);
-            $name = $field['name'] ?? ($type === 'text_block' ? 'block_'.$i : 'field_'.$i);
-            $label = strtolower((string)($cfg['label'] ?? ($field['label'] ?? '')));
+    $sessionLike = $session ?? null;
 
-            if (!array_key_exists($name, $oldData) || $oldData[$name] === '' || $oldData[$name] === null) {
-                // Pharmacist Name
-                if (str_contains($label, 'pharmacist') && str_contains($label, 'name')) {
-                    $oldData[$name] = 'Wasim Malik';
-                }
-                // GPhC number
-                if (str_contains($label, 'gphc') || str_contains($label, 'gphc number') || str_contains($label, 'registration')) {
-                    $oldData[$name] = '2066988';
-                }
+    // Slug helpers
+    $slugify = function ($v) {
+        return $v ? \Illuminate\Support\Str::slug((string) $v) : null;
+    };
+
+    // Resolve service and treatment for matching
+    $serviceFor = $slugify($serviceSlugForForm ?? ($sessionLike->service_slug ?? ($sessionLike->service ?? null)));
+    $treatFor   = $slugify($treatmentSlugForForm ?? ($sessionLike->treatment_slug ?? ($sessionLike->treatment ?? null)));
+
+    // Prefer template that StartConsultation placed on the session (declaration / pharmacist_declaration)
+    $form = $form ?? null;
+    if (! $form && isset($sessionLike->templates)) {
+        $tpl = \Illuminate\Support\Arr::get($sessionLike->templates, 'declaration')
+            ?? \Illuminate\Support\Arr::get($sessionLike->templates, 'pharmacist_declaration');
+        if ($tpl) {
+            if (is_array($tpl)) {
+                $fid = $tpl['id'] ?? $tpl['form_id'] ?? null;
+                if ($fid) { $form = \App\Models\ClinicForm::find($fid); }
+            } elseif (is_object($tpl) && ($tpl instanceof \App\Models\ClinicForm)) {
+                $form = $tpl;
+            } elseif (is_numeric($tpl)) {
+                $form = \App\Models\ClinicForm::find((int) $tpl);
             }
         }
     }
+
+    // Fallbacks by service and treatment using form_type 'declaration'
+    if (! $form) {
+        $base = fn() => \App\Models\ClinicForm::query()
+            ->where('form_type', 'declaration')
+            ->where('is_active', 1)
+            ->orderByDesc('version')->orderByDesc('id');
+
+        if ($serviceFor && $treatFor) {
+            $form = $base()->where('service_slug', $serviceFor)
+                          ->where('treatment_slug', $treatFor)->first();
+        }
+        if (! $form && $serviceFor) {
+            $form = $base()->where('service_slug', $serviceFor)
+                           ->where(function ($q) { $q->whereNull('treatment_slug')->orWhere('treatment_slug', ''); })
+                           ->first();
+        }
+        if (! $form && $serviceFor) {
+            $svc = \App\Models\Service::query()->where('slug', $serviceFor)->first();
+            if ($svc && $svc->pharmacistDeclarationForm) $form = $svc->pharmacistDeclarationForm;
+        }
+        if (! $form) {
+            $form = $base()->where(function ($q) { $q->whereNull('service_slug')->orWhere('service_slug', ''); })
+                           ->where(function ($q) { $q->whereNull('treatment_slug')->orWhere('treatment_slug', ''); })
+                           ->first();
+        }
+    }
+
+    // Decode schema
+    $schema = [];
+    if ($form) {
+        $raw = $form->schema ?? [];
+        $schema = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
+    }
+
+    // Normalise schema to sections with fields (same as other pages)
+    $sections = [];
+    if (is_array($schema) && !empty($schema)) {
+        if (array_key_exists('fields', $schema[0] ?? [])) {
+            $sections = $schema;
+        } else {
+            $current = ['title' => null, 'summary' => null, 'fields' => []];
+            foreach ($schema as $blk) {
+                $type = $blk['type'] ?? null;
+                $data = (array) ($blk['data'] ?? []);
+                if ($type === 'section') {
+                    if (!empty($current['fields'])) $sections[] = $current;
+                    $current = [
+                        'title'   => $data['label'] ?? ($data['title'] ?? 'Section'),
+                        'summary' => $data['summary'] ?? ($data['description'] ?? null),
+                        'fields'  => [],
+                    ];
+                } else {
+                    $field = ['type' => $type];
+                    foreach (['label','key','placeholder','help','description','required','options','content','accept','multiple'] as $k) {
+                        if (array_key_exists($k, $data)) $field[$k] = $data[$k];
+                    }
+                    $current['fields'][] = $field;
+                }
+            }
+            if (!empty($current['fields'])) $sections[] = $current;
+        }
+    }
+
+    // Load last saved data for prefill
+    $oldData = [];
+    if ($form && isset($sessionLike->id)) {
+        $resp = \App\Models\ConsultationFormResponse::query()
+            ->where('consultation_session_id', $sessionLike->id)
+            ->where('clinic_form_id', $form->id)
+            ->latest('id')
+            ->first();
+        $oldData = $resp?->data ?? [];
+    }
+
+    // Helper to normalise options
+    $normaliseOptions = function ($raw) {
+        $out = [];
+        foreach ((array) $raw as $idx => $opt) {
+            if (is_array($opt)) {
+                $label = (string) ($opt['label'] ?? ($opt['value'] ?? $idx));
+                $value = (string) ($opt['value'] ?? \Illuminate\Support\Str::slug($label));
+            } else {
+                $label = is_string($opt) ? $opt : (string) $idx;
+                $value = is_string($opt) ? \Illuminate\Support\Str::slug($opt) : (string) $idx;
+            }
+            $out[] = ['label' => $label, 'value' => $value];
+        }
+        return $out;
+    };
 @endphp
 
 @once
-<style>
-  /* Card styling for Pharmacist Declaration */
-  .pd-card { border-radius: 12px; border: 1px solid rgba(255,255,255,.08); padding: 20px; }
-  .pd-card p { margin: .4rem 0 .9rem; line-height: 1.6; }
-  .pd-card h1, .pd-card h2, .pd-card h3 { margin: .8rem 0 .5rem; }
-  .pd-card label { display:block; margin: 18px 0 6px; font-weight: 600; color: #e5e7eb; }
-  .pd-card label + input,
-  .pd-card label + select,
-  .pd-card label + textarea { margin-top: 6px; }
-  .pd-card label:not(:first-of-type) { border-top: 1px solid rgba(255,255,255,.08); padding-top: 14px; }
-  .pd-card input[type="text"],
-  .pd-card input[type="number"],
-  .pd-card input[type="date"],
-  .pd-card select { width: 50%; min-width: 280px; max-width: 600px; padding: .65rem .8rem; border: 2px solid #6b7280; border-radius: 8px; color: #e5e7eb; outline: none; transition: border-color .2s ease, box-shadow .2s ease; }
-  .pd-card input[type="text"]:hover,
-  .pd-card input[type="number"]:hover,
-  .pd-card input[type="date"]:hover,
-  .pd-card select:hover { border-color: #f59e0b; }
-  .pd-card input[type="text"]:focus,
-  .pd-card input[type="number"]:focus,
-  .pd-card input[type="date"]:focus,
-  .pd-card select:focus { border-color: #fbbf24; box-shadow: 0 0 0 3px rgba(251,191,36,.25); }
-  .pd-card textarea { width: 100%; min-height: 120px; border: 1px solid #374151; border-radius: 10px; color: #e5e7eb; padding: 12px 14px; }
-  @media (max-width: 768px){ .pd-card input[type="text"], .pd-card input[type="number"], .pd-card input[type="date"], .pd-card select { width: 100%; } }
-</style>
+    <style>
+      .cf-section-card{border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:24px;margin-top:20px;box-shadow:0 1px 2px rgba(0,0,0,.45)}
+      .cf-grid{display:grid;grid-template-columns:1fr;gap:16px}
+      .cf-field-card{border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:18px}
+      .cf-title{font-weight:600;font-size:16px;margin:0 0 6px 0}
+      .cf-summary{font-size:13px;margin:0}
+      .cf-label{font-size:14px;display:block;margin-bottom:6px}
+      .cf-help{font-size:12px;margin-top:6px}
+      .cf-checkbox-row{display:flex;align-items:center;gap:10px}
+      .cf-ul{list-style:disc;padding-left:20px;margin:0}
+      .cf-ul li{margin:4px 0}
+      .cf-paras p{margin:8px 0;line-height:1.6}
+      @media(min-width:768px){.cf-section-card{padding:28px}.cf-grid{gap:20px}.cf-field-card{padding:20px}}
+      .cf-signature{display:block}
+      .cf-signature-canvas{width:100%;height:180px;border:1px dashed rgba(0,0,0,.25);border-radius:8px;background:transparent;touch-action:none}
+      .cf-signature-actions{margin-top:8px;display:flex;gap:8px}
+      .cf-btn{appearance:none;border:1px solid rgba(0,0,0,.25);background:transparent;border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer}
+      .cf-btn:hover{background:rgba(0,0,0,.04)}
+      .cf-input, .cf-select, .cf-file{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px}
+      .cf-textarea{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px;min-height:140px;resize:vertical}
+      .cf-input:focus, .cf-textarea:focus, .cf-select:focus{outline:none;border-color:rgba(255,255,255,.28);box-shadow:0 0 0 2px rgba(255,255,255,.12)}
+    </style>
 @endonce
 
-@if(!$form)
-    <div class="text-sm text-gray-400 p-4">
-        No active Pharmacist Declaration form found for this session.
+@if (! $form)
+    <div class="rounded-md border border-red-300 bg-red-50 text-red-800 p-4">
+        <div class="font-semibold">Pharmacist Declaration form not found</div>
+        <div class="mt-1 text-sm">
+            Please create an active Declaration ClinicForm for
+            <code>{{ $serviceFor ?? 'any service' }}</code>
+            {{ $treatFor ? 'and treatment ' . $treatFor : '' }}
+            or assign a Declaration form to this service.
+        </div>
     </div>
 @else
-<div class="rounded-xl border border-gray-700 bg-gray-900/50 p-8 space-y-6 pd-card">
-<form id="cf_pharmacist-declaration" method="POST"
-      action="{{ url('/admin/consultations/' . $session->id . '/forms/' . $form->id . '/save') }}?tab=pharmacist-declaration" class="space-y-6">
-    @csrf
-    <input type="hidden" name="__step_slug" value="pharmacist-declaration">
+    <form id="cf_pharmacist-declaration" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab=pharmacist-declaration">
+        @csrf
+        <input type="hidden" name="__step_slug" value="pharmacist-declaration">
+        <input type="hidden" id="__go_next" name="__go_next" value="0">
 
-    @foreach ($schema as $i => $field)
-        @php
-            $type = $field['type'] ?? 'text_input';
-            $cfg  = (array)($field['data'] ?? []);
-            $name = $field['name'] ?? ($type === 'text_block' ? 'block_'.$i : 'field_'.$i);
-            $label = $cfg['label'] ?? ($field['label'] ?? ucfirst(str_replace('_',' ',$name)));
-            $options = (array)($cfg['options'] ?? ($field['options'] ?? []));
-            $content = $cfg['content'] ?? '';
-            $val = old($name, $oldData[$name] ?? '');
-        @endphp
-
-        @if ($type === 'text_block')
-            <div class="rounded-md border border-gray-700/60 bg-gray-900/40 p-6 mb-8 prose prose-invert max-w-none leading-relaxed">
-                {!! $content !!}
-            </div>
-        @else
-            <div class="pharm-field py-6 space-y-4">
-                @php $isGphc = \Illuminate\Support\Str::contains($label, 'GPHC'); @endphp
-                @if ($isGphc || $type === 'signature')
-                    <div style="margin-top: 2rem; margin-bottom: 2rem; border-top: 1px solid rgba(255,255,255,0.1);"></div>
-                @endif
-                @if($label)
-                    <label for="{{ $name }}" class="block text-base font-medium text-gray-200 mb-2">{{ $label }}</label>
-                @endif
-
-                @if ($type === 'select')
-                    <select id="{{ $name }}" name="{{ $name }}" class="mt-1 block w-full rounded-md bg-gray-800 border border-gray-700 text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-600">
-                        @foreach ($options as $ov => $ol)
-                            @php
-                                $optLabel = is_array($ol) ? ($ol['label'] ?? $ov) : $ol;
-                                $optValue = is_array($ol) ? ($ol['value'] ?? $ov) : $ov;
-                            @endphp
-                            <option value="{{ $optValue }}" {{ (string)$val === (string)$optValue ? 'selected' : '' }}>
-                                {{ $optLabel }}
-                            </option>
-                        @endforeach
-                    </select>
-                @elseif ($type === 'textarea')
-                    <textarea id="{{ $name }}" name="{{ $name }}" rows="5" class="block w-full rounded-md bg-gray-900 border border-gray-600 hover:border-amber-500 text-gray-100 focus:outline-none focus:ring-2 focus:ring-amber-500 transition p-3">{{ $val }}</textarea>
-                @elseif ($type === 'checkbox')
-                    <label class="inline-flex items-center gap-2">
-                        <input type="checkbox" id="{{ $name }}" name="{{ $name }}" class="rounded bg-gray-800 border-gray-700" {{ (bool)$val ? 'checked' : '' }}>
-                        <span class="text-sm text-gray-200">{{ $label }}</span>
-                    </label>
-                @elseif ($type === 'signature')
-                    @php
-                        $canvasId = 'sig_'.$name;
-                        $hiddenId = 'sig_'.$name.'_input';
-                    @endphp
-                    <div class="space-y-3 mt-3">
-                        <div class="text-xs text-gray-400">Draw your signature below</div>
-                        <div class="rounded-md border border-gray-700 bg-gray-800/60 p-4">
-                            <canvas id="{{ $canvasId }}" width="560" height="160" class="w-full max-w-full rounded" style="background:#ffffff;"></canvas>
-                            <input type="hidden" id="{{ $hiddenId }}" name="{{ $name }}" value="{{ $val }}">
-                            <div class="mt-2">
-                                <x-filament::button type="button" size="xs" x-on:click="(function(){const c=document.getElementById('{{ $canvasId }}');const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);ctx.fillStyle='#ffffff';ctx.fillRect(0,0,c.width,c.height);document.getElementById('{{ $hiddenId }}').value='';})()">Clear</x-filament::button>
-                            </div>
+        <div class="space-y-10">
+            @foreach ($sections as $section)
+                @php
+                    $title = $section['title'] ?? null;
+                    $summary = $section['summary'] ?? null;
+                @endphp
+                <div class="cf-section-card">
+                    @if ($title)
+                        <div class="mb-4">
+                            <h3 class="cf-title">{{ $title }}</h3>
+                            @if ($summary)
+                                <p class="cf-summary">{!! nl2br(e($summary)) !!}</p>
+                            @endif
                         </div>
-                    </div>
-                    <script>
-                        (function(){
-                            const c = document.getElementById('{{ $canvasId }}');
-                            if (!c) return;
-                            const ctx = c.getContext('2d');
-                            let drawing = false, prev = null;
+                    @endif
 
-                            // Always work on an opaque white background (important for PDFs)
-                            function ensureWhiteBackground() {
-                                // Only paint if the canvas is empty (all transparent) or after clearing
-                                // We just paint white underneath
-                                ctx.save();
-                                ctx.globalCompositeOperation = 'destination-over';
-                                ctx.fillStyle = '#ffffff';
-                                ctx.fillRect(0, 0, c.width, c.height);
-                                ctx.restore();
-                            }
+                    <div class="cf-grid">
+                    @php $fieldCard = 'cf-field-card'; @endphp
+                    @foreach (($section['fields'] ?? []) as $i => $field)
+                        @php
+                            $type  = $field['type'] ?? 'text_input';
+                            $label = $field['label'] ?? null;
+                            $key   = $field['key'] ?? ($label ? \Illuminate\Support\Str::slug($label) : ('field_'.$loop->index));
+                            $name  = $key;
+                            $help  = $field['help'] ?? ($field['description'] ?? null);
+                            $req   = (bool) ($field['required'] ?? false);
+                            $ph    = $field['placeholder'] ?? null;
+                            $val   = old($name, $oldData[$name] ?? '');
+                        @endphp
 
-                            // Restore an existing signature (if any), then ensure white background behind it
-                            (function restore(){
-                                const existing = document.getElementById('{{ $hiddenId }}').value;
-                                if (existing) {
-                                    const img = new Image();
-                                    img.onload = () => {
-                                        ctx.drawImage(img, 0, 0);
-                                        ensureWhiteBackground();
-                                    };
-                                    img.src = existing;
-                                } else {
-                                    // No existing image: start with white background
-                                    ensureWhiteBackground();
-                                }
-                            })();
+                        {{-- Static rich text blocks --}}
+                        @if ($type === 'text_block')
+                            @php
+                                $html  = (string) ($field['content'] ?? '');
+                                $align = (string) ($field['align'] ?? 'left');
+                                $hasHtml = (bool) preg_match('/<\w+[^>]*>/', $html ?? '');
+                            @endphp
+                            @if (trim(strip_tags($html)) !== '')
+                                <div class="{{ $fieldCard }}" style="text-align: {{ $align }};">
+                                    @if ($hasHtml)
+                                        {!! $html !!}
+                                    @else
+                                        @php
+                                            $lines = preg_split("/\r\n|\r|\n/", $html);
+                                            $clean = array_values(array_filter(array_map('trim', $lines), fn ($l) => $l !== ''));
+                                            $bulletCount = 0;
+                                            foreach ($clean as $l) {
+                                                if (preg_match('/^(?:•|\d+\)|\d+\.|-)\s*/', $l)) $bulletCount++;
+                                            }
+                                            $asList = $bulletCount >= max(3, (int) floor(count($clean) * 0.6));
+                                        @endphp
 
-                            function pos(e){
-                                const r = c.getBoundingClientRect();
-                                const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
-                                const y = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
-                                return { x: x * (c.width / r.width), y: y * (c.height / r.height) };
-                            }
+                                        @if ($asList)
+                                            <ul class="cf-ul">
+                                                @foreach ($clean as $ln)
+                                                    @php $txt = preg_replace('/^(?:•|\d+\)|\d+\.|-)+\s*/', '', $ln); @endphp
+                                                    <li>{{ $txt }}</li>
+                                                @endforeach
+                                            </ul>
+                                        @else
+                                            <div class="cf-paras">
+                                                @foreach ($clean as $ln)
+                                                    <p>{{ $ln }}</p>
+                                                @endforeach
+                                            </div>
+                                        @endif
+                                    @endif
+                                </div>
+                            @endif
+                            @continue
+                        @endif
 
-                            function start(e){
-                                drawing = true; prev = pos(e);
-                                e.preventDefault();
-                            }
+                        @if ($type === 'radio')
+                            <div class="{{ $fieldCard }}">
+                                @if($label)
+                                    <label class="cf-label">{{ $label }}</label>
+                                @endif
+                                <div class="flex flex-wrap items-center -m-2">
+                                    @foreach($normaliseOptions($field['options'] ?? []) as $idx => $op)
+                                        @php $rid = $name.'_'.$idx; @endphp
+                                        <label for="{{ $rid }}" class="p-2 inline-flex items-center gap-2 text-sm">
+                                            <input type="radio" id="{{ $rid }}" name="{{ $name }}" value="{{ $op['value'] }}" class="rounded-full focus:ring-2" {{ (string)$val === (string)$op['value'] ? 'checked' : '' }}>
+                                            <span>{{ $op['label'] }}</span>
+                                        </label>
+                                    @endforeach
+                                </div>
+                                @if($help)
+                                    <p class="cf-help">{!! nl2br(e($help)) !!}</p>
+                                @endif
+                            </div>
+                        @elseif ($type === 'textarea')
+                            <div class="{{ $fieldCard }}">
+                                @if($label)
+                                    <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
+                                @endif
+                                <textarea id="{{ $name }}" name="{{ $name }}" rows="6" placeholder="{{ $ph }}" @if($req) required @endif class="cf-textarea">{{ $val }}</textarea>
+                                @if($help)
+                                    <p class="cf-help">{!! nl2br(e($help)) !!}</p>
+                                @endif
+                            </div>
+                        @elseif ($type === 'select')
+                            <div class="{{ $fieldCard }}">
+                                @if($label)
+                                    <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
+                                @endif
+                                <select id="{{ $name }}" name="{{ $name }}" @if($req) required @endif class="cf-input">
+                                    @foreach($normaliseOptions($field['options'] ?? []) as $op)
+                                        <option value="{{ $op['value'] }}" {{ (string)$val === (string)$op['value'] ? 'selected' : '' }}>{{ $op['label'] }}</option>
+                                    @endforeach
+                                </select>
+                                @if($help)
+                                    <p class="cf-help">{!! nl2br(e($help)) !!}</p>
+                                @endif
+                            </div>
+                        @elseif ($type === 'checkbox')
+                            <div class="{{ $fieldCard }}">
+                                <div class="cf-checkbox-row">
+                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" class="rounded-md focus:ring-2 mt-0.5" {{ $val ? 'checked' : '' }}>
+                                    <label for="{{ $name }}" class="text-sm cursor-pointer select-none leading-6">{{ $label }}</label>
+                                </div>
+                                @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
+                            </div>
+                        @elseif ($type === 'date')
+                            <div class="{{ $fieldCard }}">
+                                @if($label)
+                                    <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
+                                @endif
+                                <input type="date" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif class="cf-input" />
+                                @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
+                            </div>
+                        @elseif ($type === 'signature')
+                            <div class="{{ $fieldCard }}">
+                                @if($label)
+                                    <label class="cf-label">{{ $label }}</label>
+                                @endif
+                                <div class="cf-signature" data-name="{{ $name }}">
+                                    <canvas id="sig_{{ $name }}" class="cf-signature-canvas"></canvas>
+                                    <div class="cf-signature-actions">
+                                        <button type="button" class="cf-btn" data-clear="#sig_{{ $name }}">Clear</button>
+                                    </div>
+                                    <input type="hidden" name="{{ $name }}" id="input_{{ $name }}" value="{{ is_string($val) ? $val : '' }}">
+                                </div>
+                                @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
+                            </div>
+                        @elseif ($type === 'file')
+                            @php
+                                $accept   = $field['accept'] ?? null;
+                                $multiple = (bool) ($field['multiple'] ?? false);
+                            @endphp
+                            <div class="{{ $fieldCard }}">
+                                @if($label)
+                                    <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
+                                @endif
+                                <input type="file" id="{{ $name }}" name="{{ $name }}{{ $multiple ? '[]' : '' }}" @if($accept) accept="{{ $accept }}" @endif @if($multiple) multiple @endif class="cf-file" />
+                                @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
+                            </div>
+                        @else
+                            <div class="{{ $fieldCard }}">
+                                @if($label)
+                                    <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
+                                @endif
+                                <input type="text" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" placeholder="{{ $ph }}" @if($req) required @endif class="cf-input" />
+                                @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
+                            </div>
+                        @endif
+                    @endforeach
+                </div>
+                </div>
+            @endforeach
+        </div>
 
-                            function move(e){
-                                if (!drawing) return;
-                                const p = pos(e);
-                                ctx.strokeStyle = '#000000';   // BLACK pen for better print visibility
-                                ctx.lineWidth = 2.5;
-                                ctx.lineCap = 'round';
-                                ctx.beginPath();
-                                ctx.moveTo(prev.x, prev.y);
-                                ctx.lineTo(p.x, p.y);
-                                ctx.stroke();
-                                prev = p;
-                                // Update hidden field during drawing
-                                ensureWhiteBackground();
-                                document.getElementById('{{ $hiddenId }}').value = c.toDataURL('image/png');
-                                e.preventDefault();
-                            }
+        {{-- No bottom Select All control for this page unless requested --}}
 
-                            function end(){
-                                drawing = false; prev = null;
-                                ensureWhiteBackground();
-                                document.getElementById('{{ $hiddenId }}').value = c.toDataURL('image/png');
-                            }
-
-                            c.addEventListener('mousedown', start);
-                            c.addEventListener('mousemove', move);
-                            window.addEventListener('mouseup', end);
-
-                            c.addEventListener('touchstart', start, {passive:false});
-                            c.addEventListener('touchmove', move, {passive:false});
-                            window.addEventListener('touchend', end, {passive:false});
-                        })();
-                    </script>
-                @else
-                    <input type="{{ $type === 'text_input' ? 'text' : $type }}" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" class="block w-1/2 rounded-md border-2 border-gray-500 hover:border-amber-500 focus:border-amber-400 text-gray-100 bg-transparent focus:outline-none focus:ring-2 focus:ring-amber-500 transition p-3 mt-2 mb-4" />
-                @endif
-            </div>
-        @endif
-    @endforeach
-
-</form>
-</div>
+        <script>
+(function(){
+  function initSig(box){
+    var canvas = box.querySelector('canvas');
+    var input = box.querySelector('input[type="hidden"]');
+    if(!canvas||!input) return;
+    var ctx = canvas.getContext('2d');
+    var drawing = false; var last = null;
+    function dpr(){ return window.devicePixelRatio || 1; }
+    function size(){
+      var ratio = dpr();
+      var rectW = box.clientWidth || 600;
+      var rectH = 180;
+      canvas.width = Math.floor(rectW * ratio);
+      canvas.height = Math.floor(rectH * ratio);
+      canvas.style.width = rectW + 'px';
+      canvas.style.height = rectH + 'px';
+      ctx.scale(ratio, ratio);
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      // restore from existing value if present
+      if(input.value && /^data:image\//.test(input.value)){
+        var img = new Image();
+        img.onload = function(){ ctx.drawImage(img, 0, 0, rectW, rectH); };
+        img.src = input.value;
+      }
+    }
+    function pos(e){
+      var r = canvas.getBoundingClientRect();
+      var x,y; if(e.touches && e.touches[0]){ x=e.touches[0].clientX; y=e.touches[0].clientY; } else { x=e.clientX; y=e.clientY; }
+      return { x: x - r.left, y: y - r.top };
+    }
+    function start(e){ drawing = true; last = pos(e); e.preventDefault(); }
+    function move(e){ if(!drawing) return; var p = pos(e); ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; e.preventDefault(); }
+    function end(){ if(!drawing) return; drawing = false; try { input.value = canvas.toDataURL('image/png'); } catch(err) {} }
+    canvas.addEventListener('mousedown', start); canvas.addEventListener('mousemove', move); window.addEventListener('mouseup', end);
+    canvas.addEventListener('touchstart', start, {passive:false}); canvas.addEventListener('touchmove', move, {passive:false}); canvas.addEventListener('touchend', end);
+    window.addEventListener('resize', function(){ size(); });
+    size();
+    var clearBtn = box.querySelector('[data-clear]');
+    if(clearBtn){ clearBtn.addEventListener('click', function(){ ctx.clearRect(0,0,canvas.width,canvas.height); input.value=''; size(); }); }
+    // ensure capture on submit
+    var form = box.closest('form');
+    if(form){ form.addEventListener('submit', function(){ try { input.value = canvas.toDataURL('image/png'); } catch(err) {} }); }
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    document.querySelectorAll('.cf-signature').forEach(initSig);
+  });
+})();
+        </script>
+    </form>
 @endif
-
-<style>
-  /* extra spacing for inline checkbox rows within this form */
-  #cf_pharmacist-declaration label input[type="checkbox"] { margin-right: .5rem; }
-  #cf_pharmacist-declaration label { margin-bottom: .25rem; }
-
-  .pharm-field label{display:block !important;}
-  .pharm-field input[type="text"],
-  .pharm-field input[type="number"]{
-    display:block !important;
-    width:50% !important;
-    min-width:280px !important;
-    max-width:600px !important;
-    border:2px solid #6b7280 !important;
-    border-radius:0.5rem !important;
-    background-color:transparent !important;
-    padding:0.75rem !important;
-    transition:all 0.2s ease !important;
-  }
-  .pharm-field input[type="text"]:hover,
-  .pharm-field input[type="number"]:hover{
-    border-color:#f59e0b !important;
-  }
-  .pharm-field input[type="text"]:focus,
-  .pharm-field input[type="number"]:focus{
-    border-color:#fbbf24 !important;
-    outline:none !important;
-    box-shadow:0 0 0 3px rgba(251,191,36,0.3) !important;
-  }
-  .pharm-field textarea{display:block !important; width:100% !important;}
-  .pharm-field + .pharm-field{margin-top:0 !important;}
-</style>

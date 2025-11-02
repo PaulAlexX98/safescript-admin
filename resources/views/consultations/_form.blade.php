@@ -10,6 +10,13 @@
     if (is_string($schema)) {
         $decoded = json_decode($schema, true);
         $schema = is_array($decoded) ? $decoded : [];
+
+        // If controller didn't pass oldData, pull persisted answers from session meta so refresh repopulates fields
+        if ($form && $session && empty($oldData)) {
+            $meta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
+            $formKey = $form->form_type ?: (string) $form->id;
+            $oldData = (array) data_get($meta, "forms.{$formKey}.answers", []);
+        }
     }
 @endphp
 
@@ -41,7 +48,7 @@
         ];
     @endphp
 
-    <form id="cf_{{ $slug }}" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab={{ $slug }}" class="space-y-4">
+    <form id="cf_{{ $slug }}" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab={{ $slug }}" class="space-y-4" enctype="multipart/form-data">
         @csrf
         <input type="hidden" name="__step_slug" value="{{ $slug }}">
 
@@ -49,7 +56,10 @@
             @php
                 $type = $field['type'] ?? 'text_input';
                 $cfg  = (array)($field['data'] ?? []);
-                $name = $field['name'] ?? ($type === 'text_block' ? 'block_'.$i : 'field_'.$i);
+                $name = $cfg['key']
+                    ?? $field['key']
+                    ?? $field['name']
+                    ?? ($type === 'text_block' ? 'block_'.$i : 'field_'.$i);
                 $label= $cfg['label'] ?? ($field['label'] ?? ucfirst(str_replace('_',' ',$name)));
                 $req  = (bool)($cfg['required'] ?? false);
 
@@ -78,33 +88,82 @@
 
             @elseif($type === 'checkbox')
                 <label class="inline-flex items-center gap-2 text-sm text-gray-200">
-                    <input type="checkbox" name="{{ $name }}" class="rounded bg-gray-800 border-gray-600" @checked((bool)$val) @if($req) required @endif>
+                    <input type="hidden" name="{{ $name }}" value="0">
+                    <input type="checkbox" name="{{ $name }}" value="1" class="rounded bg-gray-800 border-gray-600" @checked((bool)$val) @if($req) required @endif>
                     <span>{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</span>
                 </label>
                 @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'date')
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
-                <input type="date" name="{{ $name }}" value="{{ \Illuminate\Support\Str::of((string)($val ?? ($cfg['date'] ?? '')))->limit(10,'') }}" @if($req) required @endif class="w-full rounded-md bg-gray-800 border border-gray-600 p-2 text-gray-100">
+                <input type="date" name="{{ $name }}" value="{{ \Illuminate\Support\Str::of((string)($val ?? ($cfg['date'] ?? '')))->limit(10,'') }}" @if($req) required @endif placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
                 @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'number')
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
                 @php $stepAttr = $cfg['step'] ?? ((str_contains($labelLower,'strength') || str_contains($labelLower,'dose')) ? '0.1' : 'any'); @endphp
-                <input type="number" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif step="{{ $stepAttr }}" inputmode="decimal" class="w-full rounded-md bg-gray-800 border border-gray-600 p-2 text-gray-100">
+                <input type="number" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif step="{{ $stepAttr }}" inputmode="decimal" placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
+                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+
+            @elseif($type === 'textarea')
+                <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
+                <textarea name="{{ $name }}" @if($req) required @endif rows="{{ (int) ($cfg['rows'] ?? 4) }}" placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">{{ is_string($val) ? $val : '' }}</textarea>
                 @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'select')
+                @php
+                    $isMultiple = (bool)($cfg['multiple'] ?? false);
+                    $valArr = $isMultiple ? (array)($val ?? []) : null;
+                @endphp
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
-                <select name="{{ $name }}" @if($req) required @endif class="w-full rounded-md bg-gray-800 border border-gray-600 p-2 text-gray-100">
+                <select name="{{ $name }}@if($isMultiple)[]@endif" @if($req) required @endif @if($isMultiple) multiple @endif class="w-full rounded-md bg-gray-800 border border-gray-600 p-2 text-gray-100">
                     @foreach((array)($cfg['options'] ?? []) as $ov => $ol)
                         @php
                             $optValue = is_array($ol) ? ($ol['value'] ?? $ov) : $ov;
                             $optLabel = is_array($ol) ? ($ol['label'] ?? ($ol['value'] ?? $ov)) : $ol;
+                            $selected = $isMultiple
+                                ? in_array((string)$optValue, array_map('strval', (array)($valArr ?? [])), true)
+                                : ((string)$val === (string)$optValue);
                         @endphp
-                        <option value="{{ $optValue }}" @selected((string)$val === (string)$optValue)>{{ $optLabel }}</option>
+                        <option value="{{ $optValue }}" @if($selected) selected @endif>{{ $optLabel }}</option>
                     @endforeach
                 </select>
+                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+
+            @elseif($type === 'radio')
+                <fieldset class="space-y-2">
+                    <legend class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</legend>
+                    @php $opts = (array)($cfg['options'] ?? []); @endphp
+                    @foreach($opts as $ov => $ol)
+                        @php
+                            $optValue = is_array($ol) ? ($ol['value'] ?? $ov) : $ov;
+                            $optLabel = is_array($ol) ? ($ol['label'] ?? ($ol['value'] ?? $ov)) : $ol;
+                        @endphp
+                        <label class="inline-flex items-center gap-2 text-sm text-gray-200 mr-4">
+                            <input type="radio" name="{{ $name }}" value="{{ $optValue }}" class="border-gray-600" @checked((string)$val === (string)$optValue) @if($req) required @endif>
+                            <span>{{ $optLabel }}</span>
+                        </label>
+                    @endforeach
+                </fieldset>
+                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+
+            @elseif(in_array($type, ['file','upload','file_upload','image']))
+                @php
+                    $multiple = (bool)($cfg['multiple'] ?? false);
+                    $accept   = (string)($cfg['accept'] ?? 'image/*,application/pdf');
+                @endphp
+                <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
+                <div x-data="{ files: [] }" class="w-full">
+                    <input type="file" name="{{ $name }}{{ $multiple ? '[]' : '' }}" x-ref="finput" class="sr-only" @change="files = Array.from($event.target.files)" {{ $multiple ? 'multiple' : '' }} accept="{{ $accept }}" @if($req) required @endif>
+                    <button type="button" class="inline-flex items-center rounded-md border border-gray-600 bg-white/5 px-3 py-2 text-sm text-gray-100 hover:bg-white/10" @click="$refs.finput.click()">Choose Files</button>
+                    <template x-if="files.length">
+                        <ul class="mt-2 text-xs text-gray-400 space-y-1">
+                            <template x-for="f in files" :key="f.name">
+                                <li x-text="f.name"></li>
+                            </template>
+                        </ul>
+                    </template>
+                </div>
                 @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'signature')
@@ -114,7 +173,7 @@
 
             @else
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
-                <input type="text" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif class="w-full rounded-md bg-gray-800 border border-gray-600 p-2 text-gray-100">
+                <input type="text" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
                 @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
             @endif
         @empty

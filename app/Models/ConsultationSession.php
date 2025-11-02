@@ -25,10 +25,10 @@ class ConsultationSession extends Model
     ];
     
     protected $casts = [
+        'meta' => 'array',
         'templates' => 'array',
         'steps'     => 'array',
         'answers'   => 'array',
         'current'   => 'integer'
-        
     ];
 }

@@ -176,7 +176,7 @@ class ClinicFormForm
                                         ->afterStateUpdated(function ($set, $state) {
                                             $set('key', Str::slug((string) $state));
                                         }),
-                                    DatePicker::make('date')->label('Select Date')->native(false)->displayFormat('d-m-Y'),
+                                    TextInput::make('placeholder')->label('Placeholder Text')->default('dd-mm-yyyy'),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     Toggle::make('required')->label('Required')->default(false),
                                     TextInput::make('key')
@@ -204,7 +204,7 @@ class ClinicFormForm
                                     Repeater::make('options')->label('Options')->schema([
                                         TextInput::make('value')->label('Value')->required(),
                                         TextInput::make('label')->label('Label'),
-                                    ])->addActionLabel('Add option')->reorderable()->minItems(1),
+                                    ])->addActionLabel('Add option')->reorderable()->minItems(1)->default([]),
                                     Toggle::make('multiple')->label('Allow multiple')->default(false),
                                     Toggle::make('required')->label('Required')->default(false),
                                     Textarea::make('help')->label('Help Text')->rows(2),
@@ -232,7 +232,7 @@ class ClinicFormForm
                                     Repeater::make('options')->label('Options')->schema([
                                         TextInput::make('value')->label('Value')->required(),
                                         TextInput::make('label')->label('Label')->required(),
-                                    ])->addActionLabel('Add option')->reorderable()->minItems(1),
+                                    ])->addActionLabel('Add option')->reorderable()->minItems(1)->default([]),
                                     Toggle::make('required')->label('Required')->default(false),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     TextInput::make('key')
@@ -424,6 +424,14 @@ class ClinicFormForm
                                     ->required()
                                     ->native(false)
                                     ->helperText('Choose what kind of clinic form this is.'),
+                                TextInput::make('service_slug')
+                                    ->label('Service slug')
+                                    ->placeholder('travel-clinic')
+                                    ->helperText('Optional. Leave blank to make this form global. Use lowercase hyphenated slug'),
+                                TextInput::make('treatment_slug')
+                                    ->label('Treatment slug')
+                                    ->placeholder('dengue-fever')
+                                    ->helperText('Optional. Leave blank to apply to any treatment in the service'),
                                 Textarea::make('description')->label('Description')->rows(3),
                             ]),
                         Section::make('Form Structure')
@@ -491,62 +499,38 @@ class ClinicFormForm
                                                     $help = $f['help'] ?? null;
 
                                                     switch ($type) {
-                                                        case 'multiselect':
+                                                        case 'select':
+                                                        case 'multiselect': {
                                                             $options = [];
                                                             foreach (($f['options'] ?? []) as $opt) {
                                                                 if (is_array($opt)) {
-                                                                    $val = $opt['value'] ?? ($opt['label'] ?? '');
-                                                                    $lab = $opt['label'] ?? $val;
+                                                                    $val = (string) ($opt['value'] ?? ($opt['label'] ?? ''));
+                                                                    $lab = (string) ($opt['label'] ?? $val);
                                                                 } else {
-                                                                    $val = $slug((string)$opt);
-                                                                    $lab = (string)$opt;
+                                                                    $lab = (string) $opt;
+                                                                    $val = (string) $slug($lab);
                                                                 }
                                                                 if ($val !== '') {
-                                                                    $options[] = ['value' => (string)$val, 'label' => (string)$lab];
+                                                                    $options[] = ['value' => $val, 'label' => $lab];
                                                                 }
                                                             }
                                                             $blocks[] = [
                                                                 'type' => 'select',
                                                                 'data' => [
-                                                                    'label' => $label,
-                                                                    'key' => $slug($label),
-                                                                    'section' => $sectionKey,
-                                                                    'options' => $options,
-                                                                    'multiple' => true,
+                                                                    'label'    => $label,
+                                                                    'key'      => $slug($f['key'] ?? $label),
+                                                                    'section'  => $sectionKey,
+                                                                    'options'  => $options,
+                                                                    'multiple' => (bool) ($f['multiple'] ?? ($type === 'multiselect')),
                                                                     'required' => $required,
-                                                                    'help' => $help,
+                                                                    'help'     => $help,
+                                                                    'showIf'   => $f['showIf'] ?? null,
                                                                 ],
                                                             ];
                                                             break;
+                                                        }
 
-                                                        case 'date':
-                                                            $blocks[] = [
-                                                                'type' => 'date',
-                                                                'data' => [
-                                                                    'label' => $label,
-                                                                    'key' => $slug($label),
-                                                                    'section' => $sectionKey,
-                                                                    'required' => $required,
-                                                                    'help' => $help,
-                                                                ],
-                                                            ];
-                                                            break;
-
-                                                        case 'textarea':
-                                                            $blocks[] = [
-                                                                'type' => 'textarea',
-                                                                'data' => [
-                                                                    'label' => $label,
-                                                                    'key' => $slug($label),
-                                                                    'section' => $sectionKey,
-                                                                    'placeholder' => $f['placeholder'] ?? null,
-                                                                    'required' => $required,
-                                                                    'help' => $help,
-                                                                ],
-                                                            ];
-                                                            break;
-
-                                                        case 'radio':
+                                                        case 'radio': {
                                                             $options = [];
                                                             foreach (($f['options'] ?? []) as $opt) {
                                                                 if (is_array($opt)) {
@@ -563,67 +547,173 @@ class ClinicFormForm
                                                             $blocks[] = [
                                                                 'type' => 'radio',
                                                                 'data' => [
-                                                                    'label' => $label,
-                                                                    'key' => $slug($label),
-                                                                    'section' => $sectionKey,
-                                                                    'options' => $options,
+                                                                    'label'    => $label,
+                                                                    'key'      => $slug($f['key'] ?? $label),
+                                                                    'section'  => $sectionKey,
+                                                                    'options'  => $options,
                                                                     'required' => $required,
-                                                                    'help' => $help,
+                                                                    'help'     => $help,
+                                                                    'showIf'   => $f['showIf'] ?? null,
                                                                 ],
                                                             ];
+                                                            // Optional "details" textarea tied to selected radio values
                                                             if (!empty($f['details']['label'] ?? null)) {
-                                                                $parentKey = $slug($label);
-                                                                $showIfIn = (array) ($f['details']['showIfIn'] ?? []);
-                                                                $showVals = [];
-                                                                foreach ($showIfIn as $sv) {
-                                                                    $showVals[] = is_string($sv) ? $slug($sv) : $slug((string) $sv);
-                                                                }
+                                                                $parentKey = $slug($f['key'] ?? $label);
+                                                                $showVals = array_map(
+                                                                    fn ($sv) => is_string($sv) ? $slug($sv) : $slug((string) $sv),
+                                                                    (array) ($f['details']['showIfIn'] ?? [])
+                                                                );
                                                                 $blocks[] = [
                                                                     'type' => 'textarea',
                                                                     'data' => [
-                                                                        'label' => (string) $f['details']['label'],
-                                                                        'key' => $slug((string) $f['details']['label']),
-                                                                        'section' => $sectionKey,
+                                                                        'label'       => (string) $f['details']['label'],
+                                                                        'key'         => $slug((string) ($f['details']['key'] ?? $f['details']['label'])),
+                                                                        'section'     => $sectionKey,
                                                                         'placeholder' => $f['details']['placeholder'] ?? null,
-                                                                        'required' => false,
-                                                                        'help' => $showVals ? ('Shown if selected: ' . implode(', ', $showVals)) : null,
-                                                                        'showIf' => [
-                                                                            'field' => $parentKey,
-                                                                            'in' => $showVals,
-                                                                        ],
+                                                                        'help'        => $showVals ? ('Shown if selected: ' . implode(', ', $showVals)) : null,
+                                                                        'showIf'      => ['field' => $parentKey, 'in' => $showVals],
                                                                     ],
                                                                 ];
                                                             }
                                                             break;
+                                                        }
+
+                                                        case 'checkbox': {
+                                                            $blocks[] = [
+                                                                'type' => 'checkbox',
+                                                                'data' => [
+                                                                    'label'    => $label,
+                                                                    'key'      => $slug($f['key'] ?? $label),
+                                                                    'section'  => $sectionKey,
+                                                                    'required' => $required,
+                                                                    'help'     => $help,
+                                                                    'showIf'   => $f['showIf'] ?? null,
+                                                                ],
+                                                            ];
+                                                            break;
+                                                        }
+
+                                                        case 'date': {
+                                                            $blocks[] = [
+                                                                'type' => 'date',
+                                                                'data' => [
+                                                                    'label'    => $label,
+                                                                    'key'      => $slug($f['key'] ?? $label),
+                                                                    'section'  => $sectionKey,
+                                                                    'required' => $required,
+                                                                    'help'     => $help,
+                                                                    'showIf'   => $f['showIf'] ?? null,
+                                                                ],
+                                                            ];
+                                                            break;
+                                                        }
 
                                                         case 'file':
+                                                        case 'file_upload': {
                                                             $blocks[] = [
                                                                 'type' => 'file_upload',
                                                                 'data' => [
-                                                                    'label' => $label,
-                                                                    'key' => $slug($label),
-                                                                    'section' => $sectionKey,
-                                                                    'multiple' => (bool)($f['multiple'] ?? false),
+                                                                    'label'    => $label,
+                                                                    'key'      => $slug($f['key'] ?? $label),
+                                                                    'section'  => $sectionKey,
+                                                                    'multiple' => (bool) ($f['multiple'] ?? false),
                                                                     'required' => $required,
-                                                                    'help' => $help,
-                                                                    'accept' => $f['accept'] ?? 'image/*,application/pdf',
+                                                                    'help'     => $help,
+                                                                    'accept'   => $f['accept'] ?? 'image/*,application/pdf',
+                                                                    'showIf'   => $f['showIf'] ?? null,
                                                                 ],
                                                             ];
                                                             break;
+                                                        }
 
-                                                        default:
+                                                        case 'signature': {
+                                                            $blocks[] = [
+                                                                'type' => 'signature',
+                                                                'data' => [
+                                                                    'label'    => $label,
+                                                                    'key'      => $slug($f['key'] ?? $label),
+                                                                    'section'  => $sectionKey,
+                                                                    'required' => $required,
+                                                                    'help'     => $help ?: 'Draw your signature above',
+                                                                    'showIf'   => $f['showIf'] ?? null,
+                                                                ],
+                                                            ];
+                                                            break;
+                                                        }
+
+                                                        case 'textarea': {
+                                                            $blocks[] = [
+                                                                'type' => 'textarea',
+                                                                'data' => [
+                                                                    'label'       => $label,
+                                                                    'key'         => $slug($f['key'] ?? $label),
+                                                                    'section'     => $sectionKey,
+                                                                    'placeholder' => $f['placeholder'] ?? null,
+                                                                    'required'    => $required,
+                                                                    'help'        => $help,
+                                                                    'showIf'      => $f['showIf'] ?? null,
+                                                                ],
+                                                            ];
+                                                            break;
+                                                        }
+
+                                                        case 'text_block':
+                                                        case 'html':
+                                                        case 'text': {
+                                                            $blocks[] = [
+                                                                'type' => 'text_block',
+                                                                'data' => [
+                                                                    'label'   => $label ?: 'Content',
+                                                                    'key'     => $slug($f['key'] ?? ($label ?: 'content')),
+                                                                    'section' => $sectionKey,
+                                                                    'content' => (string) ($f['content'] ?? ($f['html'] ?? ($f['text'] ?? ''))),
+                                                                    'align'   => $f['align'] ?? 'left',
+                                                                    'showIf'  => $f['showIf'] ?? null,
+                                                                ],
+                                                            ];
+                                                            break;
+                                                        }
+
+                                                        case 'divider': {
+                                                            $blocks[] = ['type' => 'divider', 'data' => ['section' => $sectionKey]];
+                                                            break;
+                                                        }
+
+                                                        case 'image': {
+                                                            $blocks[] = [
+                                                                'type' => 'image',
+                                                                'data' => [
+                                                                    'label'   => $label ?: 'Image',
+                                                                    'key'     => $slug($f['key'] ?? ($label ?: 'image')),
+                                                                    'section' => $sectionKey,
+                                                                    'image'   => $f['image'] ?? null,
+                                                                    'alt'     => $f['alt'] ?? null,
+                                                                    'showIf'  => $f['showIf'] ?? null,
+                                                                ],
+                                                            ];
+                                                            break;
+                                                        }
+
+                                                        case 'page_break': {
+                                                            $blocks[] = ['type' => 'page_break', 'data' => ['section' => $sectionKey]];
+                                                            break;
+                                                        }
+
+                                                        default: {
                                                             $blocks[] = [
                                                                 'type' => 'text_input',
                                                                 'data' => [
-                                                                    'label' => $label,
-                                                                    'key' => $slug($label),
-                                                                    'section' => $sectionKey,
+                                                                    'label'       => $label,
+                                                                    'key'         => $slug($f['key'] ?? $label),
+                                                                    'section'     => $sectionKey,
                                                                     'placeholder' => $f['placeholder'] ?? null,
-                                                                    'required' => $required,
-                                                                    'help' => $help,
+                                                                    'required'    => $required,
+                                                                    'help'        => $help,
+                                                                    'showIf'      => $f['showIf'] ?? null,
                                                                 ],
                                                             ];
                                                             break;
+                                                        }
                                                     }
                                                 }
 

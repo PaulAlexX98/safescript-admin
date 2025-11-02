@@ -123,34 +123,34 @@ class ServiceResource extends Resource
         return [
             Grid::make()->columns(2)->schema([
                 // RAF Form  -> 'raf'
-            Select::make('raf_form_id')
-                ->label('RAF Form')
-                ->options(fn () => self::clinicFormOptionsByType('raf'))
-                ->searchable()->preload()->native(false),
+                Select::make('raf_form_id')
+                    ->label('RAF Form')
+                    ->options(fn () => self::clinicFormOptionsByType('raf'))
+                    ->searchable()->preload()->native(false),
 
-            // Consultation Advice Form -> 'advice'
-            Select::make('advice_form_id')
-                ->label('Consultation Advice Form')
-                ->options(fn () => self::clinicFormOptionsByType('advice'))
-                ->searchable()->preload()->native(false),
+                // Consultation Advice Form -> 'advice'
+                Select::make('advice_form_id')
+                    ->label('Consultation Advice Form')
+                    ->options(fn () => self::clinicFormOptionsByType('advice'))
+                    ->searchable()->preload()->native(false),
 
-            // Pharmacist Declaration Form -> 'declaration'
-            Select::make('pharmacist_declaration_form_id')
-                ->label('Pharmacist Declaration Form')
-                ->options(fn () => self::clinicFormOptionsByType('pharmacist_declaration'))
-                ->searchable()->preload()->native(false),
+                // Pharmacist Declaration Form -> 'declaration'
+                Select::make('pharmacist_declaration_form_id')
+                    ->label('Pharmacist Declaration Form')
+                    ->options(fn () => self::clinicFormOptionsByType('pharmacist_declaration'))
+                    ->searchable()->preload()->native(false),
 
-            // Clinical Notes Form -> use 'clinical_notes'
-            Select::make('clinical_notes_form_id')
-                ->label('Clinical Notes Form')
-                ->options(fn () => self::clinicFormOptionsByType('clinical_notes'))
-                ->searchable()->preload()->native(false),
+                // Record of Supply Clinical Notes (clinical_notes or supply)
+                Select::make('clinical_notes_form_id')
+                    ->label('Record of Supply Clinical Notes')
+                    ->options(fn () => self::clinicFormOptionsByType(['clinical_notes', 'supply']))
+                    ->searchable()->preload()->native(false),
 
-            // Reorder Form -> keep 'reorder' (change only if you store a different type)
-            Select::make('reorder_form_id')
-                ->label('Reorder Form')
-                ->options(fn () => self::clinicFormOptionsByType('reorder'))
-                ->searchable()->preload()->native(false),
+                // Reorder Form -> keep 'reorder' (change only if you store a different type)
+                Select::make('reorder_form_id')
+                    ->label('Reorder Form')
+                    ->options(fn () => self::clinicFormOptionsByType('reorder'))
+                    ->searchable()->preload()->native(false),
             ]),
         ];
     }
@@ -189,7 +189,7 @@ class ServiceResource extends Resource
         ) ?: null;
     }
 
-    private static function clinicFormOptionsByType(string $type): array
+    private static function clinicFormOptionsByType(string|array $type): array
     {
         try {
             $all = ClinicForm::query()
@@ -197,8 +197,10 @@ class ServiceResource extends Resource
                 ->orderBy('name')
                 ->get();
 
-            $filtered = $all->filter(function ($f) use ($type) {
-                return self::extractFormType($f) === strtolower($type);
+            $types = is_array($type) ? array_map('strtolower', $type) : [strtolower($type)];
+
+            $filtered = $all->filter(function ($f) use ($types) {
+                return in_array(self::extractFormType($f), $types, true);
             });
 
             return $filtered->pluck('name', 'id')->all();

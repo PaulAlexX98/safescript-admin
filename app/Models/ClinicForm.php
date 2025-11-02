@@ -28,6 +28,8 @@ class ClinicForm extends Model
     /* ---------------------------
      | Scopes
      |----------------------------*/
+
+    
     public function scopeActive(Builder $q): Builder
     {
         return $q->where('is_active', true);

@@ -20,7 +20,15 @@ use App\Models\ClinicForm;
 use App\Models\ConsultationFormResponse;
 use App\Http\Controllers\Admin\ConsultationPdfController;
 use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
+use App\Services\Consultations\StartConsultation;
+use App\Filament\Pages\ConsultationRunner;
+use App\Models\ConsultationSession;
+use App\Http\Controllers\ConsultationFormController;
+use App\Http\Controllers\ConsultationRunnerController;
 
+Route::get('/consultations/{session}/risk-assessment', function (ConsultationSession $session) {
+    return redirect()->route('consultations.risk_assessment', ['session' => $session->id]);
+})->name('consultations.runner.risk_assessment');
 
 Route::middleware([
     'web',
@@ -53,15 +61,6 @@ Route::bind('form', function ($value) {
 });
 
 
-// Optionally, constrain numeric parameters early for clarity
-// Route::pattern('session', '[0-9]+');
-// Route::pattern('form', '[0-9]+');
-use App\Services\Consultations\StartConsultation;
-use App\Filament\Pages\ConsultationRunner;
-use App\Models\ConsultationSession;
-use App\Http\Controllers\ConsultationFormController;
-use App\Http\Controllers\ConsultationRunnerController;
-
 // Fallback for any middleware that uses route('login'):
 Route::get('/login', fn () => redirect('/admin/login'))->name('login');
 
@@ -88,7 +87,7 @@ Route::get('/admin/forms', function (Request $request) {
     $order = ApprovedOrder::findOrFail($orderId);
     $session = app(StartConsultation::class)($order);
 
-    return redirect()->route('consultations.pharmacist_advice', ['session' => $session->id]);
+    return redirect()->route('consultations.risk_assessment', ['session' => $session->id]);
 })->name('admin.forms.legacy')->middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admin']);
 
 
@@ -101,6 +100,28 @@ Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admi
         Route::post('{session}/start', function (\App\Models\ConsultationSession $session) {
             return redirect()->to("/admin/consultations/{$session->id}");
         })->name('consultations.start');
+
+        Route::post('{session}/start/save', function (Illuminate\Http\Request $request, \App\Models\ConsultationSession $session) {
+            // Persist Start Consultation state into the session meta
+            $payload = $request->except(['_token']);
+
+            $meta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
+            $meta['start'] = $payload;
+
+            $session->meta = $meta;
+            $session->save();
+
+            // If called via fetch expecting JSON, return JSON; otherwise go back
+            if ($request->wantsJson() || $request->header('Accept') === 'application/json') {
+                return response()->json([
+                    'ok' => true,
+                    'session_id' => $session->id,
+                    'saved' => $meta['start'] ?? [],
+                ]);
+            }
+
+            return back()->with('saved', true);
+        })->name('consultations.start.save');
 
         // Hard redirect any /{session}/form hits to the base session with a valid tab key
         Route::get('{session}/form', function (\App\Models\ConsultationSession $session, Request $request) {

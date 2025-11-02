@@ -6,7 +6,11 @@
       'pharmacist-declaration' => 'Pharmacist Declaration',
       'record-of-supply' => 'Record of Supply',
     ];
-    $currentTab = request()->segment(4) ?: request()->query('tab', 'pharmacist-advice');
+    $currentTab = request()->segment(4) ?: request()->query('tab', 'risk-assessment');
+    $currentTab = str_replace('_', '-', strtolower($currentTab));
+    if (! array_key_exists($currentTab, $tabs)) {
+        $currentTab = array_key_first($tabs); // fall back to first tab (risk-assessment)
+    }
   @endphp
   <style>
     /* Remove any white borders or rings from Filament sections on this page */
@@ -57,17 +61,19 @@
 
   {{-- Tabs --}}
   <div class="max-w-5xl mx-auto my-12 py-4">
-    <div class="flex flex-wrap justify-center gap-8">
+    <div class="flex flex-wrap justify-center -m-2 md:-m-3">
       @foreach ($tabs as $slug => $label)
         @php $active = $currentTab === $slug; @endphp
-        <x-filament::button
-          :tag="'a'"
-          href="{{ url('/admin/consultations/' . ($session->id ?? $session->getKey()) . '/' . $slug) }}"
-          :color="$active ? 'warning' : 'gray'"
-          size="md"
-          class="px-8 py-3 text-lg rounded-full">
-          {{ $label }}
-        </x-filament::button>
+        <div class="p-2 md:p-3">
+          <x-filament::button
+            :tag="'a'"
+            href="{{ url('/admin/consultations/' . ($session->id ?? $session->getKey()) . '/' . $slug) }}"
+            :color="$active ? 'warning' : 'gray'"
+            size="md"
+            class="px-8 py-3 text-lg rounded-full">
+            {{ $label }}
+          </x-filament::button>
+        </div>
       @endforeach
     </div>
   </div>
@@ -98,23 +104,29 @@
   </x-filament::section>
 
   <div class="max-w-5xl mx-auto mt-14 mb-10 w-full">
-    <div class="flex items-center justify-start gap-4">
-      <x-filament::button type="button"
-        x-on:click="submitCurrent(false)"
-        color="warning" size="md" class="px-8 py-3 text-lg">
-        Save
-      </x-filament::button>
-      <x-filament::button type="button"
-        x-on:click="submitCurrent(true)"
-        color="gray" size="md" class="px-8 py-3 text-lg">
-        Save and Next
-      </x-filament::button>
-      @if ($currentTab === 'record-of-supply')
+    <div class="flex flex-wrap items-center justify-start -m-2 md:-m-3">
+      <div class="p-2 md:p-3">
         <x-filament::button type="button"
-          x-on:click="openCompleteConfirm()"
-          color="success" size="md" class="px-8 py-3 text-lg">
-          Complete Consultation
+          x-on:click="submitCurrent(false)"
+          color="warning" size="md" class="px-8 py-3 text-lg">
+          Save
         </x-filament::button>
+      </div>
+      <div class="p-2 md:p-3">
+        <x-filament::button type="button"
+          x-on:click="submitCurrent(true)"
+          color="gray" size="md" class="px-8 py-3 text-lg">
+          Save and Next
+        </x-filament::button>
+      </div>
+      @if ($currentTab === 'record-of-supply')
+        <div class="p-2 md:p-3">
+          <x-filament::button type="button"
+            x-on:click="openCompleteConfirm()"
+            color="success" size="md" class="px-8 py-3 text-lg">
+            Complete Consultation
+          </x-filament::button>
+        </div>
       @endif
     </div>
   </div>
