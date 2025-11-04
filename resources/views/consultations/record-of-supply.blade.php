@@ -164,6 +164,7 @@
       .cf-section-card{border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:24px;margin-top:20px;box-shadow:0 1px 2px rgba(0,0,0,.45)}
       .cf-grid{display:grid;grid-template-columns:1fr;gap:16px}
       .cf-field-card{border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:18px}
+      .cf-field-flat{border:0;padding:0}
       .cf-title{font-weight:600;font-size:16px;margin:0 0 6px 0}
       .cf-summary{font-size:13px;margin:0}
       .cf-label{font-size:14px;display:block;margin-bottom:6px}
@@ -181,6 +182,8 @@
       .cf-input, .cf-select, .cf-file{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px}
       .cf-textarea{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px;min-height:140px;resize:vertical}
       .cf-input:focus, .cf-textarea:focus, .cf-select:focus{outline:none;border-color:rgba(255,255,255,.28);box-shadow:0 0 0 2px rgba(255,255,255,.12)}
+      .cf-section-card *, .cf-field-card *{box-sizing:border-box;max-width:100%}
+      @media(min-width:900px){.cf-grid{grid-template-columns:1fr 1fr}.cf-span-2{grid-column:1 / -1}}
     </style>
 @endonce
 
@@ -195,7 +198,7 @@
         </div>
     </div>
 @else
-    <form id="cf_record-of-supply" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab=record-of-supply">
+    <form id="cf_record-of-supply" data-cf-form="1" data-step="record-of-supply" method="POST" enctype="multipart/form-data" action="{{ route('consultations.forms.save', ['session' => $sessionLike->id ?? ($session->id ?? null), 'form' => $form->id]) }}?tab=record-of-supply">
         @csrf
         <input type="hidden" name="__step_slug" value="record-of-supply">
         <input type="hidden" id="__go_next" name="__go_next" value="0">
@@ -217,7 +220,10 @@
                     @endif
 
                     <div class="cf-grid">
-                    @php $fieldCard = 'cf-field-card'; @endphp
+                    @php
+                        $onlyOne = count($section['fields'] ?? []) === 1;
+                        $cardBase = $onlyOne ? 'cf-field-flat' : 'cf-field-card';
+                    @endphp
                     @foreach (($section['fields'] ?? []) as $i => $field)
                         @php
                             $type  = $field['type'] ?? 'text_input';
@@ -228,6 +234,7 @@
                             $req   = (bool) ($field['required'] ?? false);
                             $ph    = $field['placeholder'] ?? null;
                             $val   = old($name, $oldData[$name] ?? '');
+                            $spanClass = in_array($type, ['textarea','signature']) ? ' cf-span-2' : '';
                         @endphp
 
                         {{-- Static rich text blocks --}}
@@ -273,7 +280,7 @@
                         @endif
 
                         @if ($type === 'radio')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $cardBase }}{{ $spanClass }}">
                                 @if($label)
                                     <label class="cf-label">{{ $label }}</label>
                                 @endif
@@ -291,7 +298,7 @@
                                 @endif
                             </div>
                         @elseif ($type === 'textarea')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $cardBase }}{{ $spanClass }}">
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
@@ -301,7 +308,7 @@
                                 @endif
                             </div>
                         @elseif ($type === 'select')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $cardBase }}{{ $spanClass }}">
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
@@ -315,7 +322,7 @@
                                 @endif
                             </div>
                         @elseif ($type === 'checkbox')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $cardBase }}{{ $spanClass }}">
                                 <div class="cf-checkbox-row">
                                     <input type="checkbox" id="{{ $name }}" name="{{ $name }}" class="rounded-md focus:ring-2 mt-0.5" {{ $val ? 'checked' : '' }}>
                                     <label for="{{ $name }}" class="text-sm cursor-pointer select-none leading-6">{{ $label }}</label>
@@ -323,7 +330,7 @@
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @elseif ($type === 'date')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $cardBase }}{{ $spanClass }}">
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
@@ -331,7 +338,7 @@
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @elseif ($type === 'signature')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $cardBase }}{{ $spanClass }}">
                                 @if($label)
                                     <label class="cf-label">{{ $label }}</label>
                                 @endif
@@ -349,7 +356,7 @@
                                 $accept   = $field['accept'] ?? null;
                                 $multiple = (bool) ($field['multiple'] ?? false);
                             @endphp
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $cardBase }}{{ $spanClass }}">
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
@@ -357,7 +364,7 @@
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @else
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $cardBase }}{{ $spanClass }}">
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
@@ -376,7 +383,9 @@
                     <h3 class="cf-title">Admin notes</h3>
                 </div>
                 <div class="cf-grid">
-                    <textarea id="admin_notes" name="admin_notes" rows="6" placeholder="Admin notes from order" class="cf-textarea">{{ old('admin_notes', $adminNotes) }}</textarea>
+                    <div class="cf-field-flat cf-span-2">
+                        <textarea id="admin_notes" name="admin_notes" rows="6" placeholder="Admin notes from order" class="cf-textarea">{{ old('admin_notes', $adminNotes) }}</textarea>
+                    </div>
                 </div>
             </div>
         </div>

@@ -59,22 +59,9 @@ class ApprovedOrderResource extends Resource
         return $table
             ->defaultSort('created_at', 'desc')
             ->columns([
-                // Order date (from meta appointment_start_at if present, else created_at)
-                TextColumn::make('order_datetime')
-                    ->label('Order Date & Time')
-                    ->getStateUsing(function ($record) {
-                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                        $start = data_get($meta, 'appointment_start_at') ?: $record->created_at;
-                        $end   = data_get($meta, 'appointment_end_at');
-
-                        if (! $start) return null;
-
-                        $fmt = function ($dt, $format = 'd-m-Y H:i') {
-                            try { return Carbon::parse($dt)->format($format); } catch (Throwable) { return (string) $dt; }
-                        };
-
-                        return $end ? ($fmt($start) . ' — ' . $fmt($end)) : $fmt($start);
-                    })
+                TextColumn::make('created_at')
+                    ->label('Order Created')
+                    ->dateTime('d M Y, H:i')
                     ->sortable()
                     ->toggleable(),
 
@@ -283,30 +270,31 @@ class ApprovedOrderResource extends Resource
                     ->label('Type')
                     ->getStateUsing(function ($record) {
                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                        $type = data_get($meta, 'type');
+                        $norm = fn ($v) => strtolower(trim((string) $v));
 
-                        if (!is_string($type) || $type === '') {
-                            $svc = (string) (data_get($meta, 'service')
-                                ?? data_get($meta, 'serviceName')
-                                ?? data_get($meta, 'title')
-                                ?? '');
-                            $t = strtolower($svc);
-                            if ($t !== '') {
-                                if (str_contains($t, 'nhs') || str_contains($t, 'new')) $type = 'new';
-                                elseif (str_contains($t, 'reorder') || str_contains($t, 'repeat') || str_contains($t, 're-order')) $type = 'reorder';
-                                elseif (str_contains($t, 'transfer')) $type = 'transfer';
-                                elseif (str_contains($t, 'consult')) $type = 'consultation';
-                            }
-                        }
+                        $raw  = $norm(data_get($meta, 'type'));
+                        $mode = $norm(data_get($meta, 'mode') ?? data_get($meta, 'flow'));
+                        $path = $norm(data_get($meta, 'path') ?? data_get($meta, 'source_url') ?? data_get($meta, 'referer'));
+                        $svc  = $norm(data_get($meta, 'service') ?? data_get($meta, 'serviceName') ?? data_get($meta, 'title') ?? '');
+                        $ref  = strtoupper((string) ($record->reference ?? ''));
 
-                        if (!is_string($type) || $type === '') return null;
-                        return match (strtolower($type)) {
-                            'new', 'nhs' => 'New Patient',
-                            'transfer' => 'Transfer Patient',
-                            'consultation' => 'Consultation',
-                            'reorder', 'repeat', 're-order' => 'Reorder',
-                            default => ucfirst($type),
-                        };
+                        $isReorder = in_array($raw, ['reorder','repeat','re-order','repeat-order'], true)
+                            || in_array($mode, ['reorder','repeat'], true)
+                            || str_contains($path, '/reorder')
+                            || preg_match('/^PTC[A-Z]*R[0-9]{6}$/', $ref)
+                            || str_contains($svc, 'reorder') || str_contains($svc, 'repeat') || str_contains($svc, 're-order');
+
+                        $isNhs = ($raw === 'nhs')
+                            || preg_match('/^PTC[A-Z]*H[0-9]{6}$/', $ref)
+                            || str_contains($svc, 'nhs');
+
+                        $isNew = ($raw === 'new')
+                            || preg_match('/^PTC[A-Z]*N[0-9]{6}$/', $ref);
+
+                        if ($isReorder) return 'Reorder';
+                        if ($isNhs)     return 'NHS';
+                        if ($isNew)     return 'New';
+                        return null;
                     })
                     ->toggleable(),
 
@@ -337,50 +325,40 @@ class ApprovedOrderResource extends Resource
                 SelectFilter::make('type')
                     ->label('Type')
                     ->options([
-                        'new' => 'New Patient',
-                        'transfer' => 'Transfer Patient',
-                        'consultation' => 'Consultation',
+                        'new' => 'New',
+                        'nhs' => 'NHS',
                         'reorder' => 'Reorder',
                     ])
                     ->query(function (Builder $query, array $data): Builder {
                         $val = strtolower((string)($data['value'] ?? ''));
                         if ($val === '') return $query;
 
-                        $aliases = match ($val) {
-                            'reorder' => ['reorder', 'repeat', 're-order'],
-                            'new' => ['new', 'nhs'],
-                            default => [$val],
-                        };
+                        return $query->where(function (Builder $q) use ($val) {
+                            // meta.type exact
+                            $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.type'))) = ?", [$val])
+                              ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.\"type\"'))) = ?", [$val]);
 
-                        return $query->where(function (Builder $q) use ($aliases) {
-                            $placeholders = implode(',', array_fill(0, count($aliases), '?'));
-                            $q->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.type'))) IN ($placeholders)", $aliases)
-                              ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.\"type\"'))) IN ($placeholders)", $aliases);
+                            // reference patterns
+                            if ($val === 'reorder') {
+                                $q->orWhere('reference', 'REGEXP', '^PTC[A-Z]*R[0-9]{6}$');
+                            } elseif ($val === 'nhs') {
+                                $q->orWhere('reference', 'REGEXP', '^PTC[A-Z]*H[0-9]{6}$');
+                            } elseif ($val === 'new') {
+                                $q->orWhere('reference', 'REGEXP', '^PTC[A-Z]*N[0-9]{6}$');
+                            }
 
-                            foreach ($aliases as $a) {
-                                if (in_array($a, ['reorder','repeat','re-order'])) {
-                                    $needle = '%reorder%';
-                                    $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE ?", [$needle])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE ?", [$needle])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE ?", [$needle]);
-                                } elseif ($a === 'consultation') {
-                                    $needle = '%consult%';
-                                    $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE ?", [$needle])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE ?", [$needle])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE ?", [$needle]);
-                                } elseif ($a === 'new' || $a === 'nhs') {
-                                    $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE ?", ['%nhs%'])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE ?", ['%new%'])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE ?", ['%nhs%'])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE ?", ['%new%'])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE ?", ['%nhs%'])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE ?", ['%new%']);
-                                } else {
-                                    $needle = "%$a%";
-                                    $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE ?", [$needle])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE ?", [$needle])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE ?", [$needle]);
-                                }
+                            // service name hints
+                            if ($val === 'reorder') {
+                                $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE '%reorder%'")
+                                  ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE '%repeat%'")
+                                  ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE '%reorder%'")
+                                  ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE '%repeat%'")
+                                  ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE '%reorder%'")
+                                  ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE '%repeat%'");
+                            } elseif ($val === 'nhs') {
+                                $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE '%nhs%'")
+                                  ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE '%nhs%'")
+                                  ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE '%nhs%'");
                             }
                         });
                     }),
@@ -485,15 +463,11 @@ class ApprovedOrderResource extends Resource
                                                 ->hiddenLabel()
                                                 ->state(function ($record) {
                                                     $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                                    $type = strtolower((string) (data_get($meta, 'type', '')));
-                                                    if (! in_array($type, ['consultation', 'new', 'transfer'], true)) {
-                                                        return null;
-                                                    }
                                                     $start = data_get($meta, 'appointment_start_at');
                                                     $end   = data_get($meta, 'appointment_end_at');
                                                     if (! $start) return null;
                                                     $fmt = function ($dt) {
-                                                        try { return Carbon::parse($dt)->format('d-m-Y H:i'); } catch (Throwable) { return (string) $dt; }
+                                                        try { return \Carbon\Carbon::parse($dt)->format('d-m-Y H:i'); } catch (\Throwable) { return (string) $dt; }
                                                     };
                                                     return $end ? ($fmt($start) . ' — ' . $fmt($end)) : $fmt($start);
                                                 }),
@@ -851,6 +825,13 @@ class ApprovedOrderResource extends Resource
                                         // First try formsQA from the ApprovedOrder meta
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                         $forms = data_get($meta, 'formsQA', []);
+                                        // tolerate stringified JSON
+                                        if (is_string($forms)) {
+                                            $decoded = json_decode($forms, true);
+                                            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                                                $forms = $decoded;
+                                            }
+                                        }
 
                                         // If empty, fall back to the real Order row by reference
                                         if (empty($forms)) {
@@ -859,6 +840,13 @@ class ApprovedOrderResource extends Resource
                                                 if ($order) {
                                                     $ometa = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
                                                     $forms = data_get($ometa, 'formsQA', []);
+                                                    // tolerate stringified JSON
+                                                    if (is_string($forms)) {
+                                                        $decoded = json_decode($forms, true);
+                                                        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                                                            $forms = $decoded;
+                                                        }
+                                                    }
                                                 }
                                             } catch (Throwable $e) {
                                                 // ignore
@@ -874,84 +862,93 @@ class ApprovedOrderResource extends Resource
                     ->extraModalFooterActions([
                         // Start Consultation action (refactored)
                         Action::make('startConsultation')
-                            ->label('Start Consultation')
-                            ->color('success')
-                            ->icon('heroicon-o-play')
-                            ->action(function (ApprovedOrder $record) {
-                                try {
-                                    // --- Preserve a snapshot of assessment answers BEFORE starting the consultation ---
-                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                    $answers = data_get($meta, 'assessment.answers')
-                                        ?? data_get($meta, 'assessment_answers')
-                                        ?? data_get($meta, 'answers');
+                        ->label('Start Consultation')
+                        ->color('success')
+                        ->icon('heroicon-o-play')
+                        ->action(function (ApprovedOrder $record) {
+                            // Load meta as array
+                            $meta = is_array($record->meta)
+                                ? $record->meta
+                                : (json_decode($record->meta ?? '[]', true) ?: []);
 
-                                    // If we have answers, store a durable snapshot and optionally persist into an existing session
-                                    if (!empty($answers) && (is_array($answers) || is_string($answers))) {
-                                        // Save a non-destructive snapshot copy on the order meta so later updates can't wipe it
-                                        data_set($meta, 'assessment_snapshot', is_string($answers) ? (json_decode($answers, true) ?: $answers) : $answers);
+                            // Pull answers from common paths
+                            $answers = data_get($meta, 'assessment.answers')
+                                ?? data_get($meta, 'assessment_answers')
+                                ?? data_get($meta, 'answers')
+                                ?? null;
 
-                                        // If a session already exists on the order, upsert into consultation_form_responses for durability
-                                        $sid = (int) (data_get($meta, 'consultation_session_id') ?? 0);
-                                        if ($sid > 0) {
-                                            try {
-                                                $payload = is_string($answers) ? $answers : json_encode($answers);
-                                                DB::table('consultation_form_responses')->updateOrInsert(
-                                                    ['consultation_session_id' => $sid, 'form_type' => 'risk_assessment'],
-                                                    [
-                                                        'clinic_form_id' => null,
-                                                        'data'          => $payload,
-                                                        'is_complete'   => 1,
-                                                        'completed_at'  => now(),
-                                                        'updated_at'    => now(),
-                                                        'created_at'    => now(),
-                                                    ]
-                                                );
-                                            } catch (Throwable $e) {
-                                                Log::warning('Unable to persist assessment answers snapshot to consultation_form_responses: ' . $e->getMessage());
-                                            }
-                                        }
-
-                                        // Write back the meta with the snapshot preserved
-                                        $record->meta = $meta;
-                                        $record->save();
-                                    }
-
-                                    // --- Now start the consultation (this may create a new session) ---
-                                    /** @var ConsultationSession $session */
-                                    $session = app(StartConsultation::class)($record);
-
-                                    // If a new session was created AND we have answers, persist them into that session as well
-                                    if (isset($session) && isset($session->id) && !empty($answers)) {
-                                        try {
-                                            $payload = is_string($answers) ? $answers : json_encode($answers);
-                                            DB::table('consultation_form_responses')->updateOrInsert(
-                                                ['consultation_session_id' => (int) $session->id, 'form_type' => 'risk_assessment'],
-                                                [
-                                                    'clinic_form_id' => null,
-                                                    'data'          => $payload,
-                                                    'is_complete'   => 1,
-                                                    'completed_at'  => now(),
-                                                    'updated_at'    => now(),
-                                                    'created_at'    => now(),
-                                                ]
-                                            );
-                                        } catch (Throwable $e) {
-                                            Log::warning('Unable to persist assessment answers to newly created session: ' . $e->getMessage());
-                                        }
-                                    }
-
-                                    // Prefer model accessor if StartConsultation saved session id to meta, else fall back to named route with $session->id
-                                    $url = $record->consultation_url ?: route('consultations.runner.risk_assessment', ['session' => $session->id]);
-                                    return redirect()->to($url);
-                                } catch (Throwable $e) {
-                                    Notification::make()
-                                        ->title('Unable to start consultation')
-                                        ->body($e->getMessage())
-                                        ->danger()
-                                        ->send();
-                                    return;
+                            // Normalize answers to string JSON for any downstream json_decode
+                            $answersJson = null;
+                            if (is_string($answers)) {
+                                $answersJson = $answers;
+                                $decoded = json_decode($answersJson, true);
+                                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                                    // keep also an array copy in snapshot later
                                 }
-                            }),
+                            } elseif (is_array($answers)) {
+                                $answersJson = json_encode($answers, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                            }
+
+                            // Push normalized string back to meta so any service that calls json_decode works
+                            if ($answersJson !== null) {
+                                data_set($meta, 'assessment.answers', $answersJson);
+                                data_set($meta, 'assessment_answers', $answersJson);
+                                data_set($meta, 'answers', $answersJson);
+                            }
+
+                            // Save meta before starting consultation
+                            $record->meta = $meta;
+                            $record->save();
+
+                            // Store a durable snapshot on the order and in consultation_form_responses
+                            if ($answers !== null) {
+                                $answersArray = is_array($answers)
+                                    ? $answers
+                                    : (json_decode((string) $answers, true) ?: []);
+
+                                data_set($meta, 'assessment_snapshot', $answersArray);
+                                $record->meta = $meta;
+                                $record->save();
+
+                                $existingSid = (int) (data_get($meta, 'consultation_session_id') ?? 0);
+                                if ($existingSid > 0) {
+                                    \Illuminate\Support\Facades\DB::table('consultation_form_responses')->updateOrInsert(
+                                        ['consultation_session_id' => $existingSid, 'form_type' => 'risk_assessment'],
+                                        [
+                                            'clinic_form_id' => null,
+                                            'data'          => $answersJson ?? json_encode($answersArray, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                                            'is_complete'   => 1,
+                                            'completed_at'  => now(),
+                                            'updated_at'    => now(),
+                                            'created_at'    => now(),
+                                        ]
+                                    );
+                                }
+                            }
+
+                            // Start consultation
+                            /** @var \App\Models\ConsultationSession $session */
+                            $session = app(\App\Services\Consultations\StartConsultation::class)($record);
+
+                            // If a new session exists and we have answers push them into responses
+                            if (isset($session) && isset($session->id) && ($answersJson !== null)) {
+                                \Illuminate\Support\Facades\DB::table('consultation_form_responses')->updateOrInsert(
+                                    ['consultation_session_id' => (int) $session->id, 'form_type' => 'risk_assessment'],
+                                    [
+                                        'clinic_form_id' => null,
+                                        'data'          => $answersJson,
+                                        'is_complete'   => 1,
+                                        'completed_at'  => now(),
+                                        'updated_at'    => now(),
+                                        'created_at'    => now(),
+                                    ]
+                                );
+                            }
+
+                            // Go to runner
+                            $url = route('consultations.runner.start', ['session' => $session->id]);
+                            return redirect()->to($url);
+                        }),
                         Action::make('addAdminNote')
                             ->label('Add Admin Note')
                             ->color('primary')
@@ -1040,18 +1037,9 @@ class ApprovedOrderResource extends Resource
     }
     public function startConsultationAction($record)
     {
-        try {
-            /** @var ConsultationSession $session */
-            $session = app(StartConsultation::class)($record);
-            $url = $record->consultation_url ?: route('consultations.runner.risk_assessment', ['session' => $session->id]);
-            return redirect()->to($url);
-        } catch (Throwable $e) {
-            Notification::make()
-                ->title('Unable to start consultation')
-                ->body($e->getMessage())
-                ->danger()
-                ->send();
-            return;
-        }
+        /** @var ConsultationSession $session */
+        $session = app(StartConsultation::class)($record);
+        $url = route('consultations.runner.start', ['session' => $session->id]);
+        return redirect()->to($url);
     }
 }

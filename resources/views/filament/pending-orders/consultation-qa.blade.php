@@ -2,9 +2,19 @@
     use Illuminate\Support\Arr;
     use Illuminate\Support\Facades\Http;
 
+    // Helper normaliser: accept array or JSON string and always return array
+    $arr = function ($v) {
+        if (is_array($v)) return $v;
+        if (is_string($v) && $v !== '') {
+            $d = json_decode($v, true);
+            return (json_last_error() === JSON_ERROR_NONE && is_array($d)) ? $d : [];
+        }
+        return [];
+    };
+
     // 1) Load meta and answers from the order
     $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-    $formsQA = data_get($meta, 'formsQA') ?: data_get($meta, 'consultation.formsQA', []);
+    $formsQA = $arr(data_get($meta, 'formsQA') ?: data_get($meta, 'consultation.formsQA', []));
     $qaKeyUsed = null;
     if (!empty($tmp = data_get($formsQA, 'assessment.qa', []))) {
         $qa = array_values($tmp);
@@ -15,6 +25,25 @@
     } else {
         $qa = array_values(data_get($formsQA, 'raf.qa', []) ?: []);
         $qaKeyUsed = 'raf';
+    }
+
+    // Ensure assessmentAnswers exists and is an array for fallback rendering later
+    $assessmentAnswers = [];
+    try {
+        $aa = data_get($meta, 'assessment.answers')
+            ?? data_get($meta, 'assessment_answers')
+            ?? data_get($meta, 'answers');
+
+        if (is_string($aa)) {
+            $decodedAa = json_decode($aa, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decodedAa)) {
+                $assessmentAnswers = $decodedAa;
+            }
+        } elseif (is_array($aa)) {
+            $assessmentAnswers = $aa;
+        }
+    } catch (\Throwable $e) {
+        $assessmentAnswers = [];
     }
 
     // 2) Fetch the exact RAF schema from API using service slug
@@ -36,19 +65,15 @@
             if ($resp->ok()) {
                 $json = $resp->json();
 
-                $rafSchema = data_get($json, 'raf_form.schema') ?? data_get($json, 'raf.schema') ?? [];
-                if (is_string($rafSchema)) {
-                    $rafSchema = json_decode($rafSchema, true) ?: [];
-                }
+                $rafSchema = $arr(data_get($json, 'raf_form.schema') ?? data_get($json, 'raf.schema') ?? []);
 
-                $assessmentSchema = data_get($json, 'assessment_form.schema')
-                                  ?? data_get($json, 'assessment.schema')
-                                  ?? data_get($json, 'risk_assessment_form.schema')
-                                  ?? data_get($json, 'risk_assessment.schema')
-                                  ?? [];
-                if (is_string($assessmentSchema)) {
-                    $assessmentSchema = json_decode($assessmentSchema, true) ?: [];
-                }
+                $assessmentSchema = $arr(
+                    data_get($json, 'assessment_form.schema')
+                    ?? data_get($json, 'assessment.schema')
+                    ?? data_get($json, 'risk_assessment_form.schema')
+                    ?? data_get($json, 'risk_assessment.schema')
+                    ?? []
+                );
             }
         } catch (\Throwable $e) {
             $rafSchema = [];
@@ -58,23 +83,15 @@
 
     // Fallbacks from stored meta if API returned none
     if (empty($assessmentSchema)) {
-        $tmp = data_get($formsQA, 'assessment.schema')
-            ?? data_get($formsQA, 'risk_assessment.schema')
-            ?? null;
-        if (is_string($tmp)) {
-            $tmp = json_decode($tmp, true) ?: [];
-        }
-        if (is_array($tmp)) {
+        $tmp = $arr(data_get($formsQA, 'assessment.schema') ?? data_get($formsQA, 'risk_assessment.schema') ?? null);
+        if (!empty($tmp)) {
             $assessmentSchema = $tmp;
         }
     }
 
     if (empty($rafSchema)) {
-        $tmp = data_get($formsQA, 'raf.schema') ?? null;
-        if (is_string($tmp)) {
-            $tmp = json_decode($tmp, true) ?: [];
-        }
-        if (is_array($tmp)) {
+        $tmp = $arr(data_get($formsQA, 'raf.schema') ?? null);
+        if (!empty($tmp)) {
             $rafSchema = $tmp;
         }
     }

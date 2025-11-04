@@ -143,6 +143,21 @@
       .cf-input, .cf-select, .cf-file{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px}
       .cf-textarea{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px;min-height:140px;resize:vertical}
       .cf-input:focus, .cf-textarea:focus, .cf-select:focus{outline:none;border-color:rgba(255,255,255,.28);box-shadow:0 0 0 2px rgba(255,255,255,.12)}
+      /* Layout fixes and responsive grid for pharmacist declaration */
+      .cf-root .cf-section-card,
+      .cf-root .cf-field-card,
+      .cf-root .cf-input,
+      .cf-root .cf-textarea,
+      .cf-root .cf-select,
+      .cf-root .cf-file {
+        box-sizing: border-box;
+        width: 100%;
+      }
+      .cf-root .cf-grid { grid-template-columns: 1fr; }
+      @media (min-width: 900px) {
+        .cf-root .cf-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      .cf-root .cf-span-2 { grid-column: 1 / -1; }
     </style>
 @endonce
 
@@ -157,7 +172,7 @@
         </div>
     </div>
 @else
-    <form id="cf_pharmacist-declaration" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab=pharmacist-declaration">
+    <form id="cf_pharmacist-declaration" class="cf-root" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab=pharmacist-declaration">
         @csrf
         <input type="hidden" name="__step_slug" value="pharmacist-declaration">
         <input type="hidden" id="__go_next" name="__go_next" value="0">
@@ -293,7 +308,7 @@
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @elseif ($type === 'signature')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $fieldCard }} cf-span-2">
                                 @if($label)
                                     <label class="cf-label">{{ $label }}</label>
                                 @endif

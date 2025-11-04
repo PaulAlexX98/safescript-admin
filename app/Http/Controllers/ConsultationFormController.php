@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use App\Models\ClinicForm;
 use App\Models\ConsultationFormResponse;
 use Illuminate\Support\Str;
+use Illuminate\Support\Arr;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Filament\Notifications\Notification;
@@ -15,6 +16,77 @@ use App\Models\ConsultationSession;
 
 class ConsultationFormController extends Controller
 {
+    /**
+     * Backwards‑compatible POST endpoint that accepts a flat payload
+     * from blades using route('consultations.save').
+     * It resolves the session and the correct ClinicForm, then delegates to save().
+     */
+    public function saveByPost(Request $request)
+    {
+        // Validate essentials; detailed field validation will run in save()
+        $validated = $request->validate([
+            'session_id' => ['required', 'integer'],
+            'form_type'  => ['nullable', 'string'], // allow deriving from __step_slug
+            'service'    => ['nullable', 'string'],
+            'treatment'  => ['nullable', 'string'],
+        ]);
+
+        // Resolve session
+        $session = ConsultationSession::query()->findOrFail((int) $validated['session_id']);
+
+        // Normalise form_type to underscore for DB lookups; fall back to __step_slug
+        $ftRaw = (string) ($validated['form_type'] ?? $request->input('__step_slug', ''));
+        $ft = \Illuminate\Support\Str::of($ftRaw ?: 'raf')->replace('-', '_')->lower()->__toString();
+
+        // Determine service/treatment scope, preferring posted over session, supporting both slug and plain values
+        $service = \Illuminate\Support\Str::slug((string) ($validated['service']
+            ?? ($session->service_slug ?? $session->service ?? '')));
+        $treat   = \Illuminate\Support\Str::slug((string) ($validated['treatment']
+            ?? ($session->treatment_slug ?? $session->treatment ?? '')));
+
+        // Try to find the most specific matching ClinicForm, then gracefully fall back
+        $q = \App\Models\ClinicForm::query()->where('form_type', $ft);
+
+        if ($service !== '') {
+            $q->where(function ($qq) use ($service) {
+                $qq->whereNull('service_slug')->orWhere('service_slug', $service);
+            });
+        }
+        if ($treat !== '') {
+            $q->where(function ($qq) use ($treat) {
+                $qq->whereNull('treatment_slug')->orWhere('treatment_slug', $treat);
+            });
+        }
+
+        $form = $q->orderByRaw('CASE WHEN service_slug IS NULL THEN 1 ELSE 0 END')
+                  ->orderByRaw('CASE WHEN treatment_slug IS NULL THEN 1 ELSE 0 END')
+                  ->orderByDesc('id')
+                  ->first();
+
+        if (! $form) {
+            // Last‑chance fallback to any form with this type
+            $form = \App\Models\ClinicForm::query()
+                ->where('form_type', $ft)
+                ->orderByDesc('id')
+                ->firstOrFail();
+        }
+
+        // Ensure __step_slug exists for the main save() validator
+        if (! $request->has('__step_slug')) {
+            $step = match ($ft) {
+                'pharmacist_declaration' => 'pharmacist-declaration',
+                'pharmacist_advice'      => 'pharmacist-advice',
+                'record_of_supply'       => 'record-of-supply',
+                'risk_assessment'        => 'risk-assessment',
+                default                  => \Illuminate\Support\Str::slug($ft, '-'),
+            };
+            $request->merge(['__step_slug' => $step]);
+        }
+
+        // Delegate to the canonical saver
+        return $this->save($request, $session->id, $form);
+    }
+
     public function save(Request $request, $sessionId, ClinicForm $form)
     {
         // 1) Basic validation
@@ -31,7 +103,36 @@ class ConsultationFormController extends Controller
 
         $stepSlug     = $validated['__step_slug'];
         $markComplete = (bool)($validated['__mark_complete'] ?? false);
+        $goNext       = (bool) $request->boolean('__go_next');
         $userId       = auth()->id();
+
+        // Normalise nested payloads to flat keys so schema mapping sees everything
+        // Hoist answers[...] and data[...] into top-level keys only when a key does not already exist
+        try {
+            $all = $request->all();
+
+            if (isset($all['answers']) && is_array($all['answers'])) {
+                foreach ($all['answers'] as $k => $v) {
+                    if (!array_key_exists($k, $all)) {
+                        $request->merge([$k => $v]);
+                    }
+                }
+            }
+
+            // Refresh the snapshot after merging answers
+            $all = $request->all();
+
+            if (isset($all['data']) && is_array($all['data'])) {
+                foreach ($all['data'] as $k => $v) {
+                    if (!array_key_exists($k, $all)) {
+                        $request->merge([$k => $v]);
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // Do not block saving if normalisation fails
+            \Log::warning('consultation.save.normalise_failed', ['message' => $e->getMessage()]);
+        }
 
         // Ensure the consultation session exists before using it
         $session = ConsultationSession::query()->findOrFail($sessionId);
@@ -50,9 +151,13 @@ class ConsultationFormController extends Controller
             }
         }
 
-        // Prefer session slugs if available, else fallback to the clinic form slugs or slugified names
-        $serviceSlugForForm = (string) ($session->service_slug ?: $form->service_slug ?: '');
-        $treatmentSlugForForm = (string) ($session->treatment_slug ?: $form->treatment_slug ?: '');
+        // Prefer session values; support either *_slug or plain names on the session
+        $serviceSlugForForm = (string) (($session->service_slug ?? null)
+            ?: (isset($session->service) ? Str::slug((string) $session->service) : '')
+            ?: ($form->service_slug ?? ''));
+        $treatmentSlugForForm = (string) (($session->treatment_slug ?? null)
+            ?: (isset($session->treatment) ? Str::slug((string) $session->treatment) : '')
+            ?: ($form->treatment_slug ?? ''));
         if ($serviceSlugForForm === '' && ($form->service_name ?? null)) {
             $serviceSlugForForm = Str::slug((string) $form->service_name);
         }
@@ -62,8 +167,8 @@ class ConsultationFormController extends Controller
 
         // 3) Verify posted form matches the session's service/treatment to avoid cross‑posting
         // Normalize everything to slugs before comparing, and only enforce if the session has values
-        $sessionService    = Str::slug((string) ($session->service_slug ?? ''));
-        $sessionTreatment  = Str::slug((string) ($session->treatment_slug ?? ''));
+        $sessionService    = Str::slug((string) (($session->service_slug ?? null) ?: ($session->service ?? '')));
+        $sessionTreatment  = Str::slug((string) (($session->treatment_slug ?? null) ?: ($session->treatment ?? '')));
         $formService       = Str::slug((string) ($form->service_slug ?? ''));
         $formTreatment     = Str::slug((string) ($form->treatment_slug ?? ''));
         
@@ -256,34 +361,148 @@ class ConsultationFormController extends Controller
         if ($request->allFiles()) {
             foreach ($request->allFiles() as $key => $file) {
                 // Persist files to the public disk so thumbnails can render
-                $stored = null;
+                $objects = [];
+
                 if (is_array($file)) {
-                    $stored = array_values(array_filter(array_map(function ($f) {
-                        return $f ? $f->store('consultations', ['disk' => 'public']) : null;
-                    }, $file)));
+                    foreach ($file as $f) {
+                        if (!$f) continue;
+                        $p = $f->store('consultations', ['disk' => 'public']);
+                        $objects[] = [
+                            'name' => $f->getClientOriginalName(),
+                            'path' => '/storage/' . ltrim($p, '/'),
+                            'type' => $f->getMimeType(),
+                            'size' => $f->getSize(),
+                        ];
+                    }
                 } else {
-                    $stored = $file ? $file->store('consultations', ['disk' => 'public']) : null;
+                    if ($file) {
+                        $p = $file->store('consultations', ['disk' => 'public']);
+                        $objects[] = [
+                            'name' => $file->getClientOriginalName(),
+                            'path' => '/storage/' . ltrim($p, '/'),
+                            'type' => $file->getMimeType(),
+                            'size' => $file->getSize(),
+                        ];
+                    }
                 }
 
                 // Map the posted upload field name to its schema "store" key
                 foreach ($fields as $f) {
                     if (in_array($key, $f['candidates'], true)) {
-                        $submitted[$f['store']] = $stored;
+                        // Always store as a list of file objects to align with the viewer's pretty-printer
+                        $submitted[$f['store']] = $objects;
                         break;
                     }
                 }
             }
         }
+        // 4aa) Fallback merge for blades that post nested answers[...] keys
+        // Build a tolerant map of allowed storage keys so we can accept
+        // hyphen/underscore and other renderer variations without losing data.
+        $storeMap = [];
+        foreach ($fields as $f) {
+            $s = $f['store'] ?? null;
+            if (!$s) {
+                continue;
+            }
+            // Canonical
+            $storeMap[$s] = $s;
+            // Common variants
+            $storeMap[\Illuminate\Support\Str::slug($s, '_')] = $s; // foo-bar -> foo_bar
+            $storeMap[\Illuminate\Support\Str::slug($s, '-')] = $s; // foo_bar -> foo-bar
+            $storeMap[str_replace('-', '_', $s)] = $s;
+            $storeMap[str_replace('_', '-', $s)] = $s;
+        }
 
+        // Helper to normalise scalar values
+        $normaliseVal = function ($v) {
+            if (is_string($v)) {
+                $vv  = trim($v);
+                $low = strtolower($vv);
+                if (in_array($low, ['on','true','yes','1'], true))  return 1;
+                if (in_array($low, ['off','false','no','0'], true)) return 0;
+                return $vv === '' ? null : $vv;
+            }
+            return $v;
+        };
+
+        // Helper to place a value into the submitted payload only if not already present
+        $putValue = function (string $storeKey, $value) use (&$submitted, $normaliseVal) {
+            if (!array_key_exists($storeKey, $submitted)) {
+                $submitted[$storeKey] = $normaliseVal($value);
+            }
+        };
+
+        // Merge flat answers[...] if present
+        $answersArray = $request->input('answers', []);
+        if (is_array($answersArray)) {
+            foreach ($answersArray as $k => $v) {
+                $kStr   = is_string($k) ? $k : (string) $k;
+                $target = $storeMap[$kStr]
+                    ?? ($storeMap[\Illuminate\Support\Str::slug($kStr, '_')] ?? null)
+                    ?? ($storeMap[\Illuminate\Support\Str::slug($kStr, '-')] ?? null);
+
+                if ($target) {
+                    $putValue($target, $v);
+                } else {
+                    // Unknown key: keep it under a safe normalised name as a last-resort
+                    $putValue(\Illuminate\Support\Str::slug($kStr, '_'), $v);
+                }
+            }
+        }
+
+        // Merge any dot-style answers.foo inputs as well
+        $reserved = [
+            '_token','_method','__step_slug','__mark_complete','__go_next',
+            'session_id','service','treatment','form_type'
+        ];
+        $dot = \Illuminate\Support\Arr::dot($request->except($reserved));
+
+        foreach ($dot as $k => $v) {
+            if (!str_starts_with($k, 'answers.')) {
+                continue;
+            }
+            $raw    = substr($k, 8); // strip "answers."
+            $target = $storeMap[$raw]
+                ?? ($storeMap[\Illuminate\Support\Str::slug($raw, '_')] ?? null)
+                ?? ($storeMap[\Illuminate\Support\Str::slug($raw, '-')] ?? null);
+
+            if ($target) {
+                $putValue($target, $v);
+            } else {
+                $putValue(\Illuminate\Support\Str::slug($raw, '_'), $v);
+            }
+        }
+
+        // Last-resort catch-all so we never drop a user's submission silently
+        if (empty($submitted)) {
+            $fallback = $answersArray;
+            if (!is_array($fallback) || empty($fallback)) {
+                $fallback = $request->except($reserved);
+            }
+            if (is_array($fallback)) {
+                foreach ($fallback as $k => $v) {
+                    if (is_object($v)) {
+                        // ignore file objects here
+                        continue;
+                    }
+                    $kStr = is_string($k) ? $k : (string) $k;
+                    $target = $storeMap[$kStr]
+                        ?? ($storeMap[\Illuminate\Support\Str::slug($kStr, '_')] ?? null)
+                        ?? ($storeMap[\Illuminate\Support\Str::slug($kStr, '-')] ?? null)
+                        ?? \Illuminate\Support\Str::slug($kStr, '_');
+
+                    $putValue($target, $v);
+                }
+            }
+        }
         // 4b) Final payload for persistence
         $payload = $submitted;
 
         // 5) Upsert by unique scope (with robust fallbacks)
         $scope = [
-            'consultation_session_id' => $session->id,
-            'form_type'               => $derivedFormType,
-            'service_slug'            => $serviceSlugForForm,
-            'treatment_slug'          => $treatmentSlugForForm,
+            'consultation_session_id' => (int) $session->id,
+            'form_type'               => (string) $derivedFormType,
         ];
 
         /** @var ConsultationFormResponse|null $existing */
@@ -312,20 +531,47 @@ class ConsultationFormController extends Controller
         $evalShowIf = function (array $cond, array $data): bool {
             $field = (string)($cond['field'] ?? '');
             if ($field === '') return true; // no field -> treat as visible
-            $val = $data[$field] ?? null;
 
+            $raw = $data[$field] ?? null;
+            $rawVals = is_array($raw) ? array_map('strval', $raw) : [ (string) $raw ];
+            // Build slug-normalised versions to allow "Yes" vs "yes" vs "YES" etc.
+            $normVals = array_map(function ($v) {
+                return \Illuminate\Support\Str::slug($v ?? '');
+            }, $rawVals);
+
+            // equals
             if (array_key_exists('equals', $cond)) {
-                return (string)$val === (string)$cond['equals'];
+                $eq = (string) $cond['equals'];
+                $eqNorm = \Illuminate\Support\Str::slug($eq);
+                return in_array($eq, $rawVals, true) || in_array($eqNorm, $normVals, true);
             }
+
+            // in
             if (!empty($cond['in']) && is_array($cond['in'])) {
-                return in_array((string)$val, array_map('strval', $cond['in']), true);
+                $inRaw  = array_map('strval', $cond['in']);
+                $inNorm = array_map(fn ($v) => \Illuminate\Support\Str::slug($v), $inRaw);
+                $hitRaw  = count(array_intersect($rawVals, $inRaw)) > 0;
+                $hitNorm = count(array_intersect($normVals, $inNorm)) > 0;
+                return $hitRaw || $hitNorm;
             }
+
+            // notEquals
             if (array_key_exists('notEquals', $cond)) {
-                return (string)$val !== (string)$cond['notEquals'];
+                $neq = (string) $cond['notEquals'];
+                $neqNorm = \Illuminate\Support\Str::slug($neq);
+                $isEq = in_array($neq, $rawVals, true) || in_array($neqNorm, $normVals, true);
+                return !$isEq;
             }
+
+            // truthy
             if (!empty($cond['truthy'])) {
-                return !empty($val);
+                // Any non-empty raw value or any element in array counts as truthy
+                foreach ($rawVals as $v) {
+                    if (trim((string)$v) !== '') return true;
+                }
+                return false;
             }
+
             return true; // unknown condition -> keep
         };
 
@@ -355,38 +601,69 @@ class ConsultationFormController extends Controller
             'count'      => count($persistData),
         ]);
 
-        $values = [
-            'clinic_form_id' => $form->id,
-            'form_type'      => $derivedFormType,
-            'service_slug'   => $serviceSlugForForm,
-            'treatment_slug' => $treatmentSlugForForm,
-            'step_slug'      => $stepSlug,
-            'form_version'   => $formVersion,
-            'data'           => $persistData,
-            'is_complete'    => $isComplete,
-            'completed_at'   => $completedAt,
-            'updated_by'     => $userId,
-            'created_by'     => $existing?->created_by ?? $userId,
-        ];
+        $model = ConsultationFormResponse::firstOrNew($scope);
 
-        ConsultationFormResponse::query()->updateOrCreate($scope, $values);
+        // preserve created_by if row already exists
+        if (! $model->exists && isset($existing?->created_by)) {
+            $model->created_by = $existing->created_by;
+        } elseif (! $model->exists) {
+            $model->created_by = $userId;
+        }
+
+        $model->clinic_form_id = $form->id;
+        $model->form_type      = $derivedFormType;
+        $model->service_slug   = $serviceSlugForForm;
+        $model->treatment_slug = $treatmentSlugForForm;
+        $model->step_slug      = $stepSlug;
+        $model->form_version   = $formVersion;
+        $model->is_complete    = $isComplete;
+        $model->completed_at   = $completedAt;
+        $model->updated_by     = $userId;
+
+        // the important bit set data explicitly then save
+        $model->data = $persistData;
+        $model->save();
+
+        // Mirror into session meta so runner and viewers that read session->meta can see latest values
+        $sessionMeta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
+        $formKeyUnderscore = $derivedFormType;                 // e.g. risk_assessment
+        $formSlug          = $this->slugForForm($form);        // e.g. risk-assessment
+
+        data_set($sessionMeta, "forms.$formKeyUnderscore.answers", $persistData);
+        data_set($sessionMeta, "forms.$formKeyUnderscore.schema",  $rawSchema);
+        data_set($sessionMeta, "forms.$formKeyUnderscore.updated_at", now()->toIso8601String());
+
+        // Also store under the hyphenated slug for consumers that expect that shape
+        data_set($sessionMeta, "forms.$formSlug.answers", $persistData);
+        data_set($sessionMeta, "forms.$formSlug.schema",  $rawSchema);
+        data_set($sessionMeta, "forms.$formSlug.updated_at", now()->toIso8601String());
+
+        $session->meta = $sessionMeta;
+        $session->save();
 
         // 7) Smart redirect: keep user on the same tab
         $backUrl = url()->previous();
-        // append or replace the "tab" query with the current step slug
-        $target  = $backUrl ? preg_replace('/([?&])tab=[^&]*/', '$1tab='.$stepSlug, $backUrl) : null;
+        $tabKey  = $this->defaultTabKeyForSlug($stepSlug);
+
+        // append or replace the "tab" query with the current tabKey
+        $target  = $backUrl ? preg_replace('/([?&])tab=[^&]*/', '$1tab='.$tabKey, $backUrl) : null;
         if ($target && !str_contains($target, 'tab=')) {
-            $target .= (str_contains($target, '?') ? '&' : '?').'tab='.$stepSlug;
+            $target .= (str_contains($target, '?') ? '&' : '?').'tab='.$tabKey;
+        }
+        // optional hint for the UI if it cares about stepping
+        if ($target && $goNext) {
+            $target .= (str_contains($target, '?') ? '&' : '?') . 'next=1';
         }
 
-        // Support JSON consumers (e.g., Livewire/HTMX) gracefully
         if ($request->wantsJson()) {
             return response()->json([
                 'ok'            => true,
                 'message'       => 'Form saved successfully',
                 'step'          => $stepSlug,
+                'tab'           => $tabKey,
                 'is_complete'   => $isComplete,
                 'completed_at'  => optional($completedAt)->toISOString(),
+                'saved_keys'    => array_keys($persistData),
             ]);
         }
 
@@ -394,6 +671,46 @@ class ConsultationFormController extends Controller
             ? redirect()->to($target)->with('success', 'Form saved successfully!')
             : back()->with('success', 'Form saved successfully!');
     }
+    /**
+     * REORDER step viewer
+     * Opens the Reorder form for the given consultation session.
+     */
+    public function reorder(string|int $sessionId, \Illuminate\Http\Request $request)
+    {
+        $session = \App\Models\ConsultationSession::with('order')->findOrFail($sessionId);
+
+        // Choose the right ClinicForm from the session templates snapshot if available
+        $form = null;
+        $tpl  = data_get($session->templates, 'reorder');
+
+        if (is_array($tpl) && isset($tpl['id'])) {
+            $form = \App\Models\ClinicForm::find($tpl['id']);
+        } elseif (is_numeric($tpl)) {
+            $form = \App\Models\ClinicForm::find((int) $tpl);
+        }
+
+        // Fallback by form_type if no direct template pointer
+        if (! $form) {
+            $form = \App\Models\ClinicForm::query()
+                ->where('form_type', 'reorder')
+                ->when($session->service, function ($q) use ($session) {
+                    $q->where(function ($qq) use ($session) {
+                        $qq->whereNull('service_slug')
+                           ->orWhere('service_slug', \Illuminate\Support\Str::slug((string) $session->service));
+                    });
+                })
+                ->orderByDesc('version')
+                ->orderByDesc('id')
+                ->first();
+        }
+
+        return view('consultations.reorder', [
+            'session' => $session,
+            'form'    => $form,
+            'step'    => 'reorder',
+        ]);
+    }
+
     /**
      * Map a form (ClinicForm or ConsultationFormResponse) to the consultation page slug.
      */
@@ -436,6 +753,7 @@ class ConsultationFormController extends Controller
             'advice', 'pharmacist_advice', 'pharmacist-advice'     => 'pharmacist-advice',
             'pharmacist_declaration', 'declaration'                => 'pharmacist-declaration',
             'risk', 'risk_assessment', 'risk-assessment'           => 'risk-assessment',
+            'reorder', 're-order'                                  => 'reorder',
             default                                                => Str::slug($t ?: 'form', '-'),
         };
     }
@@ -449,6 +767,7 @@ class ConsultationFormController extends Controller
             'pharmacist-declaration' => 'pharmacist_declaration',
             'pharmacist-advice'      => 'pharmacist_advice',
             'record-of-supply'       => 'record_of_supply',
+            'reorder'                => 'reorder',
             default                  => Str::slug($slug, '_'),
         };
     }

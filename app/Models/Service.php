@@ -9,7 +9,7 @@ class Service extends Model
 {
     protected $fillable = [
         'name','slug','description','status','view_type','cta_text',
-        'image','custom_availability','booking_flow','forms_assignment',
+        'image','custom_availability','booking_flow','reorder_flow','forms_assignment',
         'reorder_settings','meta','active',
         'raf_form_id','advice_form_id','pharmacist_declaration_form_id','clinical_notes_form_id','reorder_form_id',
     ];
@@ -17,6 +17,7 @@ class Service extends Model
     protected $casts = [
         'custom_availability' => 'bool',
         'booking_flow' => 'array',
+        'reorder_flow' => 'array',
         'forms_assignment' => 'array',
         'reorder_settings' => 'array',
         'meta' => 'array',

@@ -60,7 +60,7 @@ class PageForm
                                     ->label('Visual editor (optional)')
                                     ->columnSpanFull()
                                     ->extraAlpineAttributes([
-                                        'x-init' => '(() => { const update = () => { const fs = document.fullscreenElement !== null; $el.style.maxHeight = fs ? "" : "520px"; $el.style.overflow = fs ? "" : "auto"; }; update(); document.addEventListener("fullscreenchange", update); })()'
+                                        'x-init' => '(() => { const root = $el; const setFS = on => { root.style.maxHeight = on ? "" : "520px"; root.style.overflow = on ? "" : "auto"; document.documentElement.classList.toggle("prevent-scroll", on); document.body.classList.toggle("prevent-scroll", on); }; const isFS = () => { if (document.fullscreenElement) return true; let el = root; while (el) { const cls = ((el.getAttribute("class")||"")+" "+(el.getAttribute("data-state")||"")); if (/fullscreen/i.test(cls) || el.hasAttribute("data-fullscreen")) return true; el = el.parentElement; } return false; }; const update = () => setFS(isFS()); update(); document.addEventListener("fullscreenchange", update); const mo = new MutationObserver(update); mo.observe(root, {attributes:true, attributeFilter:["class","data-fullscreen","style"]}); let anc = root.parentElement; let i=0; while (anc && anc !== document.body && i++ < 6) { mo.observe(anc, {attributes:true, attributeFilter:["class","data-fullscreen","style"]}); anc = anc.parentElement; } root.addEventListener("click", e => { const t = e.target && e.target.closest("[data-fullscreen-toggle],[aria-label=fullscreen],.ri-fullscreen-fill,.ri-fullscreen-exit-fill,.fi-icon-fullscreen"); if (t) setTimeout(update, 0); }); })()'
                                     ])
                                     ->extraAttributes(['style' => 'max-height: 520px; overflow: auto;'])
                                     ->dehydrated(false)
@@ -97,13 +97,13 @@ class PageForm
                                     ]);
                             }
 
-                            return RichEditor::make('content_rich_ui')
-                                ->label('Visual editor (optional)')
-                                ->columnSpanFull()
-                                ->extraAlpineAttributes([
-                                    'x-init' => '(() => { const update = () => { const fs = document.fullscreenElement !== null; $el.style.maxHeight = fs ? "" : "520px"; $el.style.overflow = fs ? "" : "auto"; }; update(); document.addEventListener("fullscreenchange", update); })()'
-                                ])
-                                ->extraAttributes(['style' => 'max-height: 520px; overflow: auto;'])
+                        return RichEditor::make('content_rich_ui')
+                            ->label('Visual editor (optional)')
+                            ->columnSpanFull()
+                            ->extraAlpineAttributes([
+                                'x-init' => '(() => { const root = $el; const CAP = "1520px"; const cap = (() => { if (root.style.maxHeight) return root; const el = root.querySelector("[style*=\\"max-height\\"]"); return el || root; })(); const getFullscreenOverlays = () => Array.from(document.querySelectorAll(".fi-editor-fullscreen,.tiptap-editor-fullscreen,.is-fullscreen,.ProseMirror-fullscreen,[data-fullscreen=true]")); const getTargets = (on) => { const t = new Set([cap]); if (on) { getFullscreenOverlays().forEach(o => { t.add(o); o.querySelectorAll(\'[style*="max-height"], .tiptap-editor, .ProseMirror, [contenteditable]\').forEach(x => t.add(x)); }); } else { root.querySelectorAll(\'[style*="max-height"], .tiptap-editor, .ProseMirror, [contenteditable]\').forEach(x => t.add(x)); } return Array.from(t); }; const setFS = on => { const tgts = getTargets(on); tgts.forEach(el => { try { if (on) { el.style.maxHeight = ""; el.style.height = \'calc(100vh - 180px)\'; el.style.overflow = \'auto\'; } else { if (el === cap) { el.style.maxHeight = CAP; el.style.overflow = \'auto\'; } else { el.style.maxHeight = \'\'; } el.style.height = \'\'; } } catch(e){} }); document.documentElement.classList.toggle(\'prevent-scroll\', on); document.body.classList.toggle(\'prevent-scroll\', on); }; const isFS = () => { if (document.fullscreenElement) return true; if (getFullscreenOverlays().length) return true; let el = root; while (el) { const cls = ((el.getAttribute(\'class\')||\'\')+\' \'+(el.getAttribute(\'data-state\')||\'\')); if (/fullscreen/i.test(cls) || el.hasAttribute(\'data-fullscreen\')) return true; el = el.parentElement; } return false; }; const update = () => setFS(isFS()); update(); document.addEventListener(\'fullscreenchange\', update); const mo = new MutationObserver(update); mo.observe(document.body, {attributes:true, childList:true, subtree:true}); root.addEventListener(\'click\', e => { const t = e.target && e.target.closest(\'[data-fullscreen-toggle],[aria-label=fullscreen],.ri-fullscreen-fill,.ri-fullscreen-exit-fill,.fi-icon-fullscreen,button[title=Fullscreen]\'); if (t) setTimeout(update, 0); }); })()'
+                            ])
+                                ->extraAttributes(['style' => 'max-height: 1000px; overflow: auto;'])
                                 ->dehydrated(false)
                                 ->afterStateHydrated(function (Set $set, Get $get, $state) {
                                     $current = (string) ($get('content') ?? '');

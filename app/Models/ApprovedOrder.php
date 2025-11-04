@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Route;
@@ -19,7 +20,6 @@ class ApprovedOrder extends Model
      * Use the orders table (same as the base Order model).
      */
     protected $table = 'orders';
-
 
     /**
      * Casts similar in spirit to Appointment, adapted for orders.
@@ -60,7 +60,7 @@ class ApprovedOrder extends Model
                 }
             }
 
-            // final non-destructive merge (incoming wins, but preserved keys survive)
+            // final non-destructive merge incoming wins but preserved keys survive
             $model->meta = array_replace_recursive($curr, $incoming);
         });
     }
@@ -78,13 +78,12 @@ class ApprovedOrder extends Model
      * Accessor similar to Appointment::getAppointmentTimeAttribute().
      * Returns a formatted time range from the order if present.
      */
-
     public function getMetaAttribute($value)
     {
         // decode meta to array
         $meta = is_array($value) ? $value : (json_decode($value ?? '[]', true) ?: []);
 
-        // helper: get nested by dot path
+        // helper get nested by dot path
         $get = function ($arr, $path) {
             return data_get($arr, $path);
         };
@@ -140,7 +139,7 @@ class ApprovedOrder extends Model
                 $v = data_get($row, $k);
                 if ($v !== null && $v !== '') {
                     if (is_array($v)) {
-                        // favor label then value, otherwise join scalars
+                        // favor label then value otherwise join scalars
                         if (array_key_exists('label', $v)) return (string) $v['label'];
                         if (array_key_exists('value', $v)) return (string) $v['value'];
                         $flat = [];
@@ -179,13 +178,12 @@ class ApprovedOrder extends Model
             return '';
         };
 
-        // normalize each item and ensure 'variations' populated from structured data
+        // normalize each item and ensure variations populated
         foreach ($items as $i => $row) {
             if (!is_array($row)) continue;
             $var = $resolveVar($row);
             if (($var === '' || $var === null)) {
-                // for single-item orders, try meta selectedProduct and fallbacks
-                // this reads structured keys only from meta
+                // for single item orders try meta selectedProduct and fallbacks
                 $singleKeys = [
                     'selectedProduct.variations','selected_product.variations',
                     'selectedProduct.variation','selected_product.variation',
@@ -215,7 +213,6 @@ class ApprovedOrder extends Model
                 }
             }
             if ($var !== '' && $var !== null) {
-                // write to a consistent key the resource already reads
                 $row['variations'] = $row['variations'] ?? $var;
                 $row['variation']  = $row['variation']  ?? $var;
             }
@@ -229,9 +226,6 @@ class ApprovedOrder extends Model
 
         return $meta;
     }
-
-
-
 
     public function getAppointmentTimeAttribute(): string
     {
@@ -345,13 +339,14 @@ class ApprovedOrder extends Model
         }
         return [];
     }
+
     /**
      * Direct URL to start or continue the consultation on the new split pages.
-     * Defaults to Risk Assessment as the first step.
+     * Chooses first step based on whether the order looks like a reorder.
      */
     public function getConsultationUrlAttribute(): ?string
     {
-        // Try several common locations for the session id
+        // session id from attributes or meta
         $sessionId = data_get($this->attributes, 'consultation_session_id')
             ?? data_get($this->meta, 'consultation_session_id')
             ?? data_get($this->meta, 'session.id')
@@ -362,19 +357,92 @@ class ApprovedOrder extends Model
             return null;
         }
 
-        $names = [
-            'consultations.risk_assessment',            // admin route (exists)
-            'consultations.runner.risk_assessment',     // public alias with underscore
-            'consultations.runner.risk-assessment',     // public alias with hyphen
+        // decide first step
+        $meta = is_array($this->meta) ? $this->meta : [];
+        $isReorder = $this->detectReorderFromMeta($meta);
+        $step = $isReorder ? 'reorder' : 'risk-assessment';
+
+        // candidate named routes for each step
+        $nameSets = [
+            'reorder' => [
+                'consultations.reorder',
+                'consultations.runner.reorder',
+            ],
+            'risk-assessment' => [
+                'consultations.risk_assessment',
+                'consultations.risk-assessment',
+                'consultations.runner.risk_assessment',
+                'consultations.runner.risk-assessment',
+            ],
         ];
 
-        foreach ($names as $name) {
+        foreach ($nameSets[$step] as $name) {
             if (Route::has($name)) {
                 return route($name, ['session' => $sessionId]);
             }
         }
 
-        // Final fallback
-        return url("/admin/consultations/{$sessionId}/risk-assessment");
+        // final fallback
+        return url("/admin/consultations/{$sessionId}/{$step}");
+    }
+
+    /**
+     * Detects whether this order represents a reorder or repeat flow.
+     */
+    private function detectReorderFromMeta(array $meta): bool
+    {
+        // boolean style hints
+        foreach ([
+            'is_reorder',
+            'isReorder',
+            'flags.reorder',
+            'reorder',
+        ] as $path) {
+            $v = data_get($meta, $path);
+            if (is_bool($v)) return $v === true;
+            if (is_numeric($v)) return ((int) $v) === 1;
+            if (is_string($v) && $v !== '') {
+                $sv = Str::slug($v);
+                if (in_array($sv, ['1','true','yes','reorder','repeat','refill','maintenance'], true)) return true;
+            }
+        }
+
+        // string style type or flow
+        foreach ([
+            'type',
+            'flow',
+            'order_type',
+            'meta.flow',
+        ] as $path) {
+            $v = data_get($meta, $path);
+            if (!is_string($v) || $v === '') continue;
+            $sv = Str::slug($v);
+            if (str_contains($sv, 'reorder') ||
+                str_contains($sv, 'repeat') ||
+                str_contains($sv, 'refill') ||
+                str_contains($sv, 'maintenance')) {
+                return true;
+            }
+        }
+
+        // product plan hints
+        foreach ([
+            'selectedProduct.plan',
+            'selected_product.plan',
+            'selected.plan',
+            'plan',
+        ] as $path) {
+            $v = data_get($meta, $path);
+            if (!is_string($v) || $v === '') continue;
+            $sv = Str::slug($v);
+            if (str_contains($sv, 'repeat') ||
+                str_contains($sv, 'refill') ||
+                str_contains($sv, 'maintenance') ||
+                str_contains($sv, 'reorder')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

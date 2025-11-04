@@ -18,6 +18,7 @@ use Filament\Resources\RelationManagers\RelationManager;
 use App\Models\Product;
 use App\Models\ProductVariation;
 use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Toggle;
 
 class ProductsRelationManager extends RelationManager
 {
@@ -65,6 +66,9 @@ class ProductsRelationManager extends RelationManager
                             ->options(['draft' => 'Draft', 'published' => 'Published'])
                             ->default('draft'),
 
+                        Toggle::make('allow_reorder')
+                            ->label('Allow reorder')
+                            ->helperText('Show in Reorder flow'),
 
                         // Variations table-style editor
                         Repeater::make('variations')
@@ -114,6 +118,7 @@ class ProductsRelationManager extends RelationManager
                             'description' => $data['description'] ?? null,
                             'image_path'  => $data['image_path'] ?? null,
                             'status'      => $data['status'] ?? 'draft',
+                            'allow_reorder' => (bool) ($data['allow_reorder'] ?? false),
                         ]);
 
                         // 2) Create variations
@@ -210,6 +215,10 @@ class ProductsRelationManager extends RelationManager
                             ->options(['draft' => 'Draft', 'published' => 'Published'])
                             ->default('draft'),
 
+                        Toggle::make('allow_reorder')
+                            ->label('Allow reorder')
+                            ->helperText('Show in Reorder flow'),
+
                         Repeater::make('variations')
                             ->label('Product Variations')
                             ->reorderable('sort_order')
@@ -257,6 +266,7 @@ class ProductsRelationManager extends RelationManager
                             'description' => $record->description,
                             'image_path'  => $record->image_path,
                             'status'      => $record->status ?? 'draft',
+                            'allow_reorder' => (bool) ($record->allow_reorder ?? false),
                             'variations'  => $record->variations()->get()->map(fn($v) => [
                                 'id'         => $v->id,
                                 'title'      => $v->title,
@@ -274,6 +284,7 @@ class ProductsRelationManager extends RelationManager
                             'name'        => $data['name'],
                             'description' => $data['description'] ?? null,
                             'status'      => $data['status'] ?? 'draft',
+                            'allow_reorder' => (bool) ($data['allow_reorder'] ?? false),
                             'image_path'  => $data['image_path'] ?? $record->image_path,
                         ]);
 

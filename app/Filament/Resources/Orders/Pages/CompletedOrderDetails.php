@@ -303,7 +303,7 @@ class CompletedOrderDetails extends ViewRecord
                                     'refunded' => 'danger',
                                     default    => 'gray',
                                 };
-                                }),                
+                                }),
                         ]),
 
                         Section::make('Status')->columnSpan(2)->schema([
@@ -312,6 +312,38 @@ class CompletedOrderDetails extends ViewRecord
                                 ->badge()
                                 ->color('success'),
                         ]),
+
+                        Section::make('Appointment')
+                            ->columnSpan(4)
+                            ->schema([
+                                TextEntry::make('appointment_datetime')
+                                    ->hiddenLabel()
+                                    ->state(function ($record) {
+                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                        $start = data_get($meta, 'appointment_start_at')
+                                            ?? data_get($meta, 'appointment.start_at')
+                                            ?? data_get($meta, 'appointment_at')
+                                            ?? data_get($meta, 'booking.start_at');
+
+                                        $end = data_get($meta, 'appointment_end_at')
+                                            ?? data_get($meta, 'appointment.end_at')
+                                            ?? data_get($meta, 'booking.end_at');
+
+                                        $sd = null; $ed = null;
+                                        try { if ($start) { $sd = \Carbon\Carbon::parse($start, 'UTC')->setTimezone('Europe/London'); } } catch (\Throwable $e) {}
+                                        try { if ($end)   { $ed = \Carbon\Carbon::parse($end,   'UTC')->setTimezone('Europe/London'); } } catch (\Throwable $e) {}
+
+                                        if (!$sd) return null;
+
+                                        if ($ed) {
+                                            return $sd->format('Y-m-d') === $ed->format('Y-m-d')
+                                                ? $sd->format('d-m-Y H:i') . ' — ' . $ed->format('H:i')
+                                                : $sd->format('d-m-Y H:i') . ' — ' . $ed->format('d-m-Y H:i');
+                                        }
+
+                                        return $sd->format('d-m-Y H:i');
+                                    }),
+                            ]),
                     ]),
                 ])
                 ->columnSpanFull(),

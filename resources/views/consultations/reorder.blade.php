@@ -1,7 +1,7 @@
 
 
-{{-- resources/views/consultations/risk-assessment.blade.php --}}
-{{-- Service-first Risk Assessment page that renders the RAF ClinicForm assigned to the service, matching Pharmacist Advice layout --}}
+{{-- resources/views/consultations/reorder.blade.php --}}
+{{-- Service-first Reorder page that renders the Reorder ClinicForm assigned to the service  mirroring risk-assessment layout and logic --}}
 
 @php
     $sessionLike = $session ?? null;
@@ -24,7 +24,7 @@
     $makePublicUrl = function ($p) use ($apiBase) {
         if (!is_string($p) || $p === '') return '';
 
-        // Absolute URL: rewrite /storage* to preview endpoint, otherwise leave as-is
+        // Absolute URL: rewrite /storage* to preview endpoint  otherwise leave as-is
         if (preg_match('/^https?:\/\/?/i', $p)) {
             $pathOnly = parse_url($p, PHP_URL_PATH) ?? '';
             if (preg_match('#/storage/app/public/(.*)$#', $pathOnly, $m)) {
@@ -54,8 +54,7 @@
     // Prefer template that StartConsultation placed on the session
     $form = $form ?? null;
     if (! $form && isset($sessionLike->templates)) {
-        $tpl = \Illuminate\Support\Arr::get($sessionLike->templates, 'raf')
-            ?? \Illuminate\Support\Arr::get($sessionLike->templates, 'risk_assessment');
+        $tpl = \Illuminate\Support\Arr::get($sessionLike->templates, 'reorder');
         if ($tpl) {
             if (is_array($tpl)) {
                 $fid = $tpl['id'] ?? $tpl['form_id'] ?? null;
@@ -68,10 +67,10 @@
         }
     }
 
-    // Fallbacks by service and treatment using RAF
+    // Fallbacks by service and treatment using Reorder form_type
     if (! $form) {
         $base = fn() => \App\Models\ClinicForm::query()
-            ->where('form_type', 'raf')
+            ->where('form_type', 'reorder')
             ->where('is_active', 1)
             ->orderByDesc('version')->orderByDesc('id');
 
@@ -86,7 +85,7 @@
         }
         if (! $form && $serviceFor) {
             $svc = \App\Models\Service::query()->where('slug', $serviceFor)->first();
-            if ($svc && $svc->rafForm) $form = $svc->rafForm;
+            if ($svc && $svc->reorderForm) $form = $svc->reorderForm;
         }
         if (! $form) {
             $form = $base()->where(function ($q) { $q->whereNull('service_slug')->orWhere('service_slug', ''); })
@@ -102,7 +101,7 @@
         $schema = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
     }
 
-    // Normalise schema to sections with fields (same as pharmacist-advice)
+    // Normalise schema to sections with fields  same approach as risk-assessment
     $sections = [];
     if (is_array($schema) && !empty($schema)) {
         if (array_key_exists('fields', $schema[0] ?? [])) {
@@ -150,7 +149,6 @@
     }
 
     // Build a canonical alias map for conditional field lookups
-    // Maps various references (key, slug(key), slug(label), q_N) -> the actual input name we render
     $__fieldAliases = [];
     $__idxAlias = 0;
     foreach ($sections as $secTmp) {
@@ -220,7 +218,6 @@
         $order = null; $orderMeta = [];
         try {
             if (isset($sessionLike->order_id)) {
-                // Try ApprovedOrder then Order by id
                 if (class_exists('App\\Models\\ApprovedOrder')) {
                     $order = \App\Models\ApprovedOrder::find($sessionLike->order_id);
                 }
@@ -228,11 +225,9 @@
                     $order = \App\Models\Order::find($sessionLike->order_id);
                 }
             }
-            // Try explicit relation if present
             if (!$order && method_exists($sessionLike, 'order')) {
                 $order = $sessionLike->order;
             }
-            // Try by reference fields
             $ref = $sessionLike->reference ?? $sessionLike->order_reference ?? null;
             if (!$order && $ref) {
                 if (class_exists('App\\Models\\ApprovedOrder')) {
@@ -244,27 +239,25 @@
             }
             if ($order) {
                 $orderMeta = $asArray($order->meta ?? []);
-                // Also merge in any nested consultation meta commonly used
                 $consMeta = $asArray(data_get($orderMeta, 'consultation'));
                 if (!empty($consMeta)) {
                     $orderMeta = array_replace_recursive($orderMeta, $consMeta);
                 }
             }
-        } catch (\Throwable $e2) {
-            // ignore order lookup failures
-        }
+        } catch (\Throwable $e2) {}
 
         // Extract answers from a variety of expected meta shapes
         $extractAnswers = function ($meta) use ($slug) {
             $out = [];
             if (!is_array($meta)) return $out;
 
-            // 1) Direct maps
+            // 1 Direct maps
             foreach ([
                 'assessment.answers',
                 'answers',
                 'consultation.answers',
                 'raf.answers',
+                'reorder.answers',
                 'forms.answers',
             ] as $path) {
                 $m = data_get($meta, $path);
@@ -276,12 +269,13 @@
                 }
             }
 
-            // 2) Array of Q A objects in common shapes
+            // 2 Array of Q A objects in common shapes
             $rowsPaths = [
                 'formsQA',
                 'assessment.questions',
                 'consultation.questions',
                 'raf.questions',
+                'reorder.questions',
                 'qa',
                 'questions',
                 'form_responses',
@@ -295,7 +289,6 @@
                     $a = $row['value'] ?? $row['answer'] ?? $row['a'] ?? $row['selected'] ?? ($row['checked'] ?? null);
                     if ($q === null) continue;
                     $key = $slug($q);
-                    // Normalise booleanish answers
                     if (is_string($a)) {
                         $l = strtolower(trim($a));
                         if (in_array($l, ['yes','true','1','checked','on','done'], true)) $a = true;
@@ -305,7 +298,7 @@
                 }
             }
 
-            // 3) Deep scan fallback for nested arrays with question/answer keys
+            // 3 Deep scan fallback
             $stack = [$meta];
             while ($stack) {
                 $cur = array_pop($stack);
@@ -321,7 +314,6 @@
                 if ($isRow && $q !== null && $a !== null) {
                     $out[$slug($q)] = $a;
                 }
-                // push children
                 foreach ($cur as $v) { if (is_array($v)) $stack[] = $v; }
             }
 
@@ -364,76 +356,88 @@
         return $out;
     };
 
-    // Find first non-empty answer by a strict list of candidate keys using canonical aliases, no fuzzy matching.
-    $answerFor = function ($name, $label = null) use ($oldData, $prefill, $flatIndexByKey, $__fieldAliases) {
-        // Build a strict set of candidate keys for this field only
-        $cands = [];
+    // Find first non-empty answer by a list of candidate keys across saved data and prefill
+    $answerFor = function ($name, $label = null) use ($oldData, $prefill, $flatIndexByKey) {
+        $keys = [];
 
-        $add = function ($s) use (&$cands) {
-            if ($s === null || $s === '') return;
+        $addKeys = function ($s) use (&$keys) {
+            if (! $s) return;
             $s = (string) $s;
-            $slug = \Illuminate\Support\Str::slug($s);
-            $cands[] = $s;                    // raw
-            $cands[] = $slug;                  // slugged hyphen
-            $cands[] = str_replace('_','-',$s); // underscore to hyphen
-            $cands[] = str_replace('-','_', $slug); // hyphen to underscore
+            $keys[] = $s;
+            $keys[] = \Illuminate\Support\Str::slug($s);
+            $trimQ = rtrim($s, " ?\t\n\r\0\x0B");
+            $keys[] = $trimQ;
+            $keys[] = \Illuminate\Support\Str::slug($trimQ);
         };
 
-        // Canonical from name then label
-        $add($name);
-        $add($label);
+        $addKeys($name);
+        $addKeys($label);
 
-        // If we have an alias mapping from the schema use it
-        if ($name) {
-            $ns = \Illuminate\Support\Str::slug((string) $name);
-            if (isset($__fieldAliases[$ns])) $add($__fieldAliases[$ns]);
-            if (isset($__fieldAliases[$name])) $add($__fieldAliases[$name]);
-        }
-        if ($label) {
-            $ls = \Illuminate\Support\Str::slug((string) $label);
-            if (isset($__fieldAliases[$ls])) $add($__fieldAliases[$ls]);
-            if (isset($__fieldAliases[$label])) $add($__fieldAliases[$label]);
-        }
-
-        // Bridge legacy q_N keys derived from this very schema only
-        foreach ([$name, $label] as $probe) {
-            if (!$probe) continue;
-            $probe = (string) $probe;
+        $probe = is_scalar($name) ? (string) $name : '';
+        if ($probe !== '') {
             foreach ([$probe, \Illuminate\Support\Str::slug($probe)] as $cand) {
                 if (isset($flatIndexByKey[$cand])) {
-                    $q = $flatIndexByKey[$cand];
-                    $cands[] = $q;
-                    $cands[] = \Illuminate\Support\Str::slug($q);
+                    $qIdx = $flatIndexByKey[$cand];
+                    $keys[] = $qIdx;
+                    $keys[] = \Illuminate\Support\Str::slug($qIdx);
                 }
             }
         }
 
-        // De-duplicate while preserving order
-        $keys = [];
-        foreach ($cands as $k) {
-            if ($k === '' || $k === null) continue;
-            if (!in_array($k, $keys, true)) $keys[] = $k;
-        }
+        $keys = array_values(array_unique(array_filter($keys, fn($x) => $x !== '')));
 
-        // First prefer explicit saved data then prefill
         foreach ($keys as $k) {
-            if (is_array($oldData) && array_key_exists($k, $oldData)) {
+            if (array_key_exists($k, (array) $oldData)) {
                 $v = $oldData[$k];
                 if ($v !== '' && $v !== null) return $v;
             }
-        }
-        foreach ($keys as $k) {
-            if (is_array($prefill) && array_key_exists($k, $prefill)) {
+            if (array_key_exists($k, (array) $prefill)) {
                 $v = $prefill[$k];
                 if ($v !== '' && $v !== null) return $v;
             }
         }
 
-        // Nothing matched for this field
+        // Fuzzy fallback to handle small schema key drifts
+        $merged = array_merge((array) $prefill, (array) $oldData);
+        if (!empty($merged)) {
+            $candidates = array_keys($merged);
+            $norm = function($s){
+                $s = is_scalar($s) ? (string)$s : '';
+                $s = strtolower(trim($s));
+                $s = preg_replace('/[^a-z0-9]+/','-',$s);
+                $s = preg_replace('/-(details?|notes?|info(?:rmation)?|explain(?:ation)?)$/','',$s);
+                return trim($s,'-');
+            };
+            $nameSlug  = $norm($name);
+            $labelSlug = $norm($label);
+
+            $scoreBest = 0; $bestKey = null;
+            foreach ($candidates as $cand) {
+                $c = $norm($cand);
+                if ($c === '' || ($nameSlug === '' && $labelSlug === '')) continue;
+                $tokensC   = array_filter(explode('-', $c));
+                $tokensN   = array_filter(explode('-', $nameSlug));
+                $tokensL   = array_filter(explode('-', $labelSlug));
+                $wantTokens = !empty($tokensN) ? $tokensN : $tokensL;
+                $matches = 0; $total = max(count($wantTokens), 1);
+                foreach ($wantTokens as $t) {
+                    foreach ($tokensC as $tc) {
+                        if ($t === $tc) { $matches++; break; }
+                        if (strlen($t) >= 3 && (str_starts_with($tc, $t) || str_starts_with($t, $tc))) { $matches++; break; }
+                    }
+                }
+                $score = $matches / $total;
+                if ($score > $scoreBest && $score >= 0.6) { $scoreBest = $score; $bestKey = $cand; }
+            }
+            if ($bestKey !== null) {
+                return $merged[$bestKey];
+            }
+        }
+
         return null;
     };
 
-    // Helper to evaluate showIf condition (server-side render) with alias resolution
+    // Helper to evaluate showIf condition server-side with alias resolution
     $evaluateShowIf = function ($cond) use ($answerFor, $__fieldAliases) {
         if (!is_array($cond)) return true;
         $fieldRaw = $cond['field'] ?? null;
@@ -509,29 +513,29 @@
       .cf-textarea{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px;min-height:140px;resize:vertical}
       .cf-input:focus, .cf-textarea:focus, .cf-select:focus{outline:none;border-color:rgba(255,255,255,.28);box-shadow:0 0 0 2px rgba(255,255,255,.12)}
       .cf-thumbs{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
-      .cf-thumb{width:200px;height:200px;object-fit:cover;border-radius:8px;border:1px solid rgba(255,255,255,.14)}
+      .cf-thumb{width:160px;height:160px;object-fit:cover;border-radius:8px;border:1px solid rgba(255,255,255,.14)}
     </style>
 @endonce
 
 @if (! $form)
     <div class="rounded-md border border-red-300 bg-red-50 text-red-800 p-4">
-        <div class="font-semibold">Risk Assessment form not found</div>
+        <div class="font-semibold">Reorder form not found</div>
         <div class="mt-1 text-sm">
-            Please create an active RAF ClinicForm for
+            Please create an active Reorder ClinicForm for
             <code>{{ $serviceFor ?? 'any service' }}</code>
             {{ $treatFor ? 'and treatment ' . $treatFor : '' }}
-            or assign a RAF form to this service.
+            or assign a Reorder form to this service.
         </div>
     </div>
 @else
-    <form id="cf_risk-assessment" method="POST" action="{{ route('consultations.forms.save', ['session' => $sessionLike->id ?? $session->id, 'form' => $form->id]) }}?tab=risk-assessment" enctype="multipart/form-data">
+    <form id="cf_reorder" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab=reorder">
         @csrf
-        <input type="hidden" name="__step_slug" value="risk-assessment">
+        <input type="hidden" name="__step_slug" value="reorder">
         <input type="hidden" id="__go_next" name="__go_next" value="0">
 
         @if (request()->boolean('debug'))
             <div style="margin:16px 0;padding:10px 12px;border:1px dashed rgba(255,255,255,.25);border-radius:10px;font-size:12px;opacity:.85">
-                <div><strong>debug</strong> step risk-assessment</div>
+                <div>debug step reorder</div>
                 <div>form_id {{ $form->id ?? 'n/a' }} schema_sections {{ count($sections) }}</div>
                 @php $__seen = array_slice(array_keys((array) ($oldData ?? [])), 0, 8); @endphp
                 <div>answers_found {{ count((array) ($oldData ?? [])) }} keys {{ implode(', ', $__seen) }}</div>
@@ -754,11 +758,9 @@
                                 $accept   = $field['accept'] ?? null;
                                 $multiple = (bool) ($field['multiple'] ?? false);
 
-                                // Build a list of initial thumbnails with clickable hrefs from any saved value shape.
-                                // Also de‑dupe so a single image doesn't render multiple times, preferring the most recent.
+                                // Build a list of initial thumbnails with clickable hrefs from any saved value shape
                                 $initialThumbs = [];
 
-                                // Extract the underlying relative storage path from any variant (raw path, /storage URL, or preview endpoint ?p=)
                                 $extractRel = function (string $raw) {
                                     $urlPath = parse_url($raw, PHP_URL_PATH) ?: '';
                                     $query   = parse_url($raw, PHP_URL_QUERY) ?: '';
@@ -777,7 +779,6 @@
                                 $isImagePath = function (string $raw) use ($extractRel) {
                                     $path = $extractRel($raw);
                                     if ($path === '' || strpos($path, '/') === false) {
-                                        // not a storage-like relative path eg "Screen Shot ... .png" with no folder
                                         return false;
                                     }
                                     $ext  = strtolower(pathinfo($path, PATHINFO_EXTENSION) ?: '');
@@ -786,20 +787,12 @@
 
                                 $pushItem = function ($raw) use (&$initialThumbs, $makePublicUrl, $isImagePath, $extractRel) {
                                     if (!is_string($raw) || trim($raw) === '') return;
-
-                                    // Normalise to our public preview URL
                                     $href = $makePublicUrl($raw);
-
-                                    // Use the underlying relative path as the de‑dupe key. If it doesn't look like a storage path, skip.
                                     $key = $extractRel($href) ?: $extractRel($raw) ?: '';
                                     if ($key === '' || strpos($key, '/') === false) {
-                                        return; // ignore bogus preview like "...?p=Screen Shot ....png"
+                                        return;
                                     }
-
-                                    // Only add image-like files (after the key validation)
                                     if (! $isImagePath($raw) && ! $isImagePath($href)) return;
-
-                                    // Prefer the most recent occurrence by overwriting any previous entry for the same file
                                     $initialThumbs[$key] = ['href' => $href, 'src' => $href];
                                 };
 
@@ -828,9 +821,7 @@
                                     }
                                 }
 
-                                // Normalise to a simple indexed array for rendering
                                 $initialThumbs = array_values($initialThumbs);
-                                // If single-file field but multiple previews slipped in, keep only the most recent
                                 if (!$multiple && count($initialThumbs) > 1) {
                                     $initialThumbs = array_slice($initialThumbs, -1);
                                 }
@@ -874,8 +865,7 @@
 
     <script>
 (function(){
-  var form = document.getElementById('cf_risk-assessment'); if (!form) return;
-  // Canonical field aliases generated on server
+  var form = document.getElementById('cf_reorder'); if (!form) return;
   var __cfAliases = @json($__fieldAliases, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
   function canonicalName(s){
     if (s == null) return s;
@@ -911,14 +901,12 @@
       candidates.push(name);
       candidates.push(_slug(name));
     }
-    // try each candidate until we find inputs
     var nodes = null;
     for (var i=0;i<candidates.length;i++){
       nodes = byName(candidates[i]);
       if (nodes) break;
     }
     if (!nodes) {
-      // fallback: try by id
       for (var j=0;j<candidates.length;j++){
         var elById = form.querySelector('#'+CSS.escape(candidates[j]));
         if (elById) { nodes = [elById]; break; }
@@ -954,7 +942,6 @@
     if (Array.isArray(val)){
       val = val.map(slug);
     } else if (typeof val === 'boolean'){
-      // keep
     } else if (val != null) {
       val = slug(val);
     }
@@ -991,7 +978,6 @@
       node.style.display = ok ? '' : 'none';
     });
   }
-  // --- File preview hook ---
   function hookFilePreviews(){
     var inputs = form.querySelectorAll('input[type="file"]');
     inputs.forEach(function(inp){
@@ -1022,7 +1008,6 @@
     });
   }
   hookFilePreviews();
-  // --- End file preview hook ---
   form.addEventListener('change', evaluate, true);
   form.addEventListener('input', function(e){ if (e.target && (e.target.type==='radio' || e.target.type==='checkbox' || e.target.tagName==='SELECT')) evaluate(); }, true);
   evaluate();

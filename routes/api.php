@@ -5,7 +5,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Models\Order;
 use App\Http\Controllers\ClinicFormApiController;
-use App\Http\Controllers\WeightManagement\SubmitAssessmentController;
+use App\Http\Controllers\SubmitAssessmentController;
 use App\Models\ClinicForm;
 
 Route::get('/debug/order/by-ref/{reference}', function (Request $req, string $reference) {

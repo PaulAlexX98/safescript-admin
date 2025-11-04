@@ -10,10 +10,12 @@ class Product extends Model
     protected $fillable = [
         'name', 'slug', 'description', 'type',
         'image_path', 'price_from', 'status', 'max_bookable_quantity',
+        'allow_reorder',
     ];
 
     protected $casts = [
         'price_from' => 'decimal:2',
+        'allow_reorder' => 'boolean',
     ];
 
     protected $attributes = [

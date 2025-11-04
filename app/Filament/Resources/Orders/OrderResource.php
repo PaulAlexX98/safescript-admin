@@ -70,8 +70,8 @@ class OrderResource extends Resource
             ->defaultSort('created_at', 'desc')
             ->columns([
                 TextColumn::make('created_at')
-                    ->label('Created')
-                    ->dateTime('d-m-Y H:i')
+                    ->label('Order Created')
+                    ->dateTime('d M Y, H:i')
                     ->sortable()
                     ->toggleable(),
 
@@ -253,24 +253,31 @@ class OrderResource extends Resource
                     ->label('Type')
                     ->getStateUsing(function ($record) {
                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                        $type = data_get($meta, 'type');
-                        if (!is_string($type) || $type === '') {
-                            $svc = strtolower((string) (data_get($meta, 'service') ?? data_get($meta, 'serviceName') ?? data_get($meta, 'title') ?? ''));
-                            if ($svc !== '') {
-                                if (str_contains($svc, 'nhs') || str_contains($svc, 'new')) $type = 'new';
-                                elseif (str_contains($svc, 'reorder') || str_contains($svc, 'repeat') || str_contains($svc, 're-order')) $type = 'reorder';
-                                elseif (str_contains($svc, 'transfer')) $type = 'transfer';
-                                elseif (str_contains($svc, 'consult')) $type = 'consultation';
-                            }
-                        }
-                        if (!is_string($type) || $type === '') return null;
-                        return match (strtolower($type)) {
-                            'new', 'nhs' => 'New Patient',
-                            'transfer' => 'Transfer Patient',
-                            'consultation' => 'Consultation',
-                            'reorder', 'repeat', 're-order' => 'Reorder',
-                            default => ucfirst($type),
-                        };
+                        $norm = fn ($v) => strtolower(trim((string) $v));
+
+                        $raw  = $norm(data_get($meta, 'type'));
+                        $mode = $norm(data_get($meta, 'mode') ?? data_get($meta, 'flow'));
+                        $path = $norm(data_get($meta, 'path') ?? data_get($meta, 'source_url') ?? data_get($meta, 'referer'));
+                        $svc  = $norm(data_get($meta, 'service') ?? data_get($meta, 'serviceName') ?? data_get($meta, 'title') ?? '');
+                        $ref  = strtoupper((string) ($record->reference ?? ''));
+
+                        $isReorder = in_array($raw, ['reorder','repeat','re-order','repeat-order'], true)
+                            || in_array($mode, ['reorder','repeat'], true)
+                            || str_contains($path, '/reorder')
+                            || (bool) preg_match('/^PTC[A-Z]*R\d{6}$/', $ref)
+                            || str_contains($svc, 'reorder') || str_contains($svc, 'repeat') || str_contains($svc, 're-order');
+
+                        $isNhs = ($raw === 'nhs')
+                            || (bool) preg_match('/^PTC[A-Z]*H\d{6}$/', $ref)
+                            || str_contains($svc, 'nhs');
+
+                        $isNew = ($raw === 'new')
+                            || (bool) preg_match('/^PTC[A-Z]*N\d{6}$/', $ref);
+
+                        if ($isReorder) return 'Reorder';
+                        if ($isNhs)     return 'NHS';
+                        if ($isNew)     return 'New';
+                        return null;
                     })
                     ->toggleable(),
 

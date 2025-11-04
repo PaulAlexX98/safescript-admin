@@ -53,14 +53,18 @@ class ServiceResource extends Resource
                 ])
                 ->columnSpanFull(),
 
-            // Two-column row: Booking Flow + Forms Assignment (should match page width)
+            // Three-column row: Booking Flow + Reorder Flow + Forms Assignment (should match page width)
             Grid::make()->columns(2)->schema([
                 Section::make('Booking Flow Steps')
                     ->schema(self::bookingFlowFields()),
 
-                Section::make('Forms Assignment')
-                    ->schema(self::formsAssignmentFields()),
+                Section::make('Reorder Flow Steps')
+                    ->schema(self::reorderFlowFields()),
             ])->columnSpanFull(),
+
+            Section::make('Forms Assignment')
+                ->schema(self::formsAssignmentFields())
+                ->columnSpanFull(),
         ]);
     }
 
@@ -108,10 +112,53 @@ class ServiceResource extends Resource
                     ->native(false)
                     ->placeholder('Select a step…'),
             ]),
+        ];
+    }
 
-            Placeholder::make('flow_preview')
-                ->label('Flow preview')
-                ->content('Workflow preview coming soon…'),
+    protected static function reorderFlowFields(): array
+    {
+        return [
+            Grid::make()->columns(3)->schema([
+                Select::make('reorder_flow.step1')
+                    ->label('Step 1')
+                    ->options(self::flowOptions())
+                    ->default('treatments')
+                    ->native(false)
+                    ->placeholder('Select a step…'),
+
+                Select::make('reorder_flow.step2')
+                    ->label('Step 2')
+                    ->options(self::flowOptions())
+                    ->default('login')
+                    ->native(false)
+                    ->placeholder('Select a step…'),
+
+                Select::make('reorder_flow.step3')
+                    ->label('Step 3')
+                    ->options(self::flowOptions())
+                    ->default('raf')
+                    ->native(false)
+                    ->placeholder('Select a step…'),
+
+                Select::make('reorder_flow.step4')
+                    ->label('Step 4')
+                    ->options(self::flowOptions())
+                    ->default('payment')
+                    ->native(false)
+                    ->placeholder('Select a step…'),
+
+                Select::make('reorder_flow.step5')
+                    ->label('Step 5')
+                    ->options(self::flowOptions())
+                    ->native(false)
+                    ->placeholder('Select a step…'),
+
+                Select::make('reorder_flow.step6')
+                    ->label('Step 6')
+                    ->options(self::flowOptions())
+                    ->native(false)
+                    ->placeholder('Select a step…'),
+            ]),
         ];
     }
 

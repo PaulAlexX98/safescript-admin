@@ -10,13 +10,13 @@
     if (is_string($schema)) {
         $decoded = json_decode($schema, true);
         $schema = is_array($decoded) ? $decoded : [];
+    }
 
-        // If controller didn't pass oldData, pull persisted answers from session meta so refresh repopulates fields
-        if ($form && $session && empty($oldData)) {
-            $meta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
-            $formKey = $form->form_type ?: (string) $form->id;
-            $oldData = (array) data_get($meta, "forms.{$formKey}.answers", []);
-        }
+    // If controller didn't pass oldData, pull persisted answers from session meta so refresh repopulates fields
+    if ($form && $session && empty($oldData)) {
+        $meta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
+        $formKey = $form->form_type ?: (string) $form->id;
+        $oldData = (array) data_get($meta, "forms.{$formKey}.answers", []);
     }
 @endphp
 
@@ -48,18 +48,25 @@
         ];
     @endphp
 
-    <form id="cf_{{ $slug }}" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab={{ $slug }}" class="space-y-4" enctype="multipart/form-data">
+    @php $formDomId = 'cf_'.$slug; @endphp
+    <form id="{{ $formDomId }}" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab={{ $slug }}" class="space-y-4" enctype="multipart/form-data">
         @csrf
         <input type="hidden" name="__step_slug" value="{{ $slug }}">
+        <input type="hidden" name="session_id" value="{{ $session->id }}">
+        <input type="hidden" name="form_id" value="{{ $form->id }}">
+        <input type="hidden" name="form_type" value="{{ $form->form_type ?? $slug }}">
+        <input type="hidden" name="service" value="{{ $form->service_slug ?? ($session->service ?? '') }}">
+        <input type="hidden" name="treatment" value="{{ $form->treatment_slug ?? ($session->treatment ?? '') }}">
+        <input type="hidden" id="__go_next" name="__go_next" value="0">
 
         @forelse($schema as $i => $field)
             @php
                 $type = $field['type'] ?? 'text_input';
                 $cfg  = (array)($field['data'] ?? []);
-                $name = $cfg['key']
-                    ?? $field['key']
-                    ?? $field['name']
-                    ?? ($type === 'text_block' ? 'block_'.$i : 'field_'.$i);
+                $name = $cfg['key'] ?? $field['key'] ?? $field['name'] ?? ($type === 'text_block' ? 'block_'.$i : null);
+                if (!$name && $type !== 'text_block') {
+                    $name = \Illuminate\Support\Str::slug((string)($cfg['label'] ?? ($field['label'] ?? 'field_'.$i)));
+                }
                 $label= $cfg['label'] ?? ($field['label'] ?? ucfirst(str_replace('_',' ',$name)));
                 $req  = (bool)($cfg['required'] ?? false);
 
@@ -78,8 +85,21 @@
                     $defaultFromMeta = $prefill['notes'];
                 }
 
-                $val  = old($name, $oldData[$name] ?? $defaultFromMeta);
+                $val  = old("answers.$name", $oldData[$name] ?? $defaultFromMeta);
             @endphp
+
+            @php
+                $__showIf = (array)($cfg['showIf'] ?? []);
+                $__showEnabled = (bool)($__showIf['enabled'] ?? false);
+                $__showPayload = $__showEnabled ? json_encode([
+                    'field'     => $__showIf['field'] ?? null,
+                    'equals'    => $__showIf['equals'] ?? null,
+                    'in'        => (array)($__showIf['in'] ?? []),
+                    'notEquals' => $__showIf['notEquals'] ?? null,
+                    'truthy'    => (bool)($__showIf['truthy'] ?? false),
+                ]) : null;
+            @endphp
+            <div @if($__showPayload) x-data="showIf({!! $__showPayload !!})" x-show="ok()" x-cloak @endif>
 
             @if($type === 'text_block')
                 <div class="rounded-md border border-gray-700/60 bg-gray-900/50 p-6">
@@ -88,35 +108,35 @@
 
             @elseif($type === 'checkbox')
                 <label class="inline-flex items-center gap-2 text-sm text-gray-200">
-                    <input type="hidden" name="{{ $name }}" value="0">
-                    <input type="checkbox" name="{{ $name }}" value="1" class="rounded bg-gray-800 border-gray-600" @checked((bool)$val) @if($req) required @endif>
+                    <input type="hidden" name="answers[{{ $name }}]" value="0">
+                    <input type="checkbox" name="answers[{{ $name }}]" value="1" class="rounded bg-gray-800 border-gray-600" @checked((bool)$val) @if($req) required @endif>
                     <span>{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</span>
                 </label>
                 @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'date')
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
-                <input type="date" name="{{ $name }}" value="{{ \Illuminate\Support\Str::of((string)($val ?? ($cfg['date'] ?? '')))->limit(10,'') }}" @if($req) required @endif placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
+                <input type="date" name="answers[{{ $name }}]" value="{{ \Illuminate\Support\Str::of((string)($val ?? ($cfg['date'] ?? '')))->limit(10,'') }}" @if($req) required @endif placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
                 @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'number')
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
                 @php $stepAttr = $cfg['step'] ?? ((str_contains($labelLower,'strength') || str_contains($labelLower,'dose')) ? '0.1' : 'any'); @endphp
-                <input type="number" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif step="{{ $stepAttr }}" inputmode="decimal" placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
+                <input type="number" name="answers[{{ $name }}]" value="{{ $val }}" @if($req) required @endif step="{{ $stepAttr }}" inputmode="decimal" placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
                 @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'textarea')
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
-                <textarea name="{{ $name }}" @if($req) required @endif rows="{{ (int) ($cfg['rows'] ?? 4) }}" placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">{{ is_string($val) ? $val : '' }}</textarea>
+                <textarea name="answers[{{ $name }}]" @if($req) required @endif rows="{{ (int) ($cfg['rows'] ?? 4) }}" placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">{{ is_string($val) ? $val : '' }}</textarea>
                 @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'select')
                 @php
                     $isMultiple = (bool)($cfg['multiple'] ?? false);
-                    $valArr = $isMultiple ? (array)($val ?? []) : null;
+                    $valArr = $isMultiple ? (array) (old("answers.$name", $oldData[$name] ?? $defaultFromMeta ?? [])) : null;
                 @endphp
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
-                <select name="{{ $name }}@if($isMultiple)[]@endif" @if($req) required @endif @if($isMultiple) multiple @endif class="w-full rounded-md bg-gray-800 border border-gray-600 p-2 text-gray-100">
+                <select name="answers[{{ $name }}]@if($isMultiple)[]@endif" @if($req) required @endif @if($isMultiple) multiple @endif class="w-full rounded-md bg-gray-800 border border-gray-600 p-2 text-gray-100">
                     @foreach((array)($cfg['options'] ?? []) as $ov => $ol)
                         @php
                             $optValue = is_array($ol) ? ($ol['value'] ?? $ov) : $ov;
@@ -140,7 +160,7 @@
                             $optLabel = is_array($ol) ? ($ol['label'] ?? ($ol['value'] ?? $ov)) : $ol;
                         @endphp
                         <label class="inline-flex items-center gap-2 text-sm text-gray-200 mr-4">
-                            <input type="radio" name="{{ $name }}" value="{{ $optValue }}" class="border-gray-600" @checked((string)$val === (string)$optValue) @if($req) required @endif>
+                            <input type="radio" name="answers[{{ $name }}]" value="{{ $optValue }}" class="border-gray-600" @checked((string)$val === (string)$optValue) @if($req) required @endif>
                             <span>{{ $optLabel }}</span>
                         </label>
                     @endforeach
@@ -154,7 +174,7 @@
                 @endphp
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
                 <div x-data="{ files: [] }" class="w-full">
-                    <input type="file" name="{{ $name }}{{ $multiple ? '[]' : '' }}" x-ref="finput" class="sr-only" @change="files = Array.from($event.target.files)" {{ $multiple ? 'multiple' : '' }} accept="{{ $accept }}" @if($req) required @endif>
+                    <input type="file" name="answers[{{ $name }}]{{ $multiple ? '[]' : '' }}" x-ref="finput" class="sr-only" @change="files = Array.from($event.target.files)" {{ $multiple ? 'multiple' : '' }} accept="{{ $accept }}" @if($req) required @endif>
                     <button type="button" class="inline-flex items-center rounded-md border border-gray-600 bg-white/5 px-3 py-2 text-sm text-gray-100 hover:bg-white/10" @click="$refs.finput.click()">Choose Files</button>
                     <template x-if="files.length">
                         <ul class="mt-2 text-xs text-gray-400 space-y-1">
@@ -168,19 +188,44 @@
 
             @elseif($type === 'signature')
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
-                <input type="text" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif class="w-full rounded-md bg-gray-800 border border-gray-600 p-2 text-gray-100" placeholder="signature data url">
+                <input type="text" name="answers[{{ $name }}]" value="{{ $val }}" @if($req) required @endif class="w-full rounded-md bg-gray-800 border border-gray-600 p-2 text-gray-100" placeholder="signature data url">
                 @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @else
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
-                <input type="text" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
+                <input type="text" name="answers[{{ $name }}]" value="{{ $val }}" @if($req) required @endif placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
                 @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
             @endif
+            </div>
         @empty
             <div class="text-sm text-gray-400">This form has no fields yet.</div>
         @endforelse
 
-        {{-- Intentionally no internal Save buttons; the page-level buttons handle submission/navigation --}}
+        <div x-data="saveNotice({{ $session->id }}, {{ $form->id }})" x-init="init()" class="mt-4">
+            <span x-show="show" x-transition.opacity class="text-xs text-green-400">Saved</span>
+        </div>
+
+        @if(($renderSaveBar ?? true) === true)
+            <div class="mt-8 flex items-center gap-4">
+                <button type="submit"
+                        form="{{ $formDomId }}"
+                        name="__go_next"
+                        value="0"
+                        @click="try{localStorage.setItem('cf_saved', JSON.stringify({session: {{ $session->id }}, form: {{ $form->id }}, ts: Date.now()}))}catch(e){}"
+                        class="inline-flex items-center rounded-md border border-gray-600 bg-white/5 px-4 py-2 text-sm text-gray-100 hover:bg-white/10">
+                    Save
+                </button>
+
+                <button type="submit"
+                        form="{{ $formDomId }}"
+                        name="__go_next"
+                        value="1"
+                        @click="try{localStorage.setItem('cf_saved', JSON.stringify({session: {{ $session->id }}, form: {{ $form->id }}, ts: Date.now()}))}catch(e){}"
+                        class="inline-flex items-center rounded-md border border-blue-600 bg-blue-600/80 px-4 py-2 text-sm text-white hover:bg-blue-600">
+                    Save and continue
+                </button>
+            </div>
+        @endif
     </form>
 @endif
 
@@ -232,6 +277,120 @@
           }
         };
       });
+
+      // Lightweight dependency display helper used by form fields
+      if (!window.showIf) {
+        window.showIf = function(cfg){
+          cfg = cfg || {};
+          return {
+            visible: true,
+            init(){
+              this.update();
+              const form = this.$el.closest('form');
+              if (!form || !cfg.field) return;
+              const name = cfg.field;
+              const bind = () => this.update();
+              const sels = form.querySelectorAll(
+                `[name="${name}"], [name="${name}[]"], [name="answers[${name}]"], [name="answers[${name}][]"]`
+              );
+              sels.forEach(el => el.addEventListener('change', bind));
+            },
+            // Resolve current value(s) of the dependency field
+            value(){
+              const form = this.$el.closest('form');
+              if (!form || !cfg.field) return null;
+              const candidates = [
+                ...form.querySelectorAll(`[name="${cfg.field}"]`),
+                ...form.querySelectorAll(`[name="${cfg.field}[]"]`),
+                ...form.querySelectorAll(`[name="answers[${cfg.field}]"]`),
+                ...form.querySelectorAll(`[name="answers[${cfg.field}][]"]`),
+              ];
+              let values = [];
+              candidates.forEach(el => {
+                if (el.tagName === 'SELECT') {
+                  if (el.multiple) {
+                    values = Array.from(el.selectedOptions).map(o => o.value);
+                  } else {
+                    values = [el.value];
+                  }
+                } else if (el.type === 'radio') {
+                  if (el.checked) values = [el.value];
+                } else if (el.type === 'checkbox') {
+                  if (el.checked) values.push(el.value);
+                } else {
+                  values = [el.value];
+                }
+              });
+              return values.length > 1 ? values : (values[0] ?? null);
+            },
+            // Match logic covering equals, in, notEquals, and truthy
+            matches(v){
+              const low = x => (x == null ? '' : String(x)).toLowerCase();
+              if (cfg.truthy) return !!v && low(v) !== '0' && low(v) !== 'no' && low(v) !== 'false';
+              if (cfg.equals !== undefined && cfg.equals !== null) return low(v) === low(cfg.equals);
+              if (Array.isArray(cfg.in) && cfg.in.length) {
+                const set = cfg.in.map(x => low(x));
+                if (Array.isArray(v)) return v.some(x => set.includes(low(x)));
+                return set.includes(low(v));
+              }
+              if (cfg.notEquals !== undefined && cfg.notEquals !== null) return low(v) !== low(cfg.notEquals);
+              return true; // no condition means always show
+            },
+            toggleInputs(){
+              // When hidden, disable all child inputs and temporarily drop required
+              const els = this.$el.querySelectorAll('input, select, textarea');
+              els.forEach(el => {
+                if (!this.visible) {
+                  if (el.required) el.setAttribute('data-was-required', '1');
+                  el.required = false;
+                  el.disabled = true;
+                } else {
+                  el.disabled = false;
+                  if (el.hasAttribute('data-was-required')) {
+                    el.required = true;
+                    el.removeAttribute('data-was-required');
+                  }
+                }
+              });
+              this.$el.setAttribute('aria-hidden', this.visible ? 'false' : 'true');
+            },
+            update(){
+              this.visible = this.matches(this.value());
+              this.toggleInputs();
+            },
+            ok(){ return this.visible; }
+          }
+        }
+      }
+
+      // saved notice helper
+      if (!window.saveNotice) {
+        window.saveNotice = function(sessionId, formId){
+          return {
+            show: false,
+            init(){
+              try {
+                const raw = localStorage.getItem('cf_saved');
+                if (raw) {
+                  const data = JSON.parse(raw);
+                  const ok = data && Number(data.session) === Number(sessionId)
+                                     && Number(data.form) === Number(formId)
+                                     && (Date.now() - Number(data.ts)) < 15000;
+                  if (ok) {
+                    this.show = true;
+                    setTimeout(() => this.show = false, 4000);
+                  }
+                  localStorage.removeItem('cf_saved');
+                }
+              } catch(e) {}
+              if (@json(session('saved') || request()->boolean('saved'))) {
+                this.show = true;
+                setTimeout(() => this.show = false, 4000);
+              }
+            }
+          }
+        }
+      }
     })();
   </script>
 </div>

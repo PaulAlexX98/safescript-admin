@@ -30,10 +30,30 @@ class PageShortcodes
             return '<a href="'.e($url).'" class="cta-primary" data-service="'.e($service).'">'.$label.'</a>';
         }, $html);
         
-        // Second, auto-upgrade any plain booking links into CTAs if they lack a class
+        // [reorder consultation service="travel clinic" label="Reorder"]
+        $patternRe = '/\[reorder\s+consultation(?P<attrs>[^\]]*)\]/i';
+
+        $expanded = preg_replace_callback($patternRe, function ($m) {
+            $attrs = [];
+            if (preg_match_all('/(\w+)="([^"]*)"/', $m['attrs'] ?? '', $am)) {
+                foreach ($am[1] as $i => $k) {
+                    $attrs[strtolower($k)] = $am[2][$i];
+                }
+            }
+
+            $service = $attrs['service'] ?? 'travel-clinic';
+            $label   = $attrs['label']   ?? 'Reorder';
+            $class   = trim($attrs['class'] ?? 'cta-primary');
+
+            $url = "/private-services/{$service}/reorder";
+
+            return '<a href="'.e($url).'" class="'.e($class).'" data-service="'.e($service).'">'.$label.'</a>';
+        }, $expanded);
+
+        // Second, auto-upgrade any plain booking or reorder links into CTAs if they lack a class
         // Example matched: <a href="/private-services/travel-clinic/book">Start now</a>
         $expanded = preg_replace_callback(
-            '/<a\s+([^>]*href=["\']\/private-services\/[^"\']+\/book["\'][^>]*)>/i',
+            '/<a\s+([^>]*href=["\']\/private-services\/[^"\']+\/(?:book|reorder)["\'][^>]*)>/i',
             function ($m) {
                 $tag = $m[0];
                 // If it already has a class attribute, leave it unchanged
@@ -45,6 +65,41 @@ class PageShortcodes
             },
             $expanded
         );
+
+        // Generic button or CTA
+        // Usage examples:
+        //   [button href="/private-services/travel-clinic/reorder" label="Reorder"]
+        //   [cta service="travel-clinic" action="book" label="Start now"]
+        $expanded = preg_replace_callback('/\[(?:button|cta)(?P<attrs>[^\]]*)\]/i', function ($m) {
+            $attrs = [];
+            if (preg_match_all('/(\w+)="([^"]*)"/', $m['attrs'] ?? '', $am)) {
+                foreach ($am[1] as $i => $k) {
+                    $attrs[strtolower($k)] = $am[2][$i];
+                }
+            }
+
+            $href = $attrs['href'] ?? ($attrs['url'] ?? '');
+
+            // Build from service + action if provided and no explicit href
+            if ($href === '' && isset($attrs['service'])) {
+                $action = strtolower($attrs['action'] ?? 'book');
+                if (!in_array($action, ['book','reorder'], true)) {
+                    $action = 'book';
+                }
+                $href = '/private-services/' . $attrs['service'] . '/' . $action;
+            }
+
+            if ($href === '') {
+                $href = '#';
+            }
+
+            $label  = $attrs['label'] ?? 'Click';
+            $class  = trim($attrs['class'] ?? 'cta-primary');
+            $target = isset($attrs['target']) ? ' target="'.e($attrs['target']).'"' : '';
+            $rel    = isset($attrs['rel'])    ? ' rel="'.e($attrs['rel']).'"'       : '';
+
+            return '<a href="'.e($href).'" class="'.e($class).'"'.$target.$rel.'>'.$label.'</a>';
+        }, $expanded);
         
         // Third, support a [card] shortcode with color/opacity/width options.
         // Usage:

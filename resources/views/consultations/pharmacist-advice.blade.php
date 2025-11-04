@@ -87,7 +87,7 @@
                     ];
                 } else {
                     $field = ['type' => $type];
-                    foreach (['label','key','placeholder','help','description','required','options','content','accept','multiple'] as $k) {
+                    foreach (['label','key','placeholder','help','description','required','options','content','accept','multiple','showIf','hidden','disabled'] as $k) {
                         if (array_key_exists($k, $data)) $field[$k] = $data[$k];
                     }
                     $current['fields'][] = $field;
@@ -156,10 +156,13 @@
         </div>
     </div>
 @else
-    <form id="cf_pharmacist-advice" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab=pharmacist-advice">
+    <form id="cf_pharmacist-advice" method="POST" enctype="multipart/form-data" action="{{ route('consultations.forms.save', ['session' => $sessionLike->id ?? $session->id ?? null, 'form' => $form->id]) }}?tab=pharmacist-advice">
         @csrf
         <input type="hidden" name="__step_slug" value="pharmacist-advice">
         <input type="hidden" id="__go_next" name="__go_next" value="0">
+        <input type="hidden" name="form_type" value="advice">
+        <input type="hidden" name="service" value="{{ $serviceFor ?? 'weight-management-service' }}">
+        <input type="hidden" name="treatment" value="{{ $treatFor ?? '' }}">
 
         <div class="space-y-10">
             @foreach ($sections as $section)
@@ -188,7 +191,42 @@
                             $help  = $field['help'] ?? ($field['description'] ?? null);
                             $req   = (bool) ($field['required'] ?? false);
                             $ph    = $field['placeholder'] ?? null;
-                            $val   = old($name, $oldData[$name] ?? '');
+                            $isMultiple = (bool) ($field['multiple'] ?? false);
+
+                            // Prefill value with array support for multi-select
+                            if ($type === 'select' && $isMultiple) {
+                                $val = old($name, (array) ($oldData[$name] ?? []));
+                            } else {
+                                $val = old($name, $oldData[$name] ?? '');
+                            }
+
+                            // Conditional visibility support from schema
+                            $showIf = $field['showIf'] ?? ($field['show_if'] ?? null);
+                            $isHidden = (bool) ($field['hidden'] ?? false);
+                            $isDisabled = (bool) ($field['disabled'] ?? false);
+
+                            $cond = null;
+                            if (is_array($showIf)) {
+                                $cond = [
+                                    'field'  => $showIf['field'] ?? null,
+                                    'equals' => $showIf['equals'] ?? null,
+                                    'in'     => $showIf['in'] ?? null,
+                                    'not'    => $showIf['notEquals'] ?? ($showIf['not'] ?? null),
+                                    'truthy' => !empty($showIf['truthy']) ? true : null,
+                                ];
+                                // prune nulls
+                                $cond = array_filter($cond, fn($v) => !is_null($v) && $v !== '');
+                                if (empty($cond['field'] ?? null)) { $cond = null; }
+                            }
+
+                            $wrapperAttr = '';
+                            if ($cond) {
+                                $wrapperAttr .= ' data-showif=' . "'" . e(json_encode($cond)) . "'";
+                            }
+                            if ($isHidden) {
+                                $wrapperAttr .= ' style="display:none" aria-hidden="true"';
+                            }
+                            $disabledAttr = $isDisabled ? 'disabled' : '';
                         @endphp
 
                         {{-- Static rich text blocks --}}
@@ -235,7 +273,7 @@
                         @endif
 
                         @if ($type === 'radio')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
                                 @if($label)
                                     <label class="cf-label">{{ $label }}</label>
                                 @endif
@@ -243,7 +281,7 @@
                                     @foreach($normaliseOptions($field['options'] ?? []) as $idx => $op)
                                         @php $rid = $name.'_'.$idx; @endphp
                                         <label for="{{ $rid }}" class="p-2 inline-flex items-center gap-2 text-sm text-gray-200">
-                                            <input type="radio" id="{{ $rid }}" name="{{ $name }}" value="{{ $op['value'] }}" class="rounded-full bg-gray-800/70 border-gray-700 focus:ring-amber-500 focus:ring-2" {{ (string)$val === (string)$op['value'] ? 'checked' : '' }}>
+                                            <input type="radio" id="{{ $rid }}" name="{{ $name }}" value="{{ $op['value'] }}" class="rounded-full bg-gray-800/70 border-gray-700 focus:ring-amber-500 focus:ring-2" {{ (string)$val === (string)$op['value'] ? 'checked' : '' }} {!! $disabledAttr !!}>
                                             <span>{{ $op['label'] }}</span>
                                         </label>
                                     @endforeach
@@ -253,23 +291,27 @@
                                 @endif
                             </div>
                         @elseif ($type === 'textarea')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <textarea id="{{ $name }}" name="{{ $name }}" rows="6" placeholder="{{ $ph }}" @if($req) required @endif class="cf-textarea">{{ $val }}</textarea>
+                                <textarea id="{{ $name }}" name="{{ $name }}" rows="6" placeholder="{{ $ph }}" @if($req) required @endif class="cf-textarea" {!! $disabledAttr !!}>{{ $val }}</textarea>
                                 @if($help)
                                     <p class="cf-help">{!! nl2br(e($help)) !!}</p>
                                 @endif
                             </div>
                         @elseif ($type === 'select')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <select id="{{ $name }}" name="{{ $name }}" @if($req) required @endif class="cf-input">
+                                <select id="{{ $name }}" name="{{ $name }}{{ $isMultiple ? '[]' : '' }}" @if($isMultiple) multiple @endif @if($req) required @endif class="cf-input" {!! $disabledAttr !!}>
                                     @foreach($normaliseOptions($field['options'] ?? []) as $op)
-                                        <option value="{{ $op['value'] }}" {{ (string)$val === (string)$op['value'] ? 'selected' : '' }}>{{ $op['label'] }}</option>
+                                        @if($isMultiple)
+                                            <option value="{{ $op['value'] }}" {{ in_array((string)$op['value'], array_map('strval', (array) $val), true) ? 'selected' : '' }}>{{ $op['label'] }}</option>
+                                        @else
+                                            <option value="{{ $op['value'] }}" {{ (string)$val === (string)$op['value'] ? 'selected' : '' }}>{{ $op['label'] }}</option>
+                                        @endif
                                     @endforeach
                                 </select>
                                 @if($help)
@@ -277,39 +319,40 @@
                                 @endif
                             </div>
                         @elseif ($type === 'checkbox')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
                                 <div class="cf-checkbox-row">
-                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" class="rounded-md bg-gray-800/70 border-gray-700 focus:ring-amber-500 focus:ring-2 mt-0.5" {{ $val ? 'checked' : '' }}>
+                                    <input type="hidden" name="{{ $name }}" value="0">
+                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" value="1" class="rounded-md bg-gray-800/70 border-gray-700 focus:ring-amber-500 focus:ring-2 mt-0.5" {{ ((string)$val === '1' || $val === 1 || $val === true || $val === 'on') ? 'checked' : '' }} {!! $disabledAttr !!}>
                                     <label for="{{ $name }}" class="text-sm text-gray-200 cursor-pointer select-none leading-6">{{ $label }}</label>
                                 </div>
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @elseif ($type === 'date')
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <input type="date" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif class="cf-input" />
+                                <input type="date" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif class="cf-input" {!! $disabledAttr !!} />
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
-                        @elseif ($type === 'file')
+                        @elseif ($type === 'file' || $type === 'file_upload')
                             @php
                                 $accept   = $field['accept'] ?? null;
                                 $multiple = (bool) ($field['multiple'] ?? false);
                             @endphp
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <input type="file" id="{{ $name }}" name="{{ $name }}{{ $multiple ? '[]' : '' }}" @if($accept) accept="{{ $accept }}" @endif @if($multiple) multiple @endif class="cf-file" />
+                                <input type="file" id="{{ $name }}" name="{{ $name }}{{ $multiple ? '[]' : '' }}" @if($accept) accept="{{ $accept }}" @endif @if($multiple) multiple @endif class="cf-file" {!! $disabledAttr !!} />
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @else
-                            <div class="{{ $fieldCard }}">
+                            <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <input type="text" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" placeholder="{{ $ph }}" @if($req) required @endif class="cf-input" />
+                                <input type="text" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" placeholder="{{ $ph }}" @if($req) required @endif class="cf-input" {!! $disabledAttr !!} />
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @endif
@@ -358,6 +401,98 @@
 
           // initial state
           syncMaster();
+        });
+        </script>
+
+        <script>
+        document.addEventListener('DOMContentLoaded', function(){
+          var form = document.getElementById('cf_pharmacist-advice');
+          if (!form) return;
+
+          function findControlsByName(name){
+            var list = [];
+            form.querySelectorAll('[name="'+name+'"]').forEach(function(el){ list.push(el); });
+            form.querySelectorAll('[name="'+name+'[]"]').forEach(function(el){ list.push(el); });
+            return list;
+          }
+
+          function getValue(name){
+            var els = findControlsByName(name);
+            if (!els.length) return null;
+            if (els[0].type === 'radio') {
+              var c = els.find(function(e){ return e.checked; });
+              return c ? c.value : null;
+            }
+            if (els[0].type === 'checkbox' && els.length === 1) {
+              return els[0].checked ? '1' : '';
+            }
+            if (els[0].tagName === 'SELECT') {
+              var sel = els[0];
+              if (sel.multiple) {
+                var out = [];
+                [].forEach.call(sel.options, function(o){ if (o.selected) out.push(o.value); });
+                return out;
+              }
+              return sel.value;
+            }
+            if (els[0].type === 'file') {
+              return els[0].files && els[0].files.length ? '[file]' : '';
+            }
+            if (els.length === 1) return (els[0].value || '').trim();
+            return els.map(function(e){ return (e.value || '').trim(); });
+          }
+
+          function matchesCond(val, cond){
+            var arr = Array.isArray(val) ? val.map(String) : [val === null ? '' : String(val)];
+            if (cond.equals !== undefined) {
+              var eq = String(cond.equals);
+              if (!arr.some(function(v){ return v === eq; })) return false;
+            }
+            if (cond.in && cond.in.length) {
+              var set = cond.in.map(String);
+              if (!arr.some(function(v){ return set.indexOf(v) !== -1; })) return false;
+            }
+            if (cond.not !== undefined) {
+              var neq = String(cond.not);
+              if (arr.some(function(v){ return v === neq; })) return false;
+            }
+            if (cond.truthy) {
+              var tr = arr.some(function(v){ return v !== '' && v !== '0' && v.toLowerCase() !== 'false'; });
+              if (!tr) return false;
+            }
+            return true;
+          }
+
+          function applyFor(el){
+            var raw = el.getAttribute('data-showif');
+            if (!raw) return;
+            var cond; try { cond = JSON.parse(raw); } catch(e){ return; }
+            if (!cond || !cond.field) return;
+            var ok = matchesCond(getValue(cond.field), cond);
+            el.style.display = ok ? '' : 'none';
+            el.setAttribute('aria-hidden', ok ? 'false' : 'true');
+            el.querySelectorAll('input,select,textarea').forEach(function(ctrl){ ctrl.disabled = !ok; });
+          }
+
+          var blocks = [].slice.call(form.querySelectorAll('[data-showif]'));
+          var deps = {};
+          blocks.forEach(function(el){
+            try {
+              var c = JSON.parse(el.getAttribute('data-showif') || '{}');
+              if (!c || !c.field) return;
+              (deps[c.field] = deps[c.field] || []).push(el);
+            } catch(e){}
+          });
+
+          Object.keys(deps).forEach(function(name){
+            var ctrls = findControlsByName(name);
+            ctrls.forEach(function(ctrl){
+              var ev = (ctrl.tagName === 'SELECT' || ctrl.type === 'radio' || ctrl.type === 'checkbox' || ctrl.type === 'file') ? 'change' : 'input';
+              ctrl.addEventListener(ev, function(){ (deps[name] || []).forEach(applyFor); });
+            });
+          });
+
+          blocks.forEach(applyFor);
         });
         </script>
 

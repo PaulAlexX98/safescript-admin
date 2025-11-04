@@ -288,35 +288,31 @@ class PendingOrderResource extends Resource
                     ->label('Type')
                     ->getStateUsing(function ($record) {
                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                        $type = data_get($meta, 'type');
+                        $norm = fn ($v) => strtolower(trim((string) $v));
 
-                        if (!is_string($type) || $type === '') {
-                            $svc = (string) (data_get($meta, 'service')
-                                ?? data_get($meta, 'serviceName')
-                                ?? data_get($meta, 'title')
-                                ?? '');
-                            $t = strtolower($svc);
-                            if ($t !== '') {
-                                if (str_contains($t, 'nhs') || str_contains($t, 'new')) {
-                                    $type = 'new';
-                                } elseif (str_contains($t, 'reorder') || str_contains($t, 'repeat') || str_contains($t, 're-order')) {
-                                    $type = 'reorder';
-                                } elseif (str_contains($t, 'transfer')) {
-                                    $type = 'transfer';
-                                } elseif (str_contains($t, 'consult')) {
-                                    $type = 'consultation';
-                                }
-                            }
-                        }
+                        $raw  = $norm(data_get($meta, 'type'));
+                        $mode = $norm(data_get($meta, 'mode') ?? data_get($meta, 'flow'));
+                        $path = $norm(data_get($meta, 'path') ?? data_get($meta, 'source_url') ?? data_get($meta, 'referer'));
+                        $svc  = $norm(data_get($meta, 'service') ?? data_get($meta, 'serviceName') ?? data_get($meta, 'title') ?? '');
+                        $ref  = strtoupper((string) ($record->reference ?? ''));
 
-                        if (!is_string($type) || $type === '') return null;
-                        return match (strtolower($type)) {
-                            'new', 'nhs' => 'New Patient',
-                            'transfer' => 'Transfer Patient',
-                            'consultation' => 'Consultation',
-                            'reorder', 'repeat', 're-order' => 'Reorder',
-                            default => ucfirst($type),
-                        };
+                        $isReorder = in_array($raw, ['reorder','repeat','re-order','repeat-order'], true)
+                            || in_array($mode, ['reorder','repeat'], true)
+                            || str_contains($path, '/reorder')
+                            || preg_match('/^PTC[A-Z]*R\d{6}$/', $ref)
+                            || str_contains($svc, 'reorder') || str_contains($svc, 'repeat') || str_contains($svc, 're-order');
+
+                        $isNhs = ($raw === 'nhs')
+                            || preg_match('/^PTC[A-Z]*H\d{6}$/', $ref)
+                            || str_contains($svc, 'nhs');
+
+                        $isNew = ($raw === 'new')
+                            || preg_match('/^PTC[A-Z]*N\d{6}$/', $ref);
+
+                        if ($isReorder) return 'Reorder';
+                        if ($isNhs)     return 'NHS';
+                        if ($isNew)     return 'New';
+                        return null;
                     })
                     ->toggleable(),
 
@@ -379,60 +375,40 @@ class PendingOrderResource extends Resource
                 SelectFilter::make('type')
                     ->label('Type')
                     ->options([
-                        'new' => 'New Patient',
-                        'transfer' => 'Transfer Patient',
-                        'consultation' => 'Consultation',
+                        'new' => 'New',
+                        'nhs' => 'NHS',
                         'reorder' => 'Reorder',
                     ])
                     ->query(function (Builder $query, array $data): Builder {
                         $val = strtolower((string)($data['value'] ?? ''));
-                        if ($val === '') {
-                            return $query;
-                        }
+                        if ($val === '') return $query;
 
-                        // Map UI values to the variants we actually see in data
-                        $aliases = match ($val) {
-                            'reorder' => ['reorder', 'repeat', 're-order'],
-                            'new' => ['new', 'nhs'], // treat NHS JSON type as New Patient
-                            default => [$val],
-                        };
+                        return $query->where(function (Builder $q) use ($val) {
+                            // meta.type exact
+                            $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.type'))) = ?", [$val])
+                            ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.\"type\"'))) = ?", [$val]);
 
-                        return $query->where(function (Builder $q) use ($aliases) {
-                            // (1) JSON meta.type exact matches (support both $.type and $."type")
-                            $placeholders = implode(',', array_fill(0, count($aliases), '?'));
-                            $q->where(function (Builder $qb) use ($aliases, $placeholders) {
-                                $qb->whereRaw(
-                                    "LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.type'))) IN ($placeholders)",
-                                    $aliases
-                                )->orWhereRaw(
-                                    "LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.\"type\"'))) IN ($placeholders)",
-                                    $aliases
-                                );
-                            });
+                            // reference patterns
+                            if ($val === 'reorder') {
+                                $q->orWhere('reference', 'REGEXP', '^PTC[A-Z]*R[0-9]{6}$');
+                            } elseif ($val === 'nhs') {
+                                $q->orWhere('reference', 'REGEXP', '^PTC[A-Z]*H[0-9]{6}$');
+                            } elseif ($val === 'new') {
+                                $q->orWhere('reference', 'REGEXP', '^PTC[A-Z]*N[0-9]{6}$');
+                            }
 
-                            // (3) Fallback keyword inference from service/serviceName/title
-                            foreach ($aliases as $a) {
-                                $needle = "%$a%";
-
-                                if (in_array($a, ['reorder','repeat','re-order'])) {
-                                    $needle = '%reorder%';
-                                } elseif ($a === 'consultation') {
-                                    $needle = '%consult%';
-                                }
-
-                                if ($a === 'nhs' || $a === 'new') {
-                                    // special-case: match either 'nhs' or 'new'
-                                    $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE ?", ['%nhs%'])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE ?", ['%new%'])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE ?", ['%nhs%'])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE ?", ['%new%'])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE ?", ['%nhs%'])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE ?", ['%new%']);
-                                } else {
-                                    $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE ?", [$needle])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE ?", [$needle])
-                                      ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE ?", [$needle]);
-                                }
+                            // service name hints
+                            if ($val === 'reorder') {
+                                $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE '%reorder%'")
+                                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE '%repeat%'")
+                                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE '%reorder%'")
+                                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE '%repeat%'")
+                                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE '%reorder%'")
+                                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE '%repeat%'");
+                            } elseif ($val === 'nhs') {
+                                $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE '%nhs%'")
+                                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE '%nhs%'")
+                                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE '%nhs%'");
                             }
                         });
                     }),

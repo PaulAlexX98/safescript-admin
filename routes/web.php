@@ -18,17 +18,58 @@ use App\Models\PendingOrder;
 use App\Models\ApprovedOrder;
 use App\Models\ClinicForm; 
 use App\Models\ConsultationFormResponse;
+use App\Models\ConsultationSession;
 use App\Http\Controllers\Admin\ConsultationPdfController;
 use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
 use App\Services\Consultations\StartConsultation;
-use App\Filament\Pages\ConsultationRunner;
-use App\Models\ConsultationSession;
 use App\Http\Controllers\ConsultationFormController;
 use App\Http\Controllers\ConsultationRunnerController;
 
 Route::get('/consultations/{session}/risk-assessment', function (ConsultationSession $session) {
     return redirect()->route('consultations.risk_assessment', ['session' => $session->id]);
 })->name('consultations.runner.risk_assessment');
+
+
+
+
+// Generic runner start alias that decides first step based on the session
+Route::get('/consultations/{session}/start', function (ConsultationSession $session) {
+    $rawMeta = $session->meta ?? [];
+    $meta = is_array($rawMeta) ? $rawMeta : (json_decode($rawMeta ?? '[]', true) ?: []);
+    $steps = is_array($session->steps ?? null) ? $session->steps : (array) (\Illuminate\Support\Arr::get($meta, 'steps', []) ?: []);
+    $first = $steps[0] ?? (\Illuminate\Support\Arr::get($meta, 'start.first_step') ?? \Illuminate\Support\Arr::get($meta, 'first_step'));
+
+    if (! $first) {
+        $type = strtolower((string) (\Illuminate\Support\Arr::get($meta, 'order.type', '') ?: ''));
+        $isReorderFlag = filter_var(\Illuminate\Support\Arr::get($meta, 'reorder', false), FILTER_VALIDATE_BOOLEAN);
+        $first = ($isReorderFlag || in_array($type, ['reorder','maintenance','refill'], true)) ? 'reorder' : 'raf';
+    }
+
+    if ($first === 'reorder') {
+        if (\Illuminate\Support\Facades\Route::has('consultations.reorder')) {
+            return redirect()->route('consultations.reorder', ['session' => $session->id]);
+        }
+        return redirect("/admin/consultations/{$session->id}?tab=reorder");
+    }
+
+    if (\Illuminate\Support\Facades\Route::has('consultations.risk_assessment')) {
+        return redirect()->route('consultations.risk_assessment', ['session' => $session->id]);
+    }
+    return redirect("/admin/consultations/{$session->id}?tab=risk-assessment");
+})->name('consultations.runner.start');
+
+// Runner alias for reorder that forwards to the admin route or tab fallback
+Route::get('/consultations/{session}/reorder', function (ConsultationSession $session) {
+    if (\Illuminate\Support\Facades\Route::has('consultations.reorder')) {
+        return redirect()->route('consultations.reorder', ['session' => $session->id]);
+    }
+    return redirect("/admin/consultations/{$session->id}?tab=reorder");
+})->name('consultations.runner.reorder');
+
+Route::middleware(['web', FilamentAuthenticate::class])->group(function () {
+    Route::post('/consultations/save', [ConsultationFormController::class, 'saveByPost'])
+        ->name('consultations.save');
+});
 
 Route::middleware([
     'web',
@@ -147,6 +188,9 @@ Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admi
             return redirect()->to("/admin/consultations/{$session->id}?tab=record-of-supply");
         })->name('consultations.record_of_supply');
 
+        Route::get('{session}/reorder', [ConsultationRunnerController::class, 'reorder'])
+            ->name('consultations.reorder');
+
         Route::get('{session}/risk-assessment', [ConsultationRunnerController::class, 'riskAssessment'])
             ->name('consultations.risk_assessment');
         Route::get('{session}/patient-declaration', [ConsultationRunnerController::class, 'patientDeclaration'])
@@ -156,6 +200,7 @@ Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admi
             return response()->json(['ok' => true, 'where' => 'admin/consultations group loaded']);
         })->name('consultations.debug');
 
+
         // Submitted Forms: View / Edit / History pages (used by CompletedOrderDetails buttons)
         Route::prefix('forms')->name('consultations.forms.')->controller(ConsultationFormController::class)->group(function () {
             Route::get('{session}/{form}/view', 'view')->name('view');
@@ -163,27 +208,28 @@ Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admi
             Route::get('{session}/{form}/edit', 'edit')->name('edit');
         });
 
+        Route::get('{session}/{form}/__probe', function (\App\Models\ConsultationSession $session, $form, \Illuminate\Http\Request $req) {
+            return response()->json([
+                'session_param_type' => get_class($session),
+                'session_id'         => $session->id,
+                'form_param_type'    => is_object($form) ? get_class($form) : gettype($form),
+                'form_payload'       => is_object($form)
+                                           ? array_filter([
+                                                 'id'    => $form->id ?? null,
+                                                 'consultation_session_id' => $form->consultation_session_id ?? null,
+                                                 'clinic_form_id' => $form->clinic_form_id ?? null,
+                                                 'step_slug' => $form->step_slug ?? null,
+                                             ])
+                                           : $form,
+                'user_id'            => auth()->id(),
+            ]);
+        })->name('consultations.forms.probe');
+
         // Parameter constraints for clarity
         Route::whereNumber('session');
         Route::whereNumber('form');
     });
-Route::get('{session}/{form}/__probe', function (\App\Models\ConsultationSession $session, $form, \Illuminate\Http\Request $req) {
-    return response()->json([
-        'session_param_type' => get_class($session),
-        'session_id'         => $session->id,
-        'form_param_type'    => is_object($form) ? get_class($form) : gettype($form),
-        'form_payload'       => is_object($form)
-                                   ? array_filter([
-                                         'id'    => $form->id ?? null,
-                                         'consultation_session_id' => $form->consultation_session_id ?? null,
-                                         'clinic_form_id' => $form->clinic_form_id ?? null,
-                                         'step_slug' => $form->step_slug ?? null,
-                                     ])
-                                   : $form,
-        'inline'             => $req->boolean('inline'),
-        'user_id'            => auth()->id(),
-    ]);
-})->name('consultations.forms.probe');
+    
 
 
 // Inline view fallback if resources/views/consultations/placeholder.blade.php does not exist

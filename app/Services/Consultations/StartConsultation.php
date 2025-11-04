@@ -3,23 +3,124 @@
 namespace App\Services\Consultations;
 
 use RuntimeException;
-use App\Models\PendingOrder;
 use Throwable;
-use Log;
-use DB;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Contracts\Support\Arrayable;
+use App\Models\PendingOrder;
 use App\Models\ApprovedOrder;
 use App\Models\Service;
 use App\Models\ClinicForm;
 use App\Models\ConsultationSession;
-use Illuminate\Support\Arr;
-use Illuminate\Support\Str;
 
 class StartConsultation
 {
+    /**
+     * Safely coerce JSON-or-array values to an array without double-decoding.
+     * Handles arrays, stdClass, JSON strings, Collections, Arrayable.
+     */
+    private function arr($v): array
+    {
+        if (is_array($v)) return $v;
+
+        if ($v instanceof \ArrayObject) return $v->getArrayCopy();
+        if ($v instanceof Arrayable) return $v->toArray();
+        if ($v instanceof \stdClass) return (array) $v;
+        if ($v instanceof Collection) return $v->toArray();
+
+        if (is_string($v)) {
+            $s = trim($v);
+            if ($s === '') return [];
+            try {
+                // Only decode strings. Never attempt to decode arrays/objects.
+                $d = json_decode($s, true, 512, JSON_THROW_ON_ERROR);
+                return is_array($d) ? $d : [];
+            } catch (Throwable $e) {
+                return [];
+            }
+        }
+
+        return [];
+    }
+
+    private function decodeToArray($value): array
+    {
+        // Delegate to the existing safe coercion helper to avoid double-decoding
+        return $this->arr($value);
+    }
+
+    /**
+     * Recursively build a map of field key -> label from a ClinicForm schema array.
+     */
+    private function buildLabelMapFromSchema($schema): array
+    {
+        $map = [];
+
+        $walk = function ($node) use (&$walk, &$map) {
+            if ($node instanceof \stdClass) {
+                $node = (array) $node;
+            }
+            if (! is_array($node)) {
+                return;
+            }
+
+            $type  = strtolower((string) (Arr::get($node, 'type', '') ?? ''));
+            $key   = Arr::get($node, 'name')
+                    ?? Arr::get($node, 'key')
+                    ?? Arr::get($node, 'data.key');
+            $label = Arr::get($node, 'data.label')
+                    ?? Arr::get($node, 'label');
+
+            // input-ish nodes: if they have a key/name and a label, record it
+            if ($key && $label && ! isset($map[$key])) {
+                $map[(string) $key] = (string) $label;
+            }
+
+            // traverse common child holders
+            foreach (['schema','components','fields','children','columns','rows'] as $childKey) {
+                $maybe = $node[$childKey] ?? null;
+                if (is_array($maybe)) {
+                    foreach ($maybe as $child) {
+                        $walk($child);
+                    }
+                }
+            }
+
+            // also traverse any nested arrays generically
+            foreach ($node as $k => $v) {
+                if (is_array($v) || $v instanceof \stdClass) {
+                    $walk($v);
+                }
+            }
+        };
+
+        $walk($schema);
+        return $map;
+    }
+
+    /**
+     * Convert a flat answers array into QA rows using an optional label map.
+     */
+    private function toQaRows(array $answers, array $labelMap = []): array
+    {
+        $out = [];
+        foreach ($answers as $k => $v) {
+            $label = $labelMap[$k] ?? Str::headline((string) $k);
+            $out[] = [
+                'key'      => (string) $k,
+                'question' => (string) $label,
+                'answer'   => $v,
+            ];
+        }
+        return $out;
+    }
+
     public function __invoke(ApprovedOrder $order): ConsultationSession
     {
-        // If a session already exists for this order, reuse it but do NOT return early.
-        // We still want to reattach answers and sync order/pending snapshots below.
+        // Reuse an existing session for this order if present.
         $session = ConsultationSession::where('order_id', $order->id)->first();
 
         // Resolve service + treatment from the order (be generous with sources)
@@ -37,7 +138,6 @@ class StartConsultation
             $order->treatment ?? null,
             $order->product_slug ?? null,
             $order->product ?? null,
-            // common meta shapes from your orders
             Arr::get($order->meta ?? [], 'treatment.slug'),
             Arr::get($order->meta ?? [], 'treatment'),
             Arr::get($order->meta ?? [], 'product.slug'),
@@ -54,23 +154,19 @@ class StartConsultation
             Arr::get($order->meta ?? [], 'line_items.0.name'),
         ]);
 
-        // We’re strict: a treatment must be present.
         if (! $treat) {
             throw new RuntimeException('Missing treatment for this service; cannot start consultation.');
         }
 
-        // Ensure the session is tied to a user (column is NOT NULL in DB)
         if (empty($order->user_id)) {
             throw new RuntimeException('Cannot start consultation because order has no user_id. Link the order to a user.');
         }
 
         // Helper to fetch a specific form_type with sensible fallbacks:
-        // 1) exact match service + treatment
-        // 2) service-only generic (no treatment)
-        // 3) global generic (no service, no treatment)
         $pick = function (string $type) use ($service, $treat) {
             $aliases = [
                 'raf'         => ['raf'],
+                'assessment'  => ['assessment','risk_assessment','risk-assessment','intake'],
                 'advice'      => ['advice', 'consultation_advice'],
                 'declaration' => ['pharmacist_declaration', 'declaration'],
                 'supply'      => ['supply', 'record_of_supply', 'record-of-supply'],
@@ -78,7 +174,7 @@ class StartConsultation
             ];
             $types = $aliases[$type] ?? [$type];
 
-            $base = fn () => \App\Models\ClinicForm::query()
+            $base = fn () => ClinicForm::query()
                 ->where('is_active', true)
                 ->whereIn('form_type', $types)
                 ->orderByDesc('version')
@@ -123,17 +219,27 @@ class StartConsultation
             || Str::contains((string) $service, ['reorder','repeat'])
         );
 
-        // Service-first templates
-        $orderedKeys = ['raf', 'advice', 'declaration', 'supply'];
+        // Service-first templates and step order
+        if ($isReorder) {
+            $orderedKeys = ['reorder','advice','declaration','supply'];
+        } else {
+            $orderedKeys = ['raf','assessment','advice','declaration','supply'];
+        }
         $templates = array_fill_keys($orderedKeys, null);
 
         $svc = $order->service ?? optional($order->product)->service ?? Service::where('slug', $service)->first();
 
         if ($svc) {
-            // RAF or Reorder depending on flow
-            $templates['raf'] = $isReorder
-                ? ($svc->reorderForm ?? null)
-                : ($svc->rafForm ?? null);
+            if ($isReorder) {
+                // Reorder-first flow: first step is the Reorder form
+                $templates['reorder']    = $svc->reorderForm ?? null;
+            } else {
+                // New consultation flow: first step is RAF, then optional assessment
+                $templates['raf']        = $svc->rafForm ?? null;
+                if (empty($templates['assessment']) && method_exists($svc, 'assessmentForm')) {
+                    $templates['assessment'] = $svc->assessmentForm ?: null;
+                }
+            }
 
             $templates['advice']      = $svc->adviceForm ?? null;
             $templates['declaration'] = $svc->pharmacistDeclarationForm ?? null;
@@ -142,8 +248,18 @@ class StartConsultation
         }
 
         // Fill any missing steps using ClinicForm templates with sensible fallbacks
-        if (empty($templates['raf'])) {
-            $templates['raf'] = $isReorder ? ($pick('reorder') ?: $pick('raf')) : $pick('raf');
+        if ($isReorder) {
+            if (empty($templates['reorder'])) {
+                // Prefer a true reorder template, otherwise fall back to RAF if configured that way
+                $templates['reorder'] = $pick('reorder') ?: $pick('raf');
+            }
+        } else {
+            if (empty($templates['raf'])) {
+                $templates['raf'] = $pick('raf');
+            }
+            if (empty($templates['assessment'])) {
+                $templates['assessment'] = $pick('assessment');
+            }
         }
         if (empty($templates['advice'])) {
             $templates['advice'] = $pick('advice');
@@ -166,54 +282,49 @@ class StartConsultation
         $snapshot = [];
         foreach ($stepKeys as $key) {
             $form = $available[$key];
+
+            // ensure schema is an array without double-decoding
+            $schemaArr = $this->decodeToArray($form->schema);
+
             $snapshot[$key] = [
                 'id'      => $form->id,
                 'name'    => $form->name,
                 'version' => $form->version,
-                'schema'  => $form->schema,
+                'schema'  => $schemaArr,
             ];
         }
 
         // If a session already exists, sync its templates and steps without resetting progress
-        if ($session) {
-            $session->templates = $snapshot;
-            $session->steps     = array_values($stepKeys);
-            // keep current pointer in range
-            $maxIndex = max(0, count($session->steps) - 1);
-            if (! is_int($session->current) || $session->current > $maxIndex) {
-                $session->current = 0;
-            }
-            $session->save();
-        }
+        // Upsert the session with safe arrays to avoid json_decode on arrays
+        $maxIndex     = max(0, count($stepKeys) - 1);
+        $currentIndex = (is_int($session?->current) && $session->current <= $maxIndex) ? $session->current : 0;
 
-        // Reuse existing session for this order if one exists; otherwise create a new one
-        if (!$session) {
-            $session = ConsultationSession::firstOrCreate(
-                ['order_id' => (int) $order->id],
-                [
-                    'user_id'   => (int) $order->user_id,
-                    'service'   => (string) $service,
-                    'treatment' => (string) $treat,
-                    'templates' => $snapshot,
-                    'steps'     => array_values($stepKeys),
-                    'current'   => 0,
-                ]
-            );
-        }
+        $payload = [
+            'user_id'   => (int) $order->user_id,
+            'service'   => (string) $service,
+            'treatment' => (string) $treat,
+            'templates' => (array) ($snapshot ?? []),
+            'steps'     => array_values((array) ($stepKeys ?? [])),
+            'current'   => $currentIndex,
+            'meta'      => (array) ($session?->meta ?? []),
+        ];
+
+        $session = ConsultationSession::updateOrCreate(
+            ['order_id' => (int) $order->id],
+            $payload
+        );
 
         // Denormalise essential info back onto the order->meta so downstream UIs can rely on it
-        $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+        $meta = $this->decodeToArray($order->meta);
 
         // --- Reattach assessment answers (no cross-session hydration) ---
-        // 1) Prefer answers from the PENDING order (same reference) snapshot.
-        // 2) If missing, read ONLY the CURRENT session DB row.
-        // 3) As a last resort, use answers already present on the APPROVED order snapshot.
         $answers = null;
+
         // (1) PendingOrder (same reference only)
         try {
             $pending = PendingOrder::where('reference', $order->reference)->first();
             if ($pending) {
-                $pm = is_array($pending->meta) ? $pending->meta : (json_decode($pending->meta ?? '[]', true) ?: []);
+                $pm = $this->decodeToArray($pending->meta);
                 $answers = Arr::get($pm, 'assessment.answers')
                         ?? Arr::get($pm, 'assessment_snapshot');
             }
@@ -230,10 +341,8 @@ class StartConsultation
                     ->orderByDesc('id')
                     ->value('data');
 
-                if ($existing) {
-                    $answers = is_string($existing)
-                        ? (json_decode($existing, true) ?: [])
-                        : $existing;
+                if ($existing !== null) {
+                    $answers = $this->decodeToArray($existing);
                 }
             } catch (Throwable $e) {
                 Log::warning('Unable to read current-session answers: ' . $e->getMessage());
@@ -246,11 +355,36 @@ class StartConsultation
                     ?? Arr::get($meta, 'assessment_snapshot');
         }
 
-        if (!empty($answers)) {
+        // Force-normalise $answers to an array before any downstream use
+        $answers = $this->decodeToArray($answers);
+
+        if (! empty($answers)) {
+            // Choose a schema to label questions: prefer assessment, then raf
+            $assessmentSchemaSnap = $snapshot['assessment']['schema'] ?? [];
+            $rafSchemaSnap        = $snapshot['raf']['schema'] ?? [];
+            $labelMap = [];
+            if (! empty($assessmentSchemaSnap)) {
+                $labelMap = $this->buildLabelMapFromSchema($assessmentSchemaSnap);
+            } elseif (! empty($rafSchemaSnap)) {
+                $labelMap = $this->buildLabelMapFromSchema($rafSchemaSnap);
+            }
+
+            // Build QA rows for admin rendering
+            $qaRows = $this->toQaRows(is_array($answers) ? $answers : [], $labelMap);
+
             // Attach to order snapshot
             $meta['assessment'] = $meta['assessment'] ?? [];
             $meta['assessment']['answers'] = $answers;
-            // Also keep an immutable snapshot for admin UIs
+            $meta['assessment']['qa']      = $qaRows; // convenient inline QA list
+
+            // Also surface under formsQA for all UIs that expect this shape
+            $meta['formsQA'] = $meta['formsQA'] ?? [];
+            $meta['formsQA']['assessment'] = [
+                'qa'     => $qaRows,
+                'schema' => $assessmentSchemaSnap ?: $rafSchemaSnap,
+            ];
+
+            // Keep an immutable snapshot
             $meta['assessment_snapshot'] = $answers;
 
             // Persist to this session's consultation_form_responses row (idempotent)
@@ -259,7 +393,8 @@ class StartConsultation
                     ['consultation_session_id' => $session->id, 'form_type' => 'risk_assessment'],
                     [
                         'clinic_form_id' => null,
-                        'data'          => json_encode($answers),
+                        // keep legacy shape as answers-only for compatibility
+                        'data'          => json_encode($this->decodeToArray($answers)),
                         'is_complete'   => 1,
                         'completed_at'  => now(),
                         'updated_at'    => now(),
@@ -280,10 +415,10 @@ class StartConsultation
                 ?: PendingOrder::where('user_id', $order->user_id)->latest()->first();
 
             if ($pending) {
-                $pm = is_array($pending->meta) ? $pending->meta : (json_decode($pending->meta ?? '[]', true) ?: []);
+                $pm = $this->decodeToArray($pending->meta);
                 $pm['consultation_session_id'] = $session->id;
 
-                if (!empty($answers)) {
+                if (! empty($answers)) {
                     $pm['assessment'] = $pm['assessment'] ?? [];
                     $pm['assessment']['answers'] = $answers;
                 }
@@ -305,7 +440,7 @@ class StartConsultation
                                                     ?? ($order->user->dob ?? null));
 
         // Snapshot payment status from the column so the UI doesn't have to guess where to read it
-        if (!isset($meta['payment_status']) || $meta['payment_status'] === null || $meta['payment_status'] === '') {
+        if (! isset($meta['payment_status']) || $meta['payment_status'] === null || $meta['payment_status'] === '') {
             $meta['payment_status'] = (string) ($order->payment_status ?? '');
         }
 
@@ -317,7 +452,7 @@ class StartConsultation
 
         if (empty($items)) {
             $sp = Arr::get($meta, 'selectedProduct') ?? [];
-            if (!empty($sp)) {
+            if (! empty($sp)) {
                 $items = [[
                     'name'       => $sp['name'] ?? (Arr::get($sp, 'title', 'Item')),
                     'qty'        => (int) ($sp['qty'] ?? 1),
@@ -346,10 +481,12 @@ class StartConsultation
                                         ?? '');
                 }
                 // keep qty sane
-                if (!isset($it['qty'])) {
+                if (! isset($it['qty'])) {
                     $it['qty'] = (int) (Arr::get($it, 'quantity', 1));
                 }
-                if ($it['qty'] < 1) { $it['qty'] = 1; }
+                if ($it['qty'] < 1) {
+                    $it['qty'] = 1;
+                }
             }
             unset($it);
             $meta['items'] = array_values($items);
@@ -364,7 +501,9 @@ class StartConsultation
     private function slugish(?string $v): ?string
     {
         $v = trim((string) $v);
-        if ($v === '') return null;
+        if ($v === '') {
+            return null;
+        }
         return Str::slug($v);
     }
 
@@ -372,7 +511,9 @@ class StartConsultation
     {
         foreach ($values as $v) {
             $s = $this->slugish(is_string($v) ? $v : (is_null($v) ? null : (string) $v));
-            if ($s) return $s;
+            if ($s) {
+                return $s;
+            }
         }
         return null;
     }
