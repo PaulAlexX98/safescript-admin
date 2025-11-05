@@ -313,6 +313,7 @@
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
                                 <select id="{{ $name }}" name="{{ $name }}" @if($req) required @endif class="cf-input">
+                                    <option value="" @if($req) disabled @endif @if(!strlen((string)$val)) selected @endif>Please select</option>
                                     @foreach($normaliseOptions($field['options'] ?? []) as $op)
                                         <option value="{{ $op['value'] }}" {{ (string)$val === (string)$op['value'] ? 'selected' : '' }}>{{ $op['label'] }}</option>
                                     @endforeach
@@ -377,6 +378,24 @@
                 </div>
             @endforeach
 
+            {{-- Other clinical notes --}}
+            <div class="cf-section-card">
+                <div class="mb-4">
+                    <h3 class="cf-title">Other clinical notes</h3>
+                </div>
+                <div class="cf-grid">
+                    <div class="cf-field-flat cf-span-2">
+                        <input
+                            type="text"
+                            id="other_clinical_notes"
+                            name="other_clinical_notes"
+                            value="{{ old('other_clinical_notes', $oldData['other_clinical_notes'] ?? '') }}"
+                            placeholder="Add any additional clinical notes"
+                            class="cf-input"
+                        />
+                    </div>
+                </div>
+            </div>
             {{-- Admin Notes imported from Approved Order --}}
             <div class="cf-section-card">
                 <div class="mb-4">
