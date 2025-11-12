@@ -576,6 +576,9 @@
 @else
     <form id="cf_risk-assessment" method="POST" action="{{ route('consultations.forms.save', ['session' => $sessionLike->id ?? $session->id, 'form' => $form->id]) }}?tab=risk-assessment" enctype="multipart/form-data">
         @csrf
+        <input type="hidden" name="form_type" value="risk_assessment">
+        @if($serviceFor)<input type="hidden" name="service_slug" value="{{ $serviceFor }}">@endif
+        @if($treatFor)<input type="hidden" name="treatment_slug" value="{{ $treatFor }}">@endif
         <input type="hidden" name="__step_slug" value="risk-assessment">
         <input type="hidden" id="__go_next" name="__go_next" value="0">
 
@@ -760,7 +763,7 @@
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <textarea id="{{ $name }}" name="{{ $name }}" rows="6" placeholder="{{ $ph }}" @if($req) required @endif class="cf-textarea">{{ $val }}</textarea>
+                                <textarea id="{{ $name }}" name="{{ $name }}" rows="6" placeholder="{{ $ph }}" data-req="{{ $req ? 1 : 0 }}" class="cf-textarea">{{ $val }}</textarea>
                                 @if($help)
                                     <p class="cf-help">{!! nl2br(e($help)) !!}</p>
                                 @endif
@@ -789,7 +792,7 @@
                                         $valSlug = is_string($vals) ? \Illuminate\Support\Str::slug($vals) : $vals;
                                     }
                                 @endphp
-                                <select id="{{ $name }}" name="{{ $name }}{{ $isMultiple ? '[]' : '' }}" @if($req) required @endif class="cf-input" {{ $isMultiple ? 'multiple' : '' }}>
+                                <select id="{{ $name }}" name="{{ $name }}{{ $isMultiple ? '[]' : '' }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" {{ $isMultiple ? 'multiple' : '' }}>
                                     @foreach($normaliseOptions($field['options'] ?? []) as $op)
                                         @php
                                             if ($isMultiple) {
@@ -833,7 +836,7 @@
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <input type="date" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif class="cf-input" />
+                                <input type="date" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" />
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @elseif ($type === 'file' || $type === 'file_upload')
@@ -949,7 +952,7 @@
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <input type="text" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" placeholder="{{ $ph }}" @if($req) required @endif class="cf-input" />
+                                <input type="text" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" placeholder="{{ $ph }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" />
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @endif
@@ -1064,6 +1067,19 @@
         return true;
     }
   }
+  function setReqAndDisabledFor(node, visible){
+    var inputs = node.querySelectorAll('input, select, textarea');
+    inputs.forEach(function(el){
+      var wantsReq = el.getAttribute('data-req') === '1';
+      if (visible) {
+        el.disabled = false;
+        if (wantsReq) el.setAttribute('required','required'); else el.removeAttribute('required');
+      } else {
+        el.disabled = true;
+        el.removeAttribute('required');
+      }
+    });
+  }
   function evaluate(){
     var nodes = form.querySelectorAll('.cf-conditional');
     nodes.forEach(function(node){
@@ -1076,6 +1092,13 @@
       var val = getValue(field);
       var ok = matches({type:type, values:vals, field:field}, val);
       node.style.display = ok ? '' : 'none';
+      setReqAndDisabledFor(node, ok);
+    });
+    var allCards = form.querySelectorAll('.cf-field-card');
+    allCards.forEach(function(card){
+      if (!card.classList.contains('cf-conditional')){
+        setReqAndDisabledFor(card, true);
+      }
     });
   }
   // --- File preview hook ---

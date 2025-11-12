@@ -876,12 +876,11 @@
             // Fetch the captured answer if any
             $ans = $getAnswer($key, $lab, $__globalIdx);
 
-            // Fuzzy catch for file/image answers saved under different keys
-            if ($ans === null) {
+            // Fuzzy catch only for file-like fields so text questions never get filled by image links
+            if ($ans === null && in_array($t, ['file','file_upload','image','signature'], true)) {
                 $labSlug = $slugify($lab ?? ($key ?? ''));
                 foreach ($answers as $ak => $av) {
                     $aks = $slugify($ak);
-                    // if the answer key contains the label/key slug, or is a generic file/image key, use it
                     if (
                         ($labSlug !== '' && str_contains($aks, $labSlug)) ||
                         preg_match('/\b(image|photo|upload|file|attachment|record|evidence)\b/i', (string) $ak)
@@ -900,6 +899,13 @@
 
             // Map select-like codes to human labels using schema options
             $val = $mapOption($key ?? ('q_' . $__globalIdx), $val);
+
+            // Prevent URLs from appearing as answers for non-file fields when unanswered
+            if (!in_array($t, ['file','file_upload','image','signature'], true) && is_string($val)) {
+                if (preg_match('~^https?://|^/api/uploads/view|\.(?:jpe?g|png|gif|webp|bmp)$~i', $val)) {
+                    $val = '';
+                }
+            }
 
             // Produce human readable output
             $display = $human($val);
@@ -1058,7 +1064,41 @@
         if (!is_string($src) || $src === '') return '';
         if (str_starts_with($src, 'data:image/')) return $src;
 
-        // Build an absolute preview URL against the API base, not app.url
+        // 1) Try to resolve local storage file directly to avoid remote fetching
+        try {
+            $path = null;
+            // /api/uploads/view?p=... -> extract underlying storage path if present
+            if (preg_match('~[?&]p=([^&]+)~', $src, $m)) {
+                $path = urldecode((string) $m[1]);
+            }
+            // direct /storage/... or storage/... reference
+            if ($path === null && (str_starts_with($src, '/storage/') || str_starts_with($src, 'storage/'))) {
+                $path = ltrim(preg_replace('~^/storage/~', '', $src), '/');
+            }
+            // plain relative path with extension that looks like an image
+            if ($path === null && preg_match('~\.(?:jpe?g|png|gif|webp|bmp|svg)$~i', $src)) {
+                $path = ltrim($src, '/');
+            }
+
+            if ($path) {
+                // attempt on default then public then local disks
+                $disks = [config('filesystems.default'), 'public', 'local'];
+                foreach (array_unique(array_filter($disks)) as $diskName) {
+                    try {
+                        $disk = \Illuminate\Support\Facades\Storage::disk($diskName);
+                        if ($disk->exists($path)) {
+                            $mime = $disk->mimeType($path) ?: 'image/jpeg';
+                            $bin  = $disk->get($path);
+                            if (is_string($bin) && strlen($bin) > 0) {
+                                return 'data:' . $mime . ';base64,' . base64_encode($bin);
+                            }
+                        }
+                    } catch (\Throwable $e) { /* continue to next disk */ }
+                }
+            }
+        } catch (\Throwable $e) { /* ignore and try HTTP */ }
+
+        // 2) Build absolute URL and fetch over HTTP as a fallback
         $url = null;
         if (preg_match('~^https?://~i', $src)) {
             $url = $src;
@@ -1070,7 +1110,7 @@
 
         if ($url) {
             try {
-                $res = \Illuminate\Support\Facades\Http::timeout(5)->get($url);
+                $res = \Illuminate\Support\Facades\Http::timeout(6)->get($url);
                 if ($res->ok()) {
                     $mime = $res->header('Content-Type') ?: 'image/jpeg';
                     $body = $res->body();
@@ -1078,11 +1118,10 @@
                         return 'data:' . $mime . ';base64,' . base64_encode($body);
                     }
                 }
-            } catch (\Throwable $e) {
-                // ignore and fall through
-            }
+            } catch (\Throwable $e) { /* ignore */ }
         }
 
+        // 3) Give up: return empty so the template can skip rendering a broken image
         return '';
     };
 
@@ -1132,8 +1171,6 @@
 
             if ($dataUrl !== '') {
                 $rafImages[$lab] = $dataUrl;
-            } elseif ($remoteSrc !== '') {
-                $rafImages[$lab] = $remoteSrc;
             }
         }
     }
@@ -1163,8 +1200,6 @@
             }
             if ($dataUrl !== '') {
                 $rafImages[$lbl] = $dataUrl;
-            } elseif ($remoteSrc !== '') {
-                $rafImages[$lbl] = $remoteSrc;
             }
         }
     }

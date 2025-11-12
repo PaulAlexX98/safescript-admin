@@ -189,6 +189,10 @@
                 'risk_assessment.data.answers',
                 'raf.qa',
                 'raf.answers',
+                'reorder.qa',
+                'reorder.answers',
+                'reorder.data.qa',
+                'reorder.data.answers',
             ];
             foreach ($direct as $path) {
                 $v = data_get($formsQA, $path);
@@ -223,7 +227,9 @@
                 if (isset($v[0]) && is_array($v[0]) && (isset($v[0]['question']) || isset($v[0]['key']) || isset($v[0]['answer']))) {
                     $qa = array_values($v);
                     $qaSource = 'formsQA.' . $path;
-                    $qaKeyUsed = str_contains($path, 'raf') ? 'raf' : 'assessment';
+                    $qaKeyUsed = str_contains($path, 'reorder')
+                        ? 'reorder'
+                        : (str_contains($path, 'raf') ? 'raf' : 'assessment');
                     break;
                 }
             }
@@ -231,6 +237,9 @@
 
         $qa = $findQa($formsQA);
         if (!empty($qa) && $qaSource === '') { $qaSource = 'formsQA.scan'; }
+        if (!empty($qa) && empty($qaKeyUsed)) {
+            if (isset($formsQA['reorder'])) { $qaKeyUsed = 'reorder'; }
+        }
     } else {
         // ensure formsQA exists for probe
         $formsQA = $arr(data_get($meta, 'formsQA') ?: []);
@@ -331,6 +340,7 @@
 
     $rafSchema = [];
     $assessmentSchema = [];
+    $reorderSchema = [];
     $activeSchema = [];
     if ($serviceSlug) {
         try {
@@ -342,6 +352,11 @@
                 $json = $resp->json();
 
                 $rafSchema = $arr(data_get($json, 'raf_form.schema') ?? data_get($json, 'raf.schema') ?? []);
+                $reorderSchema = $arr(
+                    data_get($json, 'reorder_form.schema')
+                    ?? data_get($json, 'reorder.schema')
+                    ?? []
+                );
 
                 $assessmentSchema = $arr(
                     data_get($json, 'assessment_form.schema')
@@ -371,10 +386,20 @@
             $rafSchema = $tmp;
         }
     }
+    if (empty($reorderSchema)) {
+        $tmp = $arr(data_get($formsQA, 'rerorder.schema') ?? null);
+        if (!empty($tmp)) {
+            $reorderSchema = $tmp;
+        }
+    }
 
-    $activeSchema = in_array($qaKeyUsed, ['assessment', 'risk_assessment'], true)
-        ? ($assessmentSchema ?: $rafSchema)
-        : $rafSchema;
+    if (in_array($qaKeyUsed, ['assessment','risk_assessment'], true)) {
+        $activeSchema = $assessmentSchema ?: $rafSchema;
+    } elseif ($qaKeyUsed === 'reorder') {
+        $activeSchema = $reorderSchema ?: $rafSchema;
+    } else {
+        $activeSchema = $rafSchema;
+    }
 
     // 3) Flatten ONLY real input fields (skip containers) and preserve order
     $inputNodes = [];
@@ -544,12 +569,19 @@
     if ($isAssessment) {
         foreach (array_values($qa) as $idx => $row) {
             $key = $row['key'] ?? ($row['question'] ?? 'q_'.$idx);
+            // Resolve label with placeholder guard: ignore generic "Question N" text
+            $placeholder = function ($s) {
+                return is_string($s) && preg_match('/^\s*Question\s+\d+\s*$/i', $s);
+            };
 
-            // Resolve label similar to render loop
-            if (isset($labels[$key])) {
+            if (isset($row['label']) && is_string($row['label']) && trim($row['label']) !== '' && ! $placeholder($row['label'])) {
+                $label = (string) $row['label'];
+            } elseif (isset($labels[$key])) {
                 $label = $labels[$key];
             } elseif (preg_match('/^q_(\d+)$/', (string) $key, $m) && isset($labels['q_'.$m[1]])) {
                 $label = $labels['q_'.$m[1]];
+            } elseif (isset($row['question']) && is_string($row['question']) && trim($row['question']) !== '' && ! $placeholder($row['question'])) {
+                $label = (string) $row['question'];
             } else {
                 $savedQ = (string) ($row['question'] ?? '');
                 $label = preg_match('/^Question\s+\d+$/i', $savedQ)
@@ -856,44 +888,6 @@
     $riskQa = $len(data_get($formsQA ?? [], 'risk_assessment.qa'));
     $riskAn = $len(data_get($formsQA ?? [], 'risk_assessment.answers'));
 @endphp
-<div style="font-family:ui-monospace,Menlo,monospace;font-size:12px;padding:6px 10px;background:#111827;color:#93c5fd;border:1px dashed #374151;border-radius:6px;margin-bottom:8px;">
-  qa probe
-  rows={{ is_countable($qa ?? []) ? count($qa) : 0 }}
-  source={{ $qaSource ?: 'none' }}
-  answerMap={{ ((is_array(data_get($meta,'assessment.answers')) || is_object(data_get($meta,'assessment.answers'))) || (is_array(data_get($meta,'answers')) || is_object(data_get($meta,'answers')))) ? 'yes' : 'no' }}
-  stateType={{ gettype($state ?? null) }}
-  formsQA={{ empty($formsQA ?? []) ? 'no' : 'yes' }}
-  formsQA.keys={{ $formsQAKeys }}
-  assessment.qa={{ $assQa }} assessment.answers={{ $assAns }} assessment.data.qa={{ $assDq }} assessment.data.answers={{ $assDa }} risk_assessment.qa={{ $riskQa }} risk_assessment.answers={{ $riskAn }}
-</div>
-
-@php $debugOn = request()->boolean('debug'); @endphp
-@if ($debugOn)
-    @php
-        // what the ViewEntry passed in
-        $stateType = gettype($state ?? null);
-        $stateCount = is_array($state ?? null) ? count($state) : 0;
-
-        // what we can see in meta
-        $metaHasFormsQA = data_get($meta ?? [], 'formsQA') ? 'yes' : 'no';
-        $metaHasAssessAnswers = data_get($meta ?? [], 'assessment.answers') ? 'yes' : 'no';
-        $metaHasAnswers = data_get($meta ?? [], 'answers') ? 'yes' : 'no';
-
-        // shallow peek at keys to avoid dumping huge blobs
-        $metaKeys = implode(',', array_slice(array_keys($meta ?? []), 0, 10));
-        $stateKeys = is_array($state ?? null) ? implode(',', array_slice(array_keys($state), 0, 10)) : '';
-    @endphp
-    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12px;padding:6px 10px;background:#0b1220;color:#9ae6b4;border:1px solid #1f2937;border-radius:8px;margin-bottom:10px;">
-        consultation-qa debug
-        stateType={{ $stateType }}
-        stateCount={{ $stateCount }}
-        meta.formsQA={{ $metaHasFormsQA }}
-        meta.assessment.answers={{ $metaHasAssessAnswers }}
-        meta.answers={{ $metaHasAnswers }}
-        metaKeys={{ $metaKeys }}
-        stateKeys={{ $stateKeys }}
-    </div>
-@endif
 
 <div class="space-y-4">
     @if (empty($qa))
@@ -943,10 +937,17 @@
                 @foreach ($qa as $row)
                     @php
                         $key = $row['key'] ?? ($row['question'] ?? 'q_'.$loop->index);
-                        if (isset($labels[$key])) {
+                        $placeholder = function ($s) {
+                            return is_string($s) && preg_match('/^\s*Question\s+\d+\s*$/i', $s);
+                        };
+                        if (isset($row['label']) && is_string($row['label']) && trim($row['label']) !== '' && ! $placeholder($row['label'])) {
+                            $label = (string) $row['label'];
+                        } elseif (isset($labels[$key])) {
                             $label = $labels[$key];
                         } elseif (preg_match('/^q_(\\d+)$/', (string) $key, $m) && isset($labels['q_'.$m[1]])) {
                             $label = $labels['q_'.$m[1]];
+                        } elseif (isset($row['question']) && is_string($row['question']) && trim($row['question']) !== '' && ! $placeholder($row['question'])) {
+                            $label = (string) $row['question'];
                         } else {
                             $savedQ = (string) ($row['question'] ?? '');
                             $label = preg_match('/^Question\s+\d+$/i', $savedQ)
