@@ -129,7 +129,8 @@
   <div class="page-break"></div>
   <div class="panel">
     @php
-        // --- Resolve Risk Assessment Answers (RAF) ---
+        // --- Resolve Assessment Answers (flow-aware: risk_assessment vs reorder) ---
+        // Normalise meta first
         $toArray = function ($v) {
             if (is_array($v)) return $v;
             if (is_string($v)) { $d = json_decode($v, true); return is_array($d) ? $d : []; }
@@ -138,6 +139,30 @@
         };
 
         $metaArr = $toArray($meta ?? []);
+
+        // Decide current flow
+        $flow = 'risk_assessment';
+        $intent = strtolower((string) (
+            data_get($metaArr, 'consultation.type') ??
+            data_get($metaArr, 'consultation.mode') ??
+            data_get($metaArr, 'order.type') ??
+            data_get($metaArr, 'type') ?? ''
+        ));
+        $reorderFlag = filter_var(
+            data_get($metaArr, 'reorder', false) ?? data_get($metaArr, 'is_reorder', false),
+            FILTER_VALIDATE_BOOLEAN
+        );
+        if (in_array($intent, ['reorder','maintenance','refill'], true) || $reorderFlag) {
+            $flow = 'reorder';
+        }
+
+        // Aliases used throughout
+        $flowAliases = [
+            'risk_assessment' => ['risk_assessment','risk','assessment','raf'],
+            'reorder'         => ['reorder','maintenance','refill'],
+        ];
+        $aliases = $flowAliases[$flow];
+
         $rafAnswers = [];
 
         // Helper to pick the first non-empty array at any of the given dot paths
@@ -152,32 +177,17 @@
         };
 
         // 1) Prefer answers embedded directly in the provided $meta
-        $rafAnswers = $pick($metaArr, [
-            // risk assessment forms
-            'forms.risk_assessment.data',
-            'forms.risk_assessment.answers',
-            'forms.risk_assessment.saved',
-            'forms.risk_assessment.formData',
-            // common shorthand keys
-            'forms.risk.data',
-            'forms.risk.answers',
-            'forms.risk.saved',
-            'forms.risk.formData',
-            // raf alias
-            'forms.raf.data',
-            'forms.raf.answers',
-            'forms.raf.saved',
-            'forms.raf.formData',
-            // generic "assessment"
-            'forms.assessment.data',
-            'forms.assessment.answers',
-            'forms.assessment.saved',
-            'forms.assessment.formData',
-            'forms.assessment.form_data',
-            // legacy or flat
-            'assessment.answers',
-            'answers',
-        ]);
+        $paths = [];
+        foreach ($aliases as $a) {
+            $paths[] = "forms.$a.data";
+            $paths[] = "forms.$a.answers";
+            $paths[] = "forms.$a.saved";
+            $paths[] = "forms.$a.formData";
+        }
+        $paths[] = 'assessment.answers';
+        $paths[] = 'answers';
+
+        $rafAnswers = $pick($metaArr, $paths);
 
         // Session id may be present in various shapes
         $sid = data_get($metaArr, 'consultation_session_id')
@@ -191,28 +201,9 @@
                 $sess = \App\Models\ConsultationSession::find($sid);
                 if ($sess) {
                     $sessMeta = $toArray($sess->meta ?? []);
-                    $rafAnswers = $pick($sessMeta, [
-                        'forms.risk_assessment.data',
-                        'forms.risk_assessment.answers',
-                        'forms.risk_assessment.saved',
-                        'forms.risk_assessment.formData',
-                        'forms.risk.data',
-                        'forms.risk.answers',
-                        'forms.risk.saved',
-                        'forms.risk.formData',
-                        'forms.raf.data',
-                        'forms.raf.answers',
-                        'forms.raf.saved',
-                        'forms.raf.formData',
-                        'forms.assessment.data',
-                        'forms.assessment.answers',
-                        'forms.assessment.saved',
-                        'forms.assessment.formData',
-                        'forms.assessment.form_data',
-                        'assessment.answers',
-                    ]);
+                    $rafAnswers = $pick($sessMeta, $paths);
                 }
-            } catch (\Throwable $e) {
+            } catch (\Throwable $e) {  
                 // ignore and continue to other fallbacks
             }
         }
@@ -241,10 +232,14 @@
                 /** @var \App\Models\ConsultationFormResponse|null $raf */
                 $raf = \App\Models\ConsultationFormResponse::query()
                     ->where('consultation_session_id', $sid)
-                    ->where(function ($q) {
-                        $q->whereIn('form_type', ['risk_assessment', 'assessment', 'raf'])
-                          ->orWhere('step_slug', 'like', '%risk%')
-                          ->orWhere('title', 'like', '%risk%');
+                    ->where(function ($q) use ($aliases) {
+                        $q->whereIn('form_type', $aliases)
+                          ->orWhere(function ($qq) use ($aliases) {
+                              foreach ($aliases as $a) {
+                                  $qq->orWhere('step_slug', 'like', "%{$a}%")
+                                    ->orWhere('title', 'like', "%{$a}%");
+                              }
+                          });
                     })
                     ->latest('id')
                     ->first();
@@ -269,11 +264,12 @@
         }
 
         // 4) Merge legacy formsQA QA rows as a supplemental source (even if $rafAnswers isn't empty)
-        $qaRows = data_get($metaArr, 'formsQA.risk_assessment.qa')
-            ?: data_get($metaArr, 'formsQA.assessment.qa')
-            ?: data_get($metaArr, 'consultation.formsQA.risk_assessment.qa')
-            ?: data_get($metaArr, 'consultation.formsQA.assessment.qa')
-            ?: [];
+        $qaRows = [];
+        foreach ($aliases as $__al) {
+            $qaRows = data_get($metaArr, "formsQA.$__al.qa")
+                ?: data_get($metaArr, "consultation.formsQA.$__al.qa");
+            if (!empty($qaRows)) break;
+        }
 
         if (is_array($qaRows) && ! empty($qaRows)) {
             foreach ($qaRows as $row) {
@@ -331,19 +327,23 @@
         // Attempt to resolve the RAF ClinicForm that was used for this consultation
         $form = null;
 
-        // Prefer session-attached RAF template
+        // Prefer session-attached template for the active flow
         if (! $form && !empty($sid)) {
             try {
                 $sess = \App\Models\ConsultationSession::find($sid);
                 if ($sess && isset($sess->templates)) {
-                    $tpl = \Illuminate\Support\Arr::get($sess->templates, 'raf')
-                        ?? \Illuminate\Support\Arr::get($sess->templates, 'risk_assessment')
-                        ?? \Illuminate\Support\Arr::get($sess->templates, 'assessment');
+                    $tpl = \Illuminate\Support\Arr::get($sess->templates, $flow);
+                    if (!$tpl) {
+                        foreach ($aliases as $a) {
+                            $tpl = \Illuminate\Support\Arr::get($sess->templates, $a);
+                            if ($tpl) break;
+                        }
+                    }
                     if ($tpl) {
                         if (is_array($tpl)) {
                             $fid = $tpl['id'] ?? $tpl['form_id'] ?? null;
                             if ($fid) { $form = \App\Models\ClinicForm::find($fid); }
-                        } elseif (is_object($tpl) && ($tpl instanceof \App\Models\ClinicForm)) {
+                        } elseif ($tpl instanceof \App\Models\ClinicForm) {
                             $form = $tpl;
                         } elseif (is_numeric($tpl)) {
                             $form = \App\Models\ClinicForm::find((int) $tpl);
@@ -355,30 +355,37 @@
 
         // Fallback by service/treatment slugs
         if (! $form) {
-            $serviceFor  = $slugify($metaArr['service_slug'] ?? ($metaArr['service'] ?? null));
-            $treatFor    = $slugify($metaArr['treatment_slug'] ?? ($metaArr['treatment'] ?? null));
+            $serviceFor  = \Illuminate\Support\Str::slug((string) ($metaArr['service_slug'] ?? ($metaArr['service'] ?? '')));
+            $treatFor    = \Illuminate\Support\Str::slug((string) ($metaArr['treatment_slug'] ?? ($metaArr['treatment'] ?? '')));
             $base = fn() => \App\Models\ClinicForm::query()
-                ->where('form_type', 'raf')
+                ->whereIn('form_type', $aliases)
                 ->where('is_active', 1)
                 ->orderByDesc('version')->orderByDesc('id');
 
             if ($serviceFor && $treatFor) {
                 $form = $base()->where('service_slug', $serviceFor)
-                               ->where('treatment_slug', $treatFor)->first();
+                              ->where('treatment_slug', $treatFor)->first();
             }
             if (! $form && $serviceFor) {
                 $form = $base()->where('service_slug', $serviceFor)
-                               ->where(function ($q) { $q->whereNull('treatment_slug')->orWhere('treatment_slug', ''); })
-                               ->first();
+                              ->where(function ($q) { $q->whereNull('treatment_slug')->orWhere('treatment_slug', ''); })
+                              ->first();
             }
             if (! $form && $serviceFor) {
                 $svc = \App\Models\Service::query()->where('slug', $serviceFor)->first();
-                if ($svc && $svc->rafForm) $form = $svc->rafForm;
+                if ($svc) {
+                    if ($flow === 'reorder' && method_exists($svc, 'reorderForm') && $svc->reorderForm) {
+                        $form = $svc->reorderForm;
+                    }
+                    if (!$form && method_exists($svc, 'rafForm') && in_array('raf', $aliases, true) && $svc->rafForm) {
+                        $form = $svc->rafForm;
+                    }
+                }
             }
             if (! $form) {
                 $form = $base()->where(function ($q) { $q->whereNull('service_slug')->orWhere('service_slug', ''); })
-                               ->where(function ($q) { $q->whereNull('treatment_slug')->orWhere('treatment_slug', ''); })
-                               ->first();
+                              ->where(function ($q) { $q->whereNull('treatment_slug')->orWhere('treatment_slug', ''); })
+                              ->first();
             }
         }
 
@@ -407,6 +414,48 @@
                     }
                     if (!empty($current['fields'])) $sections[] = $current;
                 }
+            }
+        }
+
+        // --- Build canonical alias maps & q_N bridge from schema ---
+        $flatIndexByKey = [];
+        $__fieldAliases = [];
+        $__idxAlias = 0;
+        $__inputTypes = ['text_input','text','select','textarea','date','radio','checkbox','file','file_upload','image','email','number','tel','yesno','signature'];
+        foreach ($sections as $secTmp) {
+            foreach (($secTmp['fields'] ?? []) as $fTmp) {
+                $tTmp = $fTmp['type'] ?? '';
+                if (!in_array($tTmp, $__inputTypes, true)) { $__idxAlias++; continue; }
+
+                $labelTmp = $fTmp['label'] ?? null;
+                $keyTmp   = $fTmp['key'] ?? null;
+
+                // Canonical input name we expect answers to use
+                $nameTmp  = $keyTmp ?? ($labelTmp ? \Illuminate\Support\Str::slug($labelTmp) : ('field_' . $__idxAlias));
+
+                // Bridge q_N for this field
+                $kProbe = $keyTmp ?? $labelTmp;
+                if ($kProbe) {
+                    $flatIndexByKey[(string)$kProbe] = 'q_' . $__idxAlias;
+                    $flatIndexByKey[\Illuminate\Support\Str::slug((string)$kProbe)] = 'q_' . $__idxAlias;
+                }
+
+                // Collect aliases (raw, slugged label/key, and q_N) -> canonical name
+                $aliasesForField = [];
+                if ($keyTmp) {
+                    $aliasesForField[] = (string)$keyTmp;
+                    $aliasesForField[] = \Illuminate\Support\Str::slug((string)$keyTmp);
+                }
+                if ($labelTmp) {
+                    $aliasesForField[] = \Illuminate\Support\Str::slug((string)$labelTmp);
+                }
+                $aliasesForField[] = 'q_' . $__idxAlias;
+
+                foreach (array_unique(array_filter($aliasesForField)) as $al) {
+                    $__fieldAliases[\Illuminate\Support\Str::slug((string)$al)] = $nameTmp;
+                }
+
+                $__idxAlias++;
             }
         }
 
@@ -727,7 +776,7 @@
         }
     @endphp
 
-    <div class="section-title">Clinical Assessment</div>
+    <div class="section-title">{{ $flow === 'reorder' ? 'Reorder Assessment' : 'Clinical Assessment' }}</div>
 @php
     // Schema-first rendering  show all questions even if unanswered
     // 1) Flatten nested answers so inner field keys render individually
@@ -752,12 +801,54 @@
     }
 
     // 4) Helper  fetch the best-matching answer for a field
-    $getAnswer = function ($key, $label, $idx) use ($answers, $slugify) {
+    $getAnswer = function ($key, $label, $idx) use ($answers, $slugify, $flatIndexByKey, $__fieldAliases) {
         $cands = [];
-        if ($key) { $cands[] = $key; $cands[] = $slugify($key); }
-        if ($label) { $cands[] = $label; $cands[] = $slugify($label); }
-        if ($idx !== null) { $cands[] = 'q_' . $idx; }
+
+        $add = function ($s) use (&$cands, $slugify) {
+            if ($s === null || $s === '') return;
+            $s = (string)$s;
+            $cands[] = $s;                            // raw
+            $sl = $slugify($s);
+            $cands[] = $sl;                           // slugged (dashes)
+            $cands[] = str_replace('_','-', $s);      // underscores -> dashes
+            $cands[] = str_replace('-','_', $sl);     // dashes -> underscores
+        };
+
+        // Base candidates from provided key/label
+        $add($key);
+        $add($label);
+
+        // Alias resolution from schema
+        foreach ([$key, $label] as $probe) {
+            if (!$probe) continue;
+            $probeSlug = $slugify($probe);
+            if (isset($__fieldAliases[$probeSlug])) {
+                $add($__fieldAliases[$probeSlug]);
+            }
+        }
+
+        // Bridge q_N from schema-derived flat index
+        foreach ([$key, $label] as $probe) {
+            if (!$probe) continue;
+            foreach ([$probe, $slugify($probe)] as $cand) {
+                if (isset($flatIndexByKey[$cand])) {
+                    $add($flatIndexByKey[$cand]); // adds q_N + variants
+                }
+            }
+        }
+
+        // Always include direct q_N by index
+        if ($idx !== null) { $add('q_' . $idx); }
+
+        // De-duplicate while preserving order
+        $seen = []; $keys = [];
         foreach ($cands as $ck) {
+            if ($ck === null || $ck === '') continue;
+            if (isset($seen[$ck])) continue;
+            $seen[$ck] = 1; $keys[] = $ck;
+        }
+
+        foreach ($keys as $ck) {
             if (array_key_exists($ck, $answers)) return $answers[$ck];
         }
         return null;
@@ -1097,7 +1188,7 @@
   </div>
 @endif
     @if(empty($sectionOrder) && empty($rafImages))
-      <div class="muted">No risk assessment answers were found for this consultation.</div>
+      <div class="muted">No {{ $flow === 'reorder' ? 'reorder' : 'risk assessment' }} answers were found for this consultation.</div>
     @endif
   </div>
 

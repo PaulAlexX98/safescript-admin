@@ -204,7 +204,7 @@ class ClinicFormForm
                                     Repeater::make('options')->label('Options')->schema([
                                         TextInput::make('value')->label('Value')->required(),
                                         TextInput::make('label')->label('Label'),
-                                    ])->addActionLabel('Add option')->reorderable()->minItems(1)->default([]),
+                                    ])->addActionLabel('Add option')->reorderable()->default([]),
                                     Toggle::make('multiple')->label('Allow multiple')->default(false),
                                     Toggle::make('required')->label('Required')->default(false),
                                     Textarea::make('help')->label('Help Text')->rows(2),
@@ -232,7 +232,7 @@ class ClinicFormForm
                                     Repeater::make('options')->label('Options')->schema([
                                         TextInput::make('value')->label('Value')->required(),
                                         TextInput::make('label')->label('Label')->required(),
-                                    ])->addActionLabel('Add option')->reorderable()->minItems(1)->default([]),
+                                    ])->addActionLabel('Add option')->reorderable()->default([]),
                                     Toggle::make('required')->label('Required')->default(false),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     TextInput::make('key')
@@ -352,7 +352,77 @@ class ClinicFormForm
                                             'undo',
                                             'redo',
                                         ])
-                                        ->required(),
+                                        ->required()
+                                        ->afterStateHydrated(function ($component, $state) {
+                                            if (is_string($state)) {
+                                                $html = trim($state);
+                                                if ($html === '') {
+                                                    $component->state(null);
+                                                    return;
+                                                }
+                                                // Minimal HTML → TipTap doc conversion for headings, paragraphs, and lists
+                                                $toDoc = function (string $html) {
+                                                    $buildText = function (string $text) {
+                                                        $txt = trim(preg_replace('/\s+/u', ' ', $text));
+                                                        return $txt === '' ? null : [['type' => 'text', 'text' => $txt]];
+                                                    };
+                                                    $content = [];
+                                                    if (class_exists(\DOMDocument::class)) {
+                                                        libxml_use_internal_errors(true);
+                                                        $dom = new \DOMDocument();
+                                                        $wrapped = '<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>' . $html . '</body></html>';
+                                                        $dom->loadHTML($wrapped, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+                                                        $body = $dom->getElementsByTagName('body')->item(0);
+                                                        if ($body) {
+                                                            foreach (iterator_to_array($body->childNodes) as $node) {
+                                                                if ($node->nodeType !== XML_ELEMENT_NODE) {
+                                                                    $t = trim($node->textContent ?? '');
+                                                                    if ($t !== '') {
+                                                                        $c = $buildText($t);
+                                                                        if ($c) $content[] = ['type' => 'paragraph', 'content' => $c];
+                                                                    }
+                                                                    continue;
+                                                                }
+                                                                $tag = strtolower($node->nodeName);
+                                                                switch ($tag) {
+                                                                    case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6': {
+                                                                        $level = (int) substr($tag, 1);
+                                                                        $c = $buildText($node->textContent ?? '');
+                                                                        if ($c) $content[] = ['type' => 'heading', 'attrs' => ['level' => $level], 'content' => $c];
+                                                                        break;
+                                                                    }
+                                                                    case 'ul':
+                                                                    case 'ol': {
+                                                                        $items = [];
+                                                                        foreach (iterator_to_array($node->childNodes) as $li) {
+                                                                            if (strtolower($li->nodeName) !== 'li') continue;
+                                                                            $c = $buildText($li->textContent ?? '');
+                                                                            if (! $c) continue;
+                                                                            $items[] = ['type' => 'listItem', 'content' => [['type' => 'paragraph', 'content' => $c]]];
+                                                                        }
+                                                                        if ($items) $content[] = ['type' => $tag === 'ol' ? 'orderedList' : 'bulletList', 'content' => $items];
+                                                                        break;
+                                                                    }
+                                                                    case 'p': default: {
+                                                                        $c = $buildText($node->textContent ?? '');
+                                                                        if ($c) $content[] = ['type' => 'paragraph', 'content' => $c];
+                                                                        break;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        libxml_clear_errors();
+                                                    }
+                                                    if (! $content) {
+                                                        $c = $buildText(strip_tags($html));
+                                                        if ($c) $content[] = ['type' => 'paragraph', 'content' => $c];
+                                                    }
+                                                    return ['type' => 'doc', 'content' => $content ?: [['type' => 'paragraph']]];
+                                                };
+                                                $component->state($toDoc($html));
+                                                return;
+                                            }
+                                        }),
                                     Select::make('align')->options([
                                         'left' => 'Left',
                                         'center' => 'Center',
@@ -473,6 +543,134 @@ class ClinicFormForm
                                                 $s = preg_replace('/[^a-z0-9]+/', '-', $s);
                                                 return trim($s, '-');
                                             };
+                                            $toDocFromHtml = function ($input) {
+                                                if ($input === null) return null;
+                                                if (is_array($input)) return $input; // already a doc structure
+
+                                                $html = trim((string) $input);
+                                                if ($html === '') return null;
+
+                                                $buildText = function (string $text) {
+                                                    $txt = trim(preg_replace('/\s+/u', ' ', $text));
+                                                    return $txt === '' ? null : [['type' => 'text', 'text' => $txt]];
+                                                };
+
+                                                $docContent = [];
+
+                                                if (class_exists(\DOMDocument::class)) {
+                                                    libxml_use_internal_errors(true);
+                                                    $dom = new \DOMDocument();
+                                                    $wrapped = '<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>' . $html . '</body></html>';
+                                                    $dom->loadHTML($wrapped, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+                                                    $body = $dom->getElementsByTagName('body')->item(0);
+                                                    if ($body) {
+                                                        foreach (iterator_to_array($body->childNodes) as $node) {
+                                                            if ($node->nodeType !== XML_ELEMENT_NODE) {
+                                                                $text = trim($node->textContent ?? '');
+                                                                if ($text !== '') {
+                                                                    $content = $buildText($text);
+                                                                    if ($content) $docContent[] = ['type' => 'paragraph', 'content' => $content];
+                                                                }
+                                                                continue;
+                                                            }
+                                                            $tag = strtolower($node->nodeName);
+                                                            switch ($tag) {
+                                                                case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6': {
+                                                                    $level = (int) substr($tag, 1);
+                                                                    $content = $buildText($node->textContent ?? '');
+                                                                    if ($content) {
+                                                                        $docContent[] = [
+                                                                            'type' => 'heading',
+                                                                            'attrs' => ['level' => $level],
+                                                                            'content' => $content,
+                                                                        ];
+                                                                    }
+                                                                    break;
+                                                                }
+                                                                case 'ul':
+                                                                case 'ol': {
+                                                                    $items = [];
+                                                                    foreach (iterator_to_array($node->childNodes) as $li) {
+                                                                        if (strtolower($li->nodeName) !== 'li') continue;
+                                                                        $content = $buildText($li->textContent ?? '');
+                                                                        if (! $content) continue;
+                                                                        $items[] = [
+                                                                            'type' => 'listItem',
+                                                                            'content' => [[
+                                                                                'type' => 'paragraph',
+                                                                                'content' => $content,
+                                                                            ]],
+                                                                        ];
+                                                                    }
+                                                                    if ($items) {
+                                                                        $docContent[] = [
+                                                                            'type' => $tag === 'ol' ? 'orderedList' : 'bulletList',
+                                                                            'content' => $items,
+                                                                        ];
+                                                                    }
+                                                                    break;
+                                                                }
+                                                                case 'p': {
+                                                                    $content = $buildText($node->textContent ?? '');
+                                                                    if ($content) $docContent[] = ['type' => 'paragraph', 'content' => $content];
+                                                                    break;
+                                                                }
+                                                                case 'br': {
+                                                                    // ignore top-level breaks
+                                                                    break;
+                                                                }
+                                                                default: {
+                                                                    $content = $buildText($node->textContent ?? '');
+                                                                    if ($content) $docContent[] = ['type' => 'paragraph', 'content' => $content];
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    libxml_clear_errors();
+                                                }
+
+                                                if (! $docContent) {
+                                                    $content = $buildText(strip_tags($html));
+                                                    if ($content) $docContent[] = ['type' => 'paragraph', 'content' => $content];
+                                                }
+
+                                                return [
+                                                    'type' => 'doc',
+                                                    'content' => $docContent ?: [['type' => 'paragraph']],
+                                                ];
+                                            };
+                                            $normValue = function ($v) use ($slug) {
+                                                if (is_bool($v)) {
+                                                    return $v ? 'yes' : 'no';
+                                                }
+                                                $s = strtolower(trim((string) $v));
+                                                if ($s === '') return $s;
+                                                if (in_array($s, ['yes','y','true','1'], true)) return 'yes';
+                                                if (in_array($s, ['no','n','false','0'], true)) return 'no';
+                                                return $slug($s);
+                                            };
+                                            $normalizeShowIf = function ($showIf) use ($normValue) {
+                                                if (!is_array($showIf)) return null;
+                                                $out = ['enabled' => true];
+                                                if (isset($showIf['field'])) {
+                                                    $out['field'] = trim((string) $showIf['field']);
+                                                }
+                                                if (array_key_exists('equals', $showIf)) {
+                                                    $out['equals'] = $normValue($showIf['equals']);
+                                                }
+                                                if (array_key_exists('notEquals', $showIf)) {
+                                                    $out['notEquals'] = $normValue($showIf['notEquals']);
+                                                }
+                                                if (isset($showIf['in'])) {
+                                                    $vals = array_values(array_filter(array_map($normValue, (array) $showIf['in']), fn ($x) => $x !== ''));
+                                                    if ($vals) $out['in'] = array_unique($vals);
+                                                }
+                                                if (isset($showIf['truthy'])) {
+                                                    $out['truthy'] = (bool) $showIf['truthy'];
+                                                }
+                                                return $out;
+                                            };
                                             $sectionIndex = 1;
 
                                             foreach ($sections as $section) {
@@ -493,7 +691,20 @@ class ClinicFormForm
                                                 ];
 
                                                 foreach ($fields as $f) {
-                                                    $type = $f['type'] ?? 'text_input';
+                                                    $typeRaw = $f['type'] ?? 'text_input';
+                                                    $type = strtolower(str_replace(['-', ' '], ['_', '_'], (string) $typeRaw));
+                                                    // map common aliases
+                                                    if (in_array($type, ['toggle','switch','boolean'], true)) {
+                                                        $type = 'checkbox';
+                                                    } elseif (in_array($type, ['yes_no','yesno'], true)) {
+                                                        $type = 'radio';
+                                                        if (empty($f['options'])) {
+                                                            $f['options'] = [
+                                                                ['value' => 'yes', 'label' => 'Yes'],
+                                                                ['value' => 'no',  'label' => 'No'],
+                                                            ];
+                                                        }
+                                                    }
                                                     $label = $f['label'] ?? ($f['id'] ?? ucfirst($type));
                                                     $required = (bool)($f['required'] ?? false);
                                                     $help = $f['help'] ?? null;
@@ -502,14 +713,15 @@ class ClinicFormForm
                                                         case 'select':
                                                         case 'multiselect': {
                                                             $options = [];
-                                                            foreach (($f['options'] ?? []) as $opt) {
+                                                            foreach ((array) ($f['options'] ?? []) as $opt) {
                                                                 if (is_array($opt)) {
-                                                                    $val = (string) ($opt['value'] ?? ($opt['label'] ?? ''));
-                                                                    $lab = (string) ($opt['label'] ?? $val);
+                                                                    $lab = (string) ($opt['label'] ?? ($opt['value'] ?? ''));
+                                                                    $val = (string) ($opt['value'] ?? $lab);
                                                                 } else {
                                                                     $lab = (string) $opt;
-                                                                    $val = (string) $slug($lab);
+                                                                    $val = (string) $lab;
                                                                 }
+                                                                $val = $normValue($val);
                                                                 if ($val !== '') {
                                                                     $options[] = ['value' => $val, 'label' => $lab];
                                                                 }
@@ -524,7 +736,7 @@ class ClinicFormForm
                                                                     'multiple' => (bool) ($f['multiple'] ?? ($type === 'multiselect')),
                                                                     'required' => $required,
                                                                     'help'     => $help,
-                                                                    'showIf'   => $f['showIf'] ?? null,
+                                                                    'showIf'   => $normalizeShowIf($f['showIf'] ?? null),
                                                                 ],
                                                             ];
                                                             break;
@@ -532,14 +744,15 @@ class ClinicFormForm
 
                                                         case 'radio': {
                                                             $options = [];
-                                                            foreach (($f['options'] ?? []) as $opt) {
+                                                            foreach ((array) ($f['options'] ?? []) as $opt) {
                                                                 if (is_array($opt)) {
                                                                     $lab = (string) ($opt['label'] ?? ($opt['value'] ?? ''));
-                                                                    $val = (string) ($opt['value'] ?? $slug($lab));
+                                                                    $val = (string) ($opt['value'] ?? $lab);
                                                                 } else {
                                                                     $lab = (string) $opt;
-                                                                    $val = (string) $slug($lab);
+                                                                    $val = (string) $lab;
                                                                 }
+                                                                $val = $normValue($val);
                                                                 if ($val !== '') {
                                                                     $options[] = ['value' => $val, 'label' => $lab];
                                                                 }
@@ -553,16 +766,20 @@ class ClinicFormForm
                                                                     'options'  => $options,
                                                                     'required' => $required,
                                                                     'help'     => $help,
-                                                                    'showIf'   => $f['showIf'] ?? null,
+                                                                    'showIf'   => $normalizeShowIf($f['showIf'] ?? null),
                                                                 ],
                                                             ];
                                                             // Optional "details" textarea tied to selected radio values
                                                             if (!empty($f['details']['label'] ?? null)) {
                                                                 $parentKey = $slug($f['key'] ?? $label);
-                                                                $showVals = array_map(
-                                                                    fn ($sv) => is_string($sv) ? $slug($sv) : $slug((string) $sv),
-                                                                    (array) ($f['details']['showIfIn'] ?? [])
-                                                                );
+                                                                $rawShow = $f['details']['showIfIn'] ?? null;
+                                                                if ($rawShow) {
+                                                                    $showVals = array_map($normValue, (array) $rawShow);
+                                                                } else {
+                                                                    // infer: if a Yes/No exists, default to showing on "yes"
+                                                                    $hasYes = in_array('yes', array_map(fn ($o) => strtolower($o['value']), $options), true);
+                                                                    $showVals = $hasYes ? ['yes'] : (isset($options[0]['value']) ? [$options[0]['value']] : []);
+                                                                }
                                                                 $blocks[] = [
                                                                     'type' => 'textarea',
                                                                     'data' => [
@@ -587,7 +804,7 @@ class ClinicFormForm
                                                                     'section'  => $sectionKey,
                                                                     'required' => $required,
                                                                     'help'     => $help,
-                                                                    'showIf'   => $f['showIf'] ?? null,
+                                                                    'showIf'   => $normalizeShowIf($f['showIf'] ?? null),
                                                                 ],
                                                             ];
                                                             break;
@@ -602,7 +819,7 @@ class ClinicFormForm
                                                                     'section'  => $sectionKey,
                                                                     'required' => $required,
                                                                     'help'     => $help,
-                                                                    'showIf'   => $f['showIf'] ?? null,
+                                                                    'showIf'   => $normalizeShowIf($f['showIf'] ?? null),
                                                                 ],
                                                             ];
                                                             break;
@@ -620,7 +837,7 @@ class ClinicFormForm
                                                                     'required' => $required,
                                                                     'help'     => $help,
                                                                     'accept'   => $f['accept'] ?? 'image/*,application/pdf',
-                                                                    'showIf'   => $f['showIf'] ?? null,
+                                                                    'showIf'   => $normalizeShowIf($f['showIf'] ?? null),
                                                                 ],
                                                             ];
                                                             break;
@@ -635,7 +852,7 @@ class ClinicFormForm
                                                                     'section'  => $sectionKey,
                                                                     'required' => $required,
                                                                     'help'     => $help ?: 'Draw your signature above',
-                                                                    'showIf'   => $f['showIf'] ?? null,
+                                                                    'showIf'   => $normalizeShowIf($f['showIf'] ?? null),
                                                                 ],
                                                             ];
                                                             break;
@@ -651,7 +868,7 @@ class ClinicFormForm
                                                                     'placeholder' => $f['placeholder'] ?? null,
                                                                     'required'    => $required,
                                                                     'help'        => $help,
-                                                                    'showIf'      => $f['showIf'] ?? null,
+                                                                    'showIf'      => $normalizeShowIf($f['showIf'] ?? null),
                                                                 ],
                                                             ];
                                                             break;
@@ -666,9 +883,9 @@ class ClinicFormForm
                                                                     'label'   => $label ?: 'Content',
                                                                     'key'     => $slug($f['key'] ?? ($label ?: 'content')),
                                                                     'section' => $sectionKey,
-                                                                    'content' => (string) ($f['content'] ?? ($f['html'] ?? ($f['text'] ?? ''))),
+                                                                    'content' => $toDocFromHtml($f['content'] ?? ($f['html'] ?? ($f['text'] ?? null))),
                                                                     'align'   => $f['align'] ?? 'left',
-                                                                    'showIf'  => $f['showIf'] ?? null,
+                                                                    'showIf'  => $normalizeShowIf($f['showIf'] ?? null),
                                                                 ],
                                                             ];
                                                             break;
@@ -688,7 +905,7 @@ class ClinicFormForm
                                                                     'section' => $sectionKey,
                                                                     'image'   => $f['image'] ?? null,
                                                                     'alt'     => $f['alt'] ?? null,
-                                                                    'showIf'  => $f['showIf'] ?? null,
+                                                                    'showIf'  => $normalizeShowIf($f['showIf'] ?? null),
                                                                 ],
                                                             ];
                                                             break;
@@ -709,7 +926,7 @@ class ClinicFormForm
                                                                     'placeholder' => $f['placeholder'] ?? null,
                                                                     'required'    => $required,
                                                                     'help'        => $help,
-                                                                    'showIf'      => $f['showIf'] ?? null,
+                                                                    'showIf'      => $normalizeShowIf($f['showIf'] ?? null),
                                                                 ],
                                                             ];
                                                             break;
@@ -736,26 +953,36 @@ class ClinicFormForm
                                     ->label('Structure')
                                     ->hiddenLabel()
                                     ->content(function (Get $get) {
-                                        $blocks = $get('schema') ?? [];
-                                        if (! is_array($blocks) || empty($blocks)) {
-                                            return 'No fields yet.';
-                                        }
-                                    
-                                        $lines = [];
-                                        $n = 1;
-                                        foreach (array_values($blocks) as $block) {
-                                            $type = Arr::get($block, 'type', 'field');
-                                            $label = trim((string) Arr::get($block, 'data.label', ''));
-                                            if ($label === '') {
-                                                $label = Str::headline((string) $type) . ' ' . $n;
+                                        try {
+                                            $blocks = $get('schema');
+                                            if ($blocks instanceof \Illuminate\Support\Collection) {
+                                                $blocks = $blocks->all();
                                             }
-                                            $isReq = (bool) Arr::get($block, 'data.required', false);
-                                            $reqBadge = $isReq ? ' <span style="display:inline-block;padding:.05rem .35rem;border-radius:.25rem;background:rgba(239,68,68,.12);color:#f87171;font-weight:600;margin-left:.35rem;">required</span>' : '';
-                                            $lines[] = $n . '. ' . e($label) . $reqBadge . ' <small style="opacity:.7">(' . e((string) $type) . ')</small>';
-                                            $n++;
+                                            if (! is_array($blocks) || empty($blocks)) {
+                                                return 'No fields yet.';
+                                            }
+                                            $max = 120; // cap preview lines to avoid heavy rendering
+                                            $lines = [];
+                                            $n = 1;
+                                            foreach (array_slice(array_values($blocks), 0, $max) as $block) {
+                                                $type = (string) \Illuminate\Support\Arr::get($block, 'type', 'field');
+                                                $label = trim((string) \Illuminate\Support\Arr::get($block, 'data.label', ''));
+                                                if ($label === '') {
+                                                    $label = \Illuminate\Support\Str::headline($type) . ' ' . $n;
+                                                }
+                                                if (strlen($label) > 80) {
+                                                    $label = substr($label, 0, 77) . '...';
+                                                }
+                                                $isReq = (bool) \Illuminate\Support\Arr::get($block, 'data.required', false);
+                                                $reqBadge = $isReq ? ' <span style="display:inline-block;padding:.05rem .35rem;border-radius:.25rem;background:rgba(239,68,68,.12);color:#f87171;font-weight:600;margin-left:.35rem;">required</span>' : '';
+                                                $lines[] = $n . '. ' . e($label) . $reqBadge . ' <small style="opacity:.7">(' . e($type) . ')</small>';
+                                                $n++;
+                                            }
+                                            $extra = count($blocks) > $max ? '<br><small style="opacity:.7">+' . (count($blocks) - $max) . ' more</small>' : '';
+                                            return new \Illuminate\Support\HtmlString(implode('<br>', $lines) . $extra);
+                                        } catch (\Throwable $e) {
+                                            return new \Illuminate\Support\HtmlString('<small style="opacity:.7">Preview temporarily unavailable</small>');
                                         }
-                                    
-                                        return new HtmlString(implode('<br>', $lines));
                                     }),
                             ])
                             ->columnSpanFull(),

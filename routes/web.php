@@ -12,6 +12,8 @@ Route::get('/__routes_ping', function () {
 
 Route::redirect('/', '/admin'); // send the homepage to your Filament panel
 
+use Illuminate\Support\Str;
+
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use App\Models\PendingOrder;
@@ -25,37 +27,52 @@ use App\Services\Consultations\StartConsultation;
 use App\Http\Controllers\ConsultationFormController;
 use App\Http\Controllers\ConsultationRunnerController;
 
-Route::get('/consultations/{session}/risk-assessment', function (ConsultationSession $session) {
+
+Route::get('/consultations/{session}/risk-assessment', function (ConsultationSession $session, Illuminate\Http\Request $r) {
+    $qt   = strtolower((string) ($r->query('type') ?? $r->query('mode') ?? ''));
+    $raw  = $session->meta ?? [];
+    $meta = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
+    $intent = $qt ?: strtolower((string) (\Illuminate\Support\Arr::get($meta, 'consultation.type') ?: ($session->form_type ?? '')));
+
+    if ($intent === 'reorder') {
+        return redirect()->route('consultations.reorder', ['session' => $session->id]);
+    }
+
     return redirect()->route('consultations.risk_assessment', ['session' => $session->id]);
 })->name('consultations.runner.risk_assessment');
 
 
 
 
-// Generic runner start alias that decides first step based on the session
-Route::get('/consultations/{session}/start', function (ConsultationSession $session) {
+// Generic runner start alias that decides first step based on the session, honours explicit type and persists it
+Route::get('/consultations/{session}/start', function (ConsultationSession $session, Illuminate\Http\Request $r) {
     $rawMeta = $session->meta ?? [];
     $meta = is_array($rawMeta) ? $rawMeta : (json_decode($rawMeta ?? '[]', true) ?: []);
     $steps = is_array($session->steps ?? null) ? $session->steps : (array) (\Illuminate\Support\Arr::get($meta, 'steps', []) ?: []);
-    $first = $steps[0] ?? (\Illuminate\Support\Arr::get($meta, 'start.first_step') ?? \Illuminate\Support\Arr::get($meta, 'first_step'));
 
-    if (! $first) {
-        $type = strtolower((string) (\Illuminate\Support\Arr::get($meta, 'order.type', '') ?: ''));
-        $isReorderFlag = filter_var(\Illuminate\Support\Arr::get($meta, 'reorder', false), FILTER_VALIDATE_BOOLEAN);
-        $first = ($isReorderFlag || in_array($type, ['reorder','maintenance','refill'], true)) ? 'reorder' : 'raf';
-    }
+    // Explicit hint via query takes priority
+    $explicit = strtolower((string) ($r->query('type') ?? $r->query('mode') ?? ''));
+    $sessionType = strtolower((string) (\Illuminate\Support\Arr::get($meta, 'consultation.type') ?: ($session->form_type ?? '')));
 
-    if ($first === 'reorder') {
+    if ($explicit === 'reorder' || $sessionType === 'reorder' || (($steps[0] ?? null) === 'reorder')) {
+        // persist intent for future navigations
+        \Illuminate\Support\Arr::set($meta, 'consultation.type', 'reorder');
+        \Illuminate\Support\Arr::set($meta, 'consultation.mode', 'reorder');
+        $session->meta = $meta;
+        try { $session->save(); } catch (\Throwable $e) {}
+
         if (\Illuminate\Support\Facades\Route::has('consultations.reorder')) {
             return redirect()->route('consultations.reorder', ['session' => $session->id]);
         }
-        return redirect("/admin/consultations/{$session->id}?tab=reorder");
+        return redirect("/admin/consultations/{$session->id}/reorder");
+       
     }
 
+    // default to RAF
     if (\Illuminate\Support\Facades\Route::has('consultations.risk_assessment')) {
         return redirect()->route('consultations.risk_assessment', ['session' => $session->id]);
     }
-    return redirect("/admin/consultations/{$session->id}?tab=risk-assessment");
+    return redirect("/admin/consultations/{$session->id}/risk-assessment");
 })->name('consultations.runner.start');
 
 // Runner alias for reorder that forwards to the admin route or tab fallback
@@ -63,7 +80,7 @@ Route::get('/consultations/{session}/reorder', function (ConsultationSession $se
     if (\Illuminate\Support\Facades\Route::has('consultations.reorder')) {
         return redirect()->route('consultations.reorder', ['session' => $session->id]);
     }
-    return redirect("/admin/consultations/{$session->id}?tab=reorder");
+    return redirect("/admin/consultations/{$session->id}/reorder");
 })->name('consultations.runner.reorder');
 
 Route::middleware(['web', FilamentAuthenticate::class])->group(function () {
@@ -120,14 +137,25 @@ Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admi
         return redirect("/admin/consultations/{$sessionId}/{$tab}", 302);
     });
 
-// Legacy redirect (unchanged logic, explicit numeric check already present)
+// Legacy redirect, choose first step deterministically and honour explicit type
 Route::get('/admin/forms', function (Request $request) {
     $orderId = (int) $request->query('order', 0);
     abort_if($orderId <= 0, 404);
 
     $order = ApprovedOrder::findOrFail($orderId);
-    $session = app(StartConsultation::class)($order);
+    // Honour explicit desired type if provided
+    $desired = $request->query('type');
+    $session = app(StartConsultation::class)($order, ['desired_type' => $desired]);
 
+    $steps = is_array($session->steps ?? null) ? $session->steps : [];
+    $first = $steps[0] ?? null;
+    $rawMeta = $session->meta ?? [];
+    $meta = is_array($rawMeta) ? $rawMeta : (json_decode($rawMeta ?? '[]', true) ?: []);
+    $intent = strtolower((string) (\Illuminate\Support\Arr::get($meta, 'consultation.type') ?: ($session->form_type ?? '')));
+
+    if ($intent === 'reorder') {
+        return redirect()->route('consultations.reorder', ['session' => $session->id]);
+    }
     return redirect()->route('consultations.risk_assessment', ['session' => $session->id]);
 })->name('admin.forms.legacy')->middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admin']);
 
@@ -191,8 +219,18 @@ Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admi
         Route::get('{session}/reorder', [ConsultationRunnerController::class, 'reorder'])
             ->name('consultations.reorder');
 
-        Route::get('{session}/risk-assessment', [ConsultationRunnerController::class, 'riskAssessment'])
-            ->name('consultations.risk_assessment');
+        Route::get('{session}/risk-assessment', function (\App\Models\ConsultationSession $session, Illuminate\Http\Request $r) {
+            $qt   = strtolower((string) ($r->query('type') ?? $r->query('mode') ?? ''));
+            $raw  = $session->meta ?? [];
+            $meta = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
+            $intent = $qt ?: strtolower((string) (\Illuminate\Support\Arr::get($meta, 'consultation.type') ?: ($session->form_type ?? '')));
+
+            if ($intent === 'reorder') {
+                return redirect()->route('consultations.reorder', ['session' => $session->id]);
+            }
+
+            return app(\App\Http\Controllers\ConsultationRunnerController::class)->riskAssessment($session);
+        })->name('consultations.risk_assessment');
         Route::get('{session}/patient-declaration', [ConsultationRunnerController::class, 'patientDeclaration'])
             ->name('consultations.patient_declaration');
 

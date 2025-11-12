@@ -85,6 +85,25 @@
   </div>
 
   <div class="panel" style="margin-top:16px;">
+    <div class="section-title">Medicine prescribed</div>
+    @php
+      $first = $items[0] ?? [];
+      $extraNotes = data_get($meta ?? [], 'clinical_notes')
+        ?? data_get($meta ?? [], 'notes')
+        ?? data_get($meta ?? [], 'ros.notes');
+    @endphp
+
+    <table class="items" style="margin-top:10px;">
+      <tbody>
+        <tr><th>Date Provided</th><td>{{ now()->format('d/m/Y') }}</td></tr>
+        <tr><th>Item</th><td>{{ $first['name'] ?? '—' }}</td></tr>
+        <tr><th>Item Strength</th><td>{{ $first['variation'] ?? $first['strength'] ?? '—' }}</td></tr>
+        <tr><th>Quantity</th><td>{{ $first['qty'] ?? 1 }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel" style="margin-top:16px;">
     <div class="section-title">Pharmacist Declaration</div>
     <p>
       I confirm that the above named patient has been clinically assessed and supplied medication in accordance with the service protocol.
@@ -120,25 +139,6 @@
           @endif
         </td>
       </tr>
-    </table>
-  </div>
-
-  <div class="panel" style="margin-top:16px;">
-    <div class="section-title">Medicine prescribed</div>
-    @php
-      $first = $items[0] ?? [];
-      $extraNotes = data_get($meta ?? [], 'clinical_notes')
-        ?? data_get($meta ?? [], 'notes')
-        ?? data_get($meta ?? [], 'ros.notes');
-    @endphp
-
-    <table class="items" style="margin-top:10px;">
-      <tbody>
-        <tr><th>Date Provided</th><td>{{ now()->format('d/m/Y') }}</td></tr>
-        <tr><th>Item</th><td>{{ $first['name'] ?? '—' }}</td></tr>
-        <tr><th>Item Strength</th><td>{{ $first['variation'] ?? $first['strength'] ?? '—' }}</td></tr>
-        <tr><th>Quantity</th><td>{{ $first['qty'] ?? 1 }}</td></tr>
-      </tbody>
     </table>
   </div>
 

@@ -579,13 +579,47 @@
                     @php $fieldCard = 'cf-field-card'; @endphp
                     @foreach (($section['fields'] ?? []) as $i => $field)
                         @php
-                            $type  = $field['type'] ?? 'text_input';
+                            // Canonicalise field type to prevent accidental checkbox rendering
+                            $rawType = strtolower((string) ($field['type'] ?? 'text_input'));
+                            $typeMap = [
+                                'text_input' => 'text_input',
+                                'text'       => 'text_input',
+                                'input'      => 'text_input',
+                                'string'     => 'text_input',
+                                'short_text' => 'text_input',
+                                'long_text'  => 'textarea',
+                                'textarea'   => 'textarea',
+                                'select'     => 'select',
+                                'dropdown'   => 'select',
+                                'radio'      => 'radio',
+                                'yesno'      => 'radio',
+                                'boolean'    => 'checkbox',
+                                'checkbox'   => 'checkbox',
+                                'switch'     => 'checkbox',
+                                'date'       => 'date',
+                                'file'       => 'file',
+                                'file_upload'=> 'file_upload',
+                                'upload'     => 'file_upload',
+                            ];
+                            $type  = $typeMap[$rawType] ?? 'text_input';
+
                             $label = $field['label'] ?? null;
                             $key   = $field['key'] ?? ($label ? \Illuminate\Support\Str::slug($label) : ('field_'.$loop->index));
                             $name  = $key;
                             $help  = $field['help'] ?? ($field['description'] ?? null);
                             $req   = (bool) ($field['required'] ?? false);
                             $ph    = $field['placeholder'] ?? null;
+
+                            // Heuristic: if something was marked as checkbox but clearly looks like free text, treat as text input
+                            if ($type === 'checkbox') {
+                                $hasOptions = isset($field['options']) && is_array($field['options']) && count($field['options']) > 0;
+                                $labelText  = (string) ($label ?? '');
+                                $looksLikeBoolean = (bool) preg_match('/\b(confirm|agree|consent|accept|acknowledge|declaration|i\s+confirm|i\s+agree)\b/i', $labelText);
+                                if (! $hasOptions && ! $looksLikeBoolean) {
+                                    $type = 'text_input';
+                                }
+                            }
+
                             $valRaw = $answerFor($name, $label);
                             $val    = old($name, $valRaw ?? '');
                             $cond = $field['showIf'] ?? null;

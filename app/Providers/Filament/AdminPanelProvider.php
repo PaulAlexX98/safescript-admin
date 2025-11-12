@@ -18,6 +18,9 @@ use Illuminate\Support\Facades\Route;
 use Filament\Pages;
 use App\Filament\Widgets\AppointmentsCalendarWidget;
 use Guava\Calendar\CalendarPlugin;
+use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
+use App\Filament\Pages\Auth\EditProfile;
+
 
 
 class AdminPanelProvider extends PanelProvider
@@ -57,16 +60,27 @@ class AdminPanelProvider extends PanelProvider
             ->default()
             ->id('admin')
             ->path('admin')
+            ->homeUrl(fn () => url('/admin'))
+            ->middleware([\Illuminate\Cookie\Middleware\EncryptCookies::class, \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class, \Illuminate\Session\Middleware\StartSession::class, \Illuminate\View\Middleware\ShareErrorsFromSession::class, \Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class, \Illuminate\Routing\Middleware\SubstituteBindings::class,])
             ->topbar(false)
             ->login()
+            ->registration()
+            ->passwordReset()
+            ->emailVerification()
+            ->emailChangeVerification()
+            
+            
             ->plugins([
                 \Guava\Calendar\CalendarPlugin::make(),
             ])
             ->widgets([
                 \App\Filament\Widgets\AppointmentsCalendarWidget::class,
             ])
-            ->authGuard('admin')
-            ->profile()  
+            ->authGuard('web')
+            ->authMiddleware([
+                FilamentAuthenticate::class, // require login for /admin
+            ])
+            ->profile(EditProfile::class)
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->pages([
                 Dashboard::class,    

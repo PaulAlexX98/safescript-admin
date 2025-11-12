@@ -21,6 +21,7 @@
     },
     "dependencies": {
         "@ckeditor/ckeditor5-build-classic": "^41.4.2",
-        "@ckeditor/ckeditor5-upload": "^46.1.1"
+        "@ckeditor/ckeditor5-upload": "^46.1.1",
+        "boring-avatars": "^2.0.4"
     }
 }

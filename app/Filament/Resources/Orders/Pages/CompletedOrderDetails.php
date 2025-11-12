@@ -18,6 +18,8 @@ use Filament\Schemas\Schema;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Support\Arr;
 use Illuminate\Support\HtmlString;
+use Illuminate\Support\Facades\Mail;
+use Filament\Notifications\Notification;
 
 class CompletedOrderDetails extends ViewRecord
 {
@@ -83,12 +85,40 @@ class CompletedOrderDetails extends ViewRecord
                 ->button()
                 ->visible($hasSession),
 
-            Action::make('email_patient')
-                ->label('Send Email')
+            ActionGroup::make([
+                Action::make('email_full')
+                    ->label('Full Consultation Record')
+                    ->icon('heroicon-o-document-text')
+                    ->action(function () use ($sessionId) {
+                        if (!$sessionId) { Notification::make()->danger()->title('No consultation session.')->send(); return; }
+                        $this->sendPdfEmail('full', $sessionId);
+                    }),
+                Action::make('email_pre')
+                    ->label('Private Prescription')
+                    ->icon('heroicon-o-clipboard-document-check')
+                    ->action(function () use ($sessionId) {
+                        if (!$sessionId) { Notification::make()->danger()->title('No consultation session.')->send(); return; }
+                        $this->sendPdfEmail('pre', $sessionId);
+                    }),
+                Action::make('email_ros')
+                    ->label('Record of Supply')
+                    ->icon('heroicon-o-clipboard-document')
+                    ->action(function () use ($sessionId) {
+                        if (!$sessionId) { Notification::make()->danger()->title('No consultation session.')->send(); return; }
+                        $this->sendPdfEmail('ros', $sessionId);
+                    }),
+                Action::make('email_invoice')
+                    ->label('Invoice')
+                    ->icon('heroicon-o-receipt-refund')
+                    ->action(function () use ($sessionId) {
+                        if (!$sessionId) { Notification::make()->danger()->title('No consultation session.')->send(); return; }
+                        $this->sendPdfEmail('invoice', $sessionId);
+                    }),
+            ])
+                ->label('Email PDF')
                 ->icon('heroicon-o-paper-airplane')
-                ->action(function () {
-                    $this->notify('success', 'Email queued to patient.');
-                })
+                ->color('success')
+                ->button()
                 ->visible($hasSession),
 
             Action::make('follow_up')
@@ -105,7 +135,7 @@ class CompletedOrderDetails extends ViewRecord
                 ->color('gray')
                 ->action(function () {
                     $this->record->update(['archived_at' => now()]);
-                    $this->notify('success', 'Order archived.');
+                    Notification::make()->success()->title('Order archived.')->send();
                 }),
         ];
     }
@@ -780,4 +810,74 @@ class CompletedOrderDetails extends ViewRecord
         ]);
     }
 
+
+    protected function sendPdfEmail(string $which, int|string $sessionId): void
+    {
+        $rec  = $this->record;
+        $meta = is_array($rec->meta) ? $rec->meta : (json_decode($rec->meta ?? '[]', true) ?: []);
+        $email = data_get($meta, 'email') ?? optional($rec->user)->email;
+
+        $defaultMailer = config('mail.default');
+        if ($defaultMailer === 'log' || $defaultMailer === 'array') {
+            Notification::make()->warning()->title('Mailer is set to log so no emails are sent')->send();
+        }
+
+        if (!$email) {
+            Notification::make()->danger()->title('No patient email on record.')->send();
+            return;
+        }
+
+        // Resolve URL and label based on requested document
+        switch ($which) {
+            case 'full':
+                $label = 'Full Consultation Record';
+                $url = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.full')
+                    ? route('admin.consultations.pdf.full', ['session' => $sessionId])
+                    : url("/admin/consultations/{$sessionId}/pdf/full");
+                break;
+            case 'pre':
+                $label = 'Private Prescription';
+                $url = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.pre')
+                    ? route('admin.consultations.pdf.pre', ['session' => $sessionId])
+                    : url("/admin/consultations/{$sessionId}/pdf/private-prescription");
+                break;
+            case 'ros':
+                $label = 'Record of Supply';
+                $url = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.ros')
+                    ? route('admin.consultations.pdf.ros', ['session' => $sessionId])
+                    : url("/admin/consultations/{$sessionId}/pdf/record-of-supply");
+                break;
+            case 'invoice':
+                $label = 'Invoice';
+                $url = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.invoice')
+                    ? route('admin.consultations.pdf.invoice', ['session' => $sessionId])
+                    : url("/admin/consultations/{$sessionId}/pdf/invoice");
+                break;
+            default:
+                Notification::make()->danger()->title('Unknown document type.')->send();
+                return;
+        }
+
+        try {
+            $first = data_get($meta, 'firstName') ?? data_get($meta, 'first_name') ?? optional($rec->user)->first_name ?? '';
+            $name = is_string($first) ? trim($first) : '';
+            $ref  = $rec->reference ?? $rec->getKey();
+
+            $subject = $label;
+            $body = "Hello {$name}\n\nHere is your {$label} for order {$ref}\nOpen the link below to view or download your PDF\n{$url}\n\nIf you did not request this please contact the pharmacy";
+
+            Mail::raw($body, function ($m) use ($email, $subject) {
+                $fromAddress = config('mail.from.address') ?: 'orders@safescript1984.co.uk';
+                $fromName    = config('mail.from.name') ?: 'Safescript Pharmacy';
+                $m->from($fromAddress, $fromName)
+                  ->to($email)
+                  ->subject($subject);
+            });
+
+            Notification::make()->success()->title($label . ' email sent to ' . $email . '.')->send();
+        } catch (\Throwable $e) {
+            Notification::make()->danger()->title('Could not send email right now')->body(substr($e->getMessage(), 0, 200))->send();
+            report($e);
+        }
+    }
 }

@@ -97,16 +97,101 @@
         }
     }
 
-    // Load last saved data for prefill
-    $oldData = [];
-    if ($form && isset($sessionLike->id)) {
-        $resp = \App\Models\ConsultationFormResponse::query()
-            ->where('consultation_session_id', $sessionLike->id)
-            ->where('clinic_form_id', $form->id)
-            ->latest('id')
-            ->first();
-        $oldData = $resp?->data ?? [];
-    }
+    // Step slug for THIS page (used for hydration fallbacks)
+    $stepSlug = 'pharmacist-advice';
+
+    // Generic loader: resolves answers by clinic_form_id -> form_type/step_slug -> session.meta
+    $loadAnswers = function ($sessionLike, $form, $stepSlug) {
+        $toArr = function ($v) { if (is_array($v)) return $v; if (is_string($v)) { $d = json_decode($v, true); return is_array($d) ? $d : []; } return (array) $v; };
+        $slug  = fn($s) => \Illuminate\Support\Str::slug((string)$s);
+        $aliases = array_values(array_unique([
+            (string)$stepSlug,
+            str_replace('_','-',(string)$stepSlug),
+            str_replace('-','_',(string)$stepSlug),
+            $form->form_type ?? null,
+            $slug($form->form_type ?? ''),
+            'advice', // primary type for this blade
+            'pharmacist-advice',
+            // common fallbacks used elsewhere
+            'raf','risk','assessment','reorder','pharmacist-declaration','record-of-supply'
+        ]));
+
+        // 1) DB: by clinic_form_id, then by aliases (form_type/step_slug/title)
+        $answers = [];
+        try {
+            $q = \App\Models\ConsultationFormResponse::query()
+                ->where('consultation_session_id', $sessionLike->id ?? null)
+                ->latest('id');
+
+            if ($form && $form->id) {
+                $resp = (clone $q)->where('clinic_form_id', $form->id)->first();
+                if ($resp) {
+                    $raw = $resp->data;
+                    $answers = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
+                    $answers = (array) ($answers['answers'] ?? $answers['data'] ?? $answers);
+                }
+            }
+
+            if (empty($answers)) {
+                $q2 = \App\Models\ConsultationFormResponse::query()
+                    ->where('consultation_session_id', $sessionLike->id ?? null)
+                    ->where(function ($qq) use ($aliases) {
+                        $qq->whereIn('form_type', $aliases);
+                        foreach ($aliases as $a) {
+                            $qq->orWhere('step_slug', 'like', "%{$a}%")
+                               ->orWhere('title', 'like', "%{$a}%");
+                        }
+                    })
+                    ->latest('id')
+                    ->first();
+
+                if ($q2) {
+                    $raw = $q2->data;
+                    $answers = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
+                    $answers = (array) ($answers['answers'] ?? $answers['data'] ?? $answers['assessment']['answers'] ?? $answers);
+                }
+            }
+        } catch (\Throwable $e) {}
+
+        // 2) Session meta fallbacks
+        if (empty($answers) && isset($sessionLike->meta)) {
+            $meta = $toArr($sessionLike->meta ?? []);
+            foreach ($aliases as $a) {
+                foreach (["forms.$a.answers","forms.$a.data","forms_qa.$a","formsQA.$a","$a.answers","$a.data"] as $p) {
+                    $v = data_get($meta, $p);
+                    if (is_array($v) && !empty($v)) { $answers = $v; break 2; }
+                }
+            }
+            if (isset($answers['answers']) && is_array($answers['answers'])) $answers = $answers['answers'];
+        }
+
+        // 3) Normalise list-of-rows -> map
+        if (is_array($answers) && array_keys($answers) === range(0, count($answers)-1)) {
+            $map = [];
+            foreach ($answers as $row) {
+                if (!is_array($row)) continue;
+                $k = $row['key'] ?? $row['name'] ?? $row['question'] ?? $row['label'] ?? null;
+                $v = $row['value'] ?? $row['answer'] ?? $row['raw'] ?? ($row['selected']['value'] ?? null);
+                if ($k !== null) $map[(string)$k] = $v;
+            }
+            if (!empty($map)) $answers = $map;
+        }
+
+        // 4) Flatten nested transport shapes like { raw, value, answer }
+        $flat = [];
+        foreach ((array)$answers as $k => $v) {
+            if (is_array($v) && \Illuminate\Support\Arr::isAssoc($v)) {
+                $flat[$k] = $v['raw'] ?? $v['answer'] ?? $v['value'] ?? $v;
+                foreach ($v as $ik => $iv) if (!isset($flat[$ik])) $flat[$ik] = $iv;
+            } else {
+                $flat[$k] = $v;
+            }
+        }
+        return $flat;
+    };
+
+    // Final: old data for this blade
+    $oldData = $loadAnswers($sessionLike ?? $session, $form ?? null, $stepSlug);
 
     // Helper to normalise options
     $normaliseOptions = function ($raw) {
@@ -196,6 +281,9 @@
                             // Prefill value with array support for multi-select
                             if ($type === 'select' && $isMultiple) {
                                 $val = old($name, (array) ($oldData[$name] ?? []));
+                            } elseif ($type === 'checkbox') {
+                                // Default checkboxes to checked unless a previous value exists (preserves saved "0"/unchecked)
+                                $val = old($name, array_key_exists($name, (array) $oldData) ? $oldData[$name] : 1);
                             } else {
                                 $val = old($name, $oldData[$name] ?? '');
                             }
@@ -322,7 +410,7 @@
                             <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
                                 <div class="cf-checkbox-row">
                                     <input type="hidden" name="{{ $name }}" value="0">
-                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" value="1" class="rounded-md bg-gray-800/70 border-gray-700 focus:ring-amber-500 focus:ring-2 mt-0.5" {{ ((string)$val === '1' || $val === 1 || $val === true || $val === 'on') ? 'checked' : '' }} {!! $disabledAttr !!}>
+                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" value="1" class="rounded-md bg-gray-800/70 border-gray-700 focus:ring-amber-500 focus:ring-2 mt-0.5" {{ ($val === 1 || $val === true || (is_string($val) && in_array(strtolower($val), ['1','on','yes','true','checked','done'], true))) ? 'checked' : '' }} {!! $disabledAttr !!}>
                                     <label for="{{ $name }}" class="text-sm text-gray-200 cursor-pointer select-none leading-6">{{ $label }}</label>
                                 </div>
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif

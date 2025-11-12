@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\DB;
 use App\Models\Order;
+use App\Services\Shipping\ClickAndDrop;
 
 class ConsultationRunner extends Page
 {
@@ -229,6 +230,70 @@ class ConsultationRunner extends Page
                 }
             }
         });
+
+        // 4) Trigger Royal Mail Click & Drop shipping now that completion has been saved
+        try {
+            \Log::info('clickanddrop.livewire.start', [
+                'session' => $this->session->id,
+            ]);
+
+            // Normalise meta pulled from the order we mounted
+            $meta = is_array($this->meta) ? $this->meta : (json_decode($this->meta ?? '[]', true) ?: []);
+
+            $first = data_get($meta, 'patient.first_name')
+                ?? data_get($this->order?->user, 'first_name');
+            $last  = data_get($meta, 'patient.last_name')
+                ?? data_get($this->order?->user, 'last_name');
+
+            $out = app(ClickAndDrop::class)->createOrder([
+                'reference'  => $this->order?->reference ?? ('CONS-' . $this->session->id),
+                'first_name' => $first,
+                'last_name'  => $last,
+                'email'      => data_get($meta, 'patient.email') ?? data_get($this->order?->user, 'email'),
+                'phone'      => data_get($meta, 'patient.phone'),
+                'address1'   => data_get($meta, 'patient.address1') ?? data_get($meta, 'patient.address.line1'),
+                'address2'   => data_get($meta, 'patient.address2') ?? data_get($meta, 'patient.address.line2'),
+                'city'       => data_get($meta, 'patient.city')     ?? data_get($meta, 'patient.address.city'),
+                'county'     => data_get($meta, 'patient.county')   ?? data_get($meta, 'patient.address.county'),
+                'postcode'   => data_get($meta, 'patient.postcode') ?? data_get($meta, 'patient.address.postcode'),
+                'item_name'  => $this->service ?? 'Pharmacy order',
+                'sku'        => data_get($meta, 'sku') ?? 'RX',
+                'weight'     => 100,
+                'value'      => 0,
+            ]);
+
+            // Persist shipping details onto the order meta for visibility and PDFs
+            $oMeta = is_array($this->order?->meta) ? $this->order->meta : (json_decode($this->order->meta ?? '[]', true) ?: []);
+            data_set($oMeta, 'shipping.carrier', 'royal_mail_click_and_drop');
+            data_set($oMeta, 'shipping.tracking', $out['tracking'] ?? null);
+            data_set($oMeta, 'shipping.label', $out['label_path'] ?? null);
+            data_set($oMeta, 'shipping.raw', $out['raw'] ?? null);
+            if ($this->order) {
+                $this->order->meta = $oMeta;
+                $this->order->save();
+            }
+
+            \Log::info('clickanddrop.livewire.ok', [
+                'session'  => $this->session->id,
+                'tracking' => $out['tracking'] ?? null,
+            ]);
+
+            // Optional success toast so you know a label was created
+            Notification::make()
+                ->title('Royal Mail label created')
+                ->success()
+                ->send();
+        } catch (\Throwable $e) {
+            \Log::error('clickanddrop.livewire.failed', [
+                'session' => $this->session->id,
+                'error'   => $e->getMessage(),
+            ]);
+            // Non-blocking failure notification
+            Notification::make()
+                ->title('Royal Mail shipping failed')
+                ->danger()
+                ->send();
+        }
 
         // UX: toast + redirect to Completed Orders list
         Notification::make()

@@ -4,13 +4,16 @@ namespace App\Filament\Resources\Appointments;
 
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\Filter;
-use App\Filament\Resources\Appointments\AppointmentResource\Pages\ListAppointments;
-use App\Filament\Resources\Appointments\AppointmentResource\Pages\EditAppointment;
-use App\Filament\Resources\Appointments\AppointmentResource\Pages\ViewAppointment;
-use App\Filament\Resources\Appointments\AppointmentResource\Pages;
+use App\Filament\Resources\Appointments\Pages\ListAppointments;
+use App\Filament\Resources\Appointments\Pages\EditAppointment;
+use App\Filament\Resources\Appointments\Pages\ViewAppointment;
+use App\Filament\Resources\Appointments\Pages as Pages;
 use App\Models\Appointment;
+ 
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\Select;
 use Filament\Schemas\Schema;
-use Filament\Schemas\Components\TextInput;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -35,18 +38,76 @@ class AppointmentResource extends Resource
     // Title used on View/Edit pages
     protected static ?string $recordTitleAttribute = 'display_title';
 
-    public static function form(Schema $schema): Schema
+    public static function form(\Filament\Schemas\Schema $schema): \Filament\Schemas\Schema
     {
-        return $schema->components([
-            TextInput::make('start_at')->label('Start')->required()->helperText('Format YYYY-MM-DD HH:MM'),
-            TextInput::make('end_at')->label('End')->helperText('Format YYYY-MM-DD HH:MM'),
-            TextInput::make('patient_name')->label('Patient name'),
-            TextInput::make('first_name')->maxLength(120),
-            TextInput::make('last_name')->maxLength(120),
-            TextInput::make('service_name')->label('Service'),
-            TextInput::make('service_slug')->label('Service key'),
-            TextInput::make('status')->default('booked')->maxLength(50),
-        ])->columns(2);
+        return $schema
+            ->columns(12)
+            ->components([
+                \Filament\Forms\Components\Placeholder::make('ref_display')
+                    ->label('Ref')
+                    ->content(fn ($record) => static::resolveOrderRef($record) ?? '—')
+                    ->columnSpan(3),
+                \Filament\Forms\Components\Placeholder::make('item_display')
+                    ->label('Item')
+                    ->content(fn ($record) => static::resolveOrderItem($record) ?? '—')
+                    ->columnSpan(9),
+
+                \Filament\Forms\Components\DateTimePicker::make('start_at')
+                    ->label('Start')
+                    ->native(false)
+                    ->displayFormat('d M Y, H:i')
+                    ->timezone('Europe/London')
+                    ->seconds(false)
+                    ->minutesStep(5)
+                    ->required()
+                    ->columnSpan(6),
+
+                \Filament\Forms\Components\DateTimePicker::make('end_at')
+                    ->label('End')
+                    ->native(false)
+                    ->displayFormat('d M Y, H:i')
+                    ->timezone('Europe/London')
+                    ->seconds(false)
+                    ->minutesStep(5)
+                    ->columnSpan(6),
+
+                \Filament\Forms\Components\TextInput::make('first_name')
+                    ->label('First name')
+                    ->disabled()
+                    ->dehydrated(false)
+                    ->columnSpan(6),
+
+                \Filament\Forms\Components\TextInput::make('last_name')
+                    ->label('Last name')
+                    ->disabled()
+                    ->dehydrated(false)
+                    ->columnSpan(6),
+
+                \Filament\Forms\Components\TextInput::make('service_name')
+                    ->label('Service')
+                    ->disabled()
+                    ->dehydrated(false)
+                    ->columnSpan(6),
+
+                \Filament\Forms\Components\TextInput::make('service_slug')
+                    ->label('Service key')
+                    ->disabled()
+                    ->dehydrated(false)
+                    ->columnSpan(6),
+
+                \Filament\Forms\Components\Select::make('status')
+                    ->label('Status')
+                    ->options([
+                        'booked'    => 'Booked',
+                        'approved'  => 'Approved',
+                        'pending'   => 'Pending',
+                        'cancelled' => 'Cancelled',
+                        'rejected'  => 'Rejected',
+                    ])
+                    ->native(false)
+                    ->searchable()
+                    ->columnSpan(6),
+            ]);
     }
 
     public static function table(Table $table): Table
@@ -87,8 +148,16 @@ class AppointmentResource extends Resource
                         } catch (\Throwable $e) { /* ignore */ }
                         return '—';
                     })
-                    ->searchable()
-                    ->toggleable(),
+                    ->toggleable()
+                    ->searchable(true, function (Builder $query, string $search): Builder {
+                        $like = "%" . $search . "%";
+                        return $query->whereExists(function ($sub) use ($like) {
+                            $sub->select(\DB::raw('1'))
+                                ->from('orders')
+                                ->whereColumn('orders.id', 'appointments.order_id')
+                                ->where('orders.reference', 'like', $like);
+                        });
+                    }),
                 TextColumn::make('order_item')
                     ->label('Item')
                     ->getStateUsing(function ($record) {
@@ -168,9 +237,55 @@ class AppointmentResource extends Resource
                         if ($name !== '' && $variation !== '') return $name.' — '.$variation.$qtySuffix;
                         return ($name !== '' ? $name : $variation).$qtySuffix;
                     })
+                    ->searchable(true, function (Builder $query, string $search): Builder {
+                        $like = "%" . $search . "%";
+                        return $query
+                            ->whereExists(function ($sub) use ($like) {
+                                $sub->select(\DB::raw('1'))
+                                    ->from('orders')
+                                    ->whereColumn('orders.id', 'appointments.order_id')
+                                    ->where(function ($q) use ($like) {
+                                        $q->whereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.selectedProduct.name')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.selectedProduct.title')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.selectedProduct.variation')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.selectedProduct.strength')) like ?", [$like])
+
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.lines[0].name')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.lines[0].title')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.lines[0].variation')) like ?", [$like])
+
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].name')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].title')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].variations')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].strength')) like ?", [$like])
+
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.cart.items[0].name')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.cart.items[0].title')) like ?", [$like])
+
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.product.name')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.product.title')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.product_name')) like ?", [$like])
+
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.treatment')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.treatment.name')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.treatment_name')) like ?", [$like])
+
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.medicine')) like ?", [$like])
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.medicine.name')) like ?", [$like])
+
+                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.service')) like ?", [$like])
+
+                                          ->orWhereRaw("CAST(orders.meta AS CHAR) like ?", [$like]);
+                                    });
+                            })
+                            ->orWhere(function ($q) use ($like) {
+                                $q->where('service_name', 'like', $like)
+                                  ->orWhere('service', 'like', $like)
+                                  ->orWhere('service_slug', 'like', $like);
+                            });
+                    })
                     ->wrap()
-                    ->toggleable()
-                    ->searchable(),
+                    ->toggleable(),
                 TextColumn::make('patient')
                     ->label('Patient')
                     ->getStateUsing(function ($record) {
@@ -263,7 +378,7 @@ class AppointmentResource extends Resource
                                 ->whereDate('created_at', $day)
                                 ->orderByDesc('created_at')
                                 ->limit(15)
-                                ->get(['id','meta','user_id','first_name','last_name','created_at']);
+                                ->get(['id','meta','user_id','created_at']);
 
                             foreach ($orders as $ord) {
                                 $meta = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
@@ -291,12 +406,48 @@ class AppointmentResource extends Resource
                         $email = is_string($record->email ?? null) ? trim($record->email) : '';
                         return $email !== '' ? $email : '—';
                     })
-                    ->searchable(),
+                    ->searchable(true, function (Builder $query, string $search): Builder {
+                        $like = "%" . $search . "%";
+                        return $query->where(function ($q) use ($like) {
+                            $q->where('patient_name', 'like', $like)
+                              ->orWhere('first_name', 'like', $like)
+                              ->orWhere('last_name', 'like', $like)
+                              ->orWhereRaw("concat_ws(' ', first_name, last_name) like ?", [$like])
+                              ->orWhere('email', 'like', $like)
+                              ->orWhereExists(function ($sub) use ($like) {
+                                  $sub->select(\DB::raw('1'))
+                                      ->from('orders')
+                                      ->whereColumn('orders.id', 'appointments.order_id')
+                                      ->where(function ($q2) use ($like) {
+                                          $q2->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.patient.name')) like ?", [$like])
+                                             ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.patient.first_name')) like ?", [$like])
+                                             ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.patient.last_name')) like ?", [$like])
+                                             ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.customer.name')) like ?", [$like])
+                                             ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.customer.first_name')) like ?", [$like])
+                                             ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.customer.last_name')) like ?", [$like])
+                                             ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.full_name')) like ?", [$like]);
+                                      });
+                              });
+                        });
+                    }),
                 TextColumn::make('service')
                     ->label('Service')
-                    ->formatStateUsing(fn ($state) => $state ? Str::of($state)->replace('-', ' ')->title() : '—')
+                    ->formatStateUsing(function ($state) {
+                        if (empty($state)) return '—';
+                        return \Illuminate\Support\Str::of((string) $state)
+                            ->replace('-', ' ')
+                            ->title()
+                            ->toString();
+                    })
                     ->toggleable()
-                    ->searchable(),
+                    ->searchable(true, function (Builder $query, string $search): Builder {
+                        $like = "%" . $search . "%";
+                        return $query->where(function ($q) use ($like) {
+                            $q->where('service', 'like', $like)
+                              ->orWhere('service_slug', 'like', $like)
+                              ->orWhere('service_name', 'like', $like);
+                        });
+                    }),
                 TextColumn::make('status')
                     ->badge()
                     ->color(fn (string $state): string => match (strtolower($state)) {
@@ -357,10 +508,38 @@ class AppointmentResource extends Resource
                         return $query;
                     }),
 
+                // Ref filter (search by order reference)
+                \Filament\Tables\Filters\Filter::make('ref')
+                    ->label('Ref')
+                    ->form([\Filament\Forms\Components\TextInput::make('q')->placeholder('PTCN…')->debounce(500)])
+                    ->query(function (\Illuminate\Database\Eloquent\Builder $query, array $data): \Illuminate\Database\Eloquent\Builder {
+                        $ref = trim((string) ($data['q'] ?? ''));
+                        if ($ref === '') return $query;
+                        $ids = \App\Models\Order::query()->where('reference', 'like', "%{$ref}%")->pluck('id')->all();
+                        if (empty($ids)) { return $query->whereRaw('1 = 0'); }
+                        return $query->whereIn('order_id', $ids);
+                    })
+                    ->indicateUsing(fn ($state) => ($state['q'] ?? null) ? ('Ref: ' . $state['q']) : null),
+
                 // Optional: Upcoming toggle (no default). Use if you only want future times for the chosen day.
                 Filter::make('upcoming')
                     ->label('Upcoming')
                     ->query(fn (Builder $q) => $q->where('start_at', '>=', now())),
+            ])
+            ->actions([
+                \Filament\Actions\Action::make('view')
+                    ->label('View')
+                    ->button()
+                    ->color('gray')
+                    ->icon('heroicon-o-eye')
+                    ->url(fn ($record) => static::orderDetailsUrlForRecord($record))
+                    ->openUrlInNewTab(),
+                \Filament\Actions\Action::make('reschedule')
+                    ->label('Reschedule')
+                    ->button()
+                    ->color('warning')
+                    ->icon('heroicon-o-calendar')
+                    ->url(fn ($record) => static::getUrl('edit', ['record' => $record])),
             ])
             ->defaultSort('start_at', 'asc')
             ->defaultPaginationPageOption(25)
@@ -421,5 +600,105 @@ class AppointmentResource extends Resource
         }
 
         return $pages;
+    }
+    // -- Helper methods for Ref/Item/URL placeholders and actions --
+    // -- Helper methods for Ref/Item/URL placeholders and actions --
+
+    protected static function findRelatedOrder($record): ?\App\Models\Order
+    {
+        if (! $record) return null;
+
+        // 1) Direct link first
+        try {
+            if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'order_id') && !empty($record->order_id)) {
+                $o = \App\Models\Order::find($record->order_id);
+                if ($o) return $o;
+            }
+        } catch (\Throwable $e) {}
+
+        // 2) Heuristic by matching appointment time stored in order meta
+        try {
+            if (!empty($record->start_at)) {
+                $s = \Carbon\Carbon::parse($record->start_at);
+                $isoUtc = $s->copy()->setTimezone('UTC')->toIso8601String();
+                $ymsLon = $s->copy()->setTimezone('Europe/London')->format('Y-m-d H:i:s');
+
+                foreach (['appointment_start_at','appointment_at'] as $key) {
+                    $ord = \App\Models\Order::query()
+                        ->whereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.$key')) in (?,?)", [$isoUtc, $ymsLon])
+                        ->orderByDesc('id')
+                        ->first();
+                    if ($ord) return $ord;
+                }
+            }
+        } catch (\Throwable $e) {}
+
+        return null;
+    }
+
+    protected static function resolveOrderRef($record): ?string
+    {
+        $o = static::findRelatedOrder($record);
+        return is_string($o?->reference ?? null) ? trim($o->reference) : null;
+    }
+
+    protected static function resolveOrderItem($record): ?string
+    {
+        $o = static::findRelatedOrder($record);
+        if (! $o) return null;
+        $meta = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
+
+        $name = null; $variation = null; $qty = null;
+
+        if (is_array($sel = data_get($meta, 'selectedProduct'))) {
+            $name = (string) ($sel['name'] ?? '');
+            $variation = (string) ($sel['variation'] ?? $sel['strength'] ?? '');
+            $qty = isset($sel['qty']) ? (int) $sel['qty'] : $qty;
+        }
+        if (! $name) {
+            $line0 = data_get($meta, 'lines.0');
+            if (is_array($line0)) {
+                $name = (string) ($line0['name'] ?? '');
+                $variation = (string) ($line0['variation'] ?? '');
+                $qty = isset($line0['qty']) ? (int) $line0['qty'] : $qty;
+            }
+        }
+        if (! $name) {
+            $item0 = data_get($meta, 'items.0');
+            if (is_array($item0)) {
+                $name = (string) ($item0['name'] ?? '');
+                $variation = (string) ($item0['variations'] ?? $item0['strength'] ?? '');
+                $qty = isset($item0['qty']) ? (int) $item0['qty'] : $qty;
+            }
+        }
+        if (! $name) {
+            $name = (string) (data_get($meta,'service') ?? '');
+        }
+
+        $name = is_string($name) ? trim($name) : '';
+        $variation = is_string($variation) ? trim($variation) : '';
+        $qtySuffix = ' × ' . (($qty !== null && $qty > 0) ? $qty : 1);
+
+        if ($name === '' && $variation === '') return null;
+        if ($name !== '' && $variation !== '') return $name.' — '.$variation.$qtySuffix;
+        return ($name !== '' ? $name : $variation).$qtySuffix;
+    }
+
+    protected static function orderDetailsUrlForRecord($record): string
+    {
+        $order = static::findRelatedOrder($record);
+        if (! $order) {
+            return static::getUrl('edit', ['record' => $record]);
+        }
+
+        $segment = 'completed-orders';
+        try {
+            $status = strtolower((string) ($order->booking_status ?? $order->status ?? ''));
+            if (in_array($status, ['approved','booked','pending'])) {
+                $segment = 'approved-orders';
+            }
+        } catch (\Throwable $e) {}
+
+        return url("/admin/orders/{$segment}/{$order->id}/details");
     }
 }

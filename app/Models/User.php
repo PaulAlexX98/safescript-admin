@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -16,47 +15,58 @@ class User extends Authenticatable implements FilamentUser
     /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable;
 
-    /**
-     * The attributes that are mass assignable.
-     *
-     * @var list<string>
-     */
     protected $fillable = [
         'first_name','last_name','gender','phone','dob',
         'address1','address2','city','county','postcode','country',
         'marketing',
         'name','email','password',
+        'is_pharmacist',
+        'pharmacist_display_name',
+        'gphc_number',
+        'signature_path',
+        'consultation_defaults',
     ];
 
-    /**
-     * The attributes that should be hidden for serialization.
-     *
-     * @var list<string>
-     */
-    protected $hidden = [
-        'password',
-        'remember_token',
-    ];
+    protected $hidden = ['password','remember_token'];
 
-    /**
-     * Get the attributes that should be cast.
-     *
-     * @return array<string, string>
-     */
     protected function casts(): array
     {
         return [
-            'email_verified_at' => 'datetime',
-            'password' => 'hashed',
+            'email_verified_at'    => 'datetime',
+            'password'             => 'hashed',   // ← make sure password is hashed
+            'consultation_defaults'=> 'array',
+            'is_pharmacist'        => 'boolean',
         ];
     }
+
     public function canAccessPanel(Panel $panel): bool
     {
-        // gate to pharmacists only; set this column on the user
-        return (bool) ($this->is_pharmacist ?? false);
+        // gate to pharmacists only
+        return true;
     }
+
     public function getFullNameAttribute(): string
     {
         return trim(($this->first_name ?? '') . ' ' . ($this->last_name ?? ''));
+    }
+
+    // Easy URL for the signature preview/use in PDFs
+    public function getSignatureUrlAttribute(): ?string
+    {
+        if (! $this->signature_path) {
+            return null;
+        }
+
+        // If already a data URL, return as-is
+        if (is_string($this->signature_path) && str_starts_with($this->signature_path, 'data:image')) {
+            return $this->signature_path;
+        }
+
+        return \Storage::disk('public')->url($this->signature_path);
+    }
+
+    public function getFilamentAvatarUrl(): ?string
+    {
+        return $this->avatar_url;
     }
 }

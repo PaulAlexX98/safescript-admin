@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Filament\Resources\Scheduling\Schedules\ScheduleResource\Pages;
+namespace App\Filament\Resources\Scheduling\Schedules\Pages;
 
 use Filament\Actions\CreateAction;
 use App\Filament\Resources\Scheduling\Schedules\ScheduleResource;

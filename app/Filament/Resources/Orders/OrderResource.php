@@ -81,6 +81,83 @@ class OrderResource extends Resource
                     ->copyable()
                     ->toggleable(),
 
+                // Hidden, search-only JSON/related fields so the table search works without DB errors
+                \Filament\Tables\Columns\TextColumn::make('meta->firstName')
+                    ->label('First Name (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->lastName')
+                    ->label('Last Name (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('user.first_name')
+                    ->label('User First Name')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('user.last_name')
+                    ->label('User Last Name')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->email')
+                    ->label('Email (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->phone')
+                    ->label('Phone (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                // Hidden, search-only product/item fields so search matches item names too
+                \Filament\Tables\Columns\TextColumn::make('meta->product_name')
+                    ->label('Product Name (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->product')
+                    ->label('Product (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->selectedProduct->name')
+                    ->label('Selected Product Name (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->selected_product->name')
+                    ->label('Selected Product Name (Alt JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->selectedProduct->optionLabel')
+                    ->label('Selected Option (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->selected_product->optionLabel')
+                    ->label('Selected Option (Alt JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->medication->name')
+                    ->label('Medication Name (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->drug->name')
+                    ->label('Drug Name (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->item->name')
+                    ->label('Item Name (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->line->name')
+                    ->label('Line Name (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                \Filament\Tables\Columns\TextColumn::make('meta->cart->item->name')
+                    ->label('Cart Item Name (JSON)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                // (Optional) This will search the entire items array JSON text – less efficient but broad
+                \Filament\Tables\Columns\TextColumn::make('meta->items')
+                    ->label('Items JSON')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+
                 // Order Service from meta
                 TextColumn::make('meta.service')
                     ->label('Order Service')
@@ -291,7 +368,6 @@ class OrderResource extends Resource
                         $name  = trim(($first ? $first : '') . ' ' . ($last ? $last : ''));
                         return $name !== '' ? $name : (optional($record->user)->name ?? null);
                     })
-                    ->searchable()
                     ->toggleable(),
 
                 // (Payment status and Order status columns removed)

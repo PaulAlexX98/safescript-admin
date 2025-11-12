@@ -191,7 +191,53 @@
             ->where('clinic_form_id', $form->id)
             ->latest('id')
             ->first();
-        $oldData = $resp?->data ?? [];
+
+        $rawData = $resp?->data ?? [];
+
+        // Normalise to plain array regardless of cast shape
+        if (is_string($rawData)) {
+            $decoded = json_decode($rawData, true);
+            $rawData = is_array($decoded) ? $decoded : [];
+        } elseif (is_object($rawData)) {
+            $rawData = json_decode(json_encode($rawData), true) ?: [];
+        }
+
+        $oldData = (array) ($rawData ?? []);
+
+        // If persisted as { answers: {...} }, unwrap it
+        if (array_key_exists('answers', $oldData) && is_array($oldData['answers'])) {
+            $oldData = $oldData['answers'];
+        }
+    }
+
+    // Fallback: hydrate from session meta in any of the known stores if DB record absent
+    if (empty($oldData) && isset($sessionLike->meta)) {
+        $meta = is_array($sessionLike->meta) ? $sessionLike->meta : (json_decode($sessionLike->meta ?? '[]', true) ?: []);
+        $ft   = $form->form_type ?? 'raf';
+        $slugCur = 'risk-assessment';
+        $cands = [
+            "forms.$ft.answers",
+            "forms.$ft.data",
+            "forms.$slugCur.answers",
+            "forms.$slugCur.data",
+            "forms.{$form->id}.answers",
+            "forms.{$form->id}.data",
+            "formsQA.$ft",
+            "formsQA.$slugCur",
+            "forms_qa.$ft",
+            "forms_qa.$slugCur",
+        ];
+        foreach ($cands as $path) {
+            $cand = data_get($meta, $path);
+            if (is_string($cand)) {
+                $decoded = json_decode($cand, true);
+                if (is_array($decoded) && !empty($decoded)) { $oldData = $decoded; break; }
+            }
+            if (is_array($cand) && !empty($cand)) { $oldData = $cand; break; }
+        }
+        if (is_array($oldData) && array_key_exists('answers', $oldData) && is_array($oldData['answers'])) {
+            $oldData = $oldData['answers'];
+        }
     }
 
     // Prefill from any related order meta so questions show prior answers
@@ -369,6 +415,10 @@
         // Build a strict set of candidate keys for this field only
         $cands = [];
 
+        // Ensure we always have array shapes even if a stdClass was loaded
+        $__oldArr = (array) ($oldData ?? []);
+        $__preArr = (array) ($prefill ?? []);
+
         $add = function ($s) use (&$cands) {
             if ($s === null || $s === '') return;
             $s = (string) $s;
@@ -417,14 +467,14 @@
 
         // First prefer explicit saved data then prefill
         foreach ($keys as $k) {
-            if (is_array($oldData) && array_key_exists($k, $oldData)) {
-                $v = $oldData[$k];
+            if (array_key_exists($k, $__oldArr)) {
+                $v = $__oldArr[$k];
                 if ($v !== '' && $v !== null) return $v;
             }
         }
         foreach ($keys as $k) {
-            if (is_array($prefill) && array_key_exists($k, $prefill)) {
-                $v = $prefill[$k];
+            if (array_key_exists($k, $__preArr)) {
+                $v = $__preArr[$k];
                 if ($v !== '' && $v !== null) return $v;
             }
         }
@@ -651,15 +701,52 @@
                                     <label class="cf-label">{{ $label }}</label>
                                 @endif
                                 @php
+                                    // Normalise saved value into a comparable string
                                     $valForRadio = $val;
-                                    if (is_bool($valForRadio)) { $valForRadio = $valForRadio ? 'yes' : 'no'; }
-                                    $valSlug = is_string($valForRadio) ? \Illuminate\Support\Str::slug($valForRadio) : $valForRadio;
+
+                                    // If saved as { value: "...", label: "..." } prefer value then label
+                                    if (is_array($valForRadio)) {
+                                        if (\Illuminate\Support\Arr::isAssoc($valForRadio)) {
+                                            $valForRadio = $valForRadio['value'] ?? $valForRadio['label'] ?? reset($valForRadio);
+                                        } else {
+                                            // if it's a list, first scalar wins
+                                            foreach ($valForRadio as $vv) { if (is_scalar($vv)) { $valForRadio = $vv; break; } }
+                                        }
+                                    }
+
+                                    // Booleans / numeric-ish strings -> yes/no
+                                    if (is_bool($valForRadio)) {
+                                        $valForRadio = $valForRadio ? 'yes' : 'no';
+                                    } elseif (is_scalar($valForRadio)) {
+                                        $low = strtolower(trim((string) $valForRadio));
+                                        if (in_array($low, ['1','true','yes','checked','on','y'], true))   $valForRadio = 'yes';
+                                        elseif (in_array($low, ['0','false','no','unchecked','off','n'], true)) $valForRadio = 'no';
+                                    } else {
+                                        $valForRadio = '';
+                                    }
+
+                                    $valSlug = \Illuminate\Support\Str::slug((string) $valForRadio);
                                 @endphp
                                 <div class="flex flex-wrap items-center -m-2">
                                     @foreach($normaliseOptions($field['options'] ?? []) as $idx => $op)
-                                        @php $rid = $name.'_'.$idx; @endphp
+                                        @php
+                                            $rid   = $name.'_'.$idx;
+                                            $opVal = (string) ($op['value'] ?? '');
+                                            $opLab = (string) ($op['label'] ?? $opVal);
+                                            $opValSlug = \Illuminate\Support\Str::slug($opVal);
+                                            $opLabSlug = \Illuminate\Support\Str::slug($opLab);
+
+                                            // Mark selected if any of the raw/slug combinations match
+                                            $selected = false;
+                                            if ($valSlug !== '') {
+                                                $selected = ($valSlug === $opValSlug) || ($valSlug === $opLabSlug);
+                                            } else {
+                                                // raw fallback compare (should rarely be needed)
+                                                $selected = ((string)$valForRadio === $opVal) || ((string)$valForRadio === $opLab);
+                                            }
+                                        @endphp
                                         <label for="{{ $rid }}" class="p-2 inline-flex items-center gap-2 text-sm">
-                                            <input type="radio" id="{{ $rid }}" name="{{ $name }}" value="{{ $op['value'] }}" class="rounded-full focus:ring-2" {{ ((string)$valForRadio === (string)$op['value']) || ((string)$valSlug === (string)$op['value']) || ((string)$valForRadio === (string)($op['label'] ?? '')) ? 'checked' : '' }}>
+                                            <input type="radio" id="{{ $rid }}" name="{{ $name }}" value="{{ $op['value'] }}" class="rounded-full focus:ring-2" {{ $selected ? 'checked' : '' }}>
                                             <span>{{ $op['label'] }}</span>
                                         </label>
                                     @endforeach

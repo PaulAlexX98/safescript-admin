@@ -118,7 +118,7 @@ class StartConsultation
         return $out;
     }
 
-    public function __invoke(ApprovedOrder $order): ConsultationSession
+    public function __invoke(ApprovedOrder $order, array $context = []): ConsultationSession
     {
         // Reuse an existing session for this order if present.
         $session = ConsultationSession::where('order_id', $order->id)->first();
@@ -160,6 +160,23 @@ class StartConsultation
 
         if (empty($order->user_id)) {
             throw new RuntimeException('Cannot start consultation because order has no user_id. Link the order to a user.');
+        }
+
+        // Resolve explicit intent if provided by caller or meta
+        $intent = null; // reorder | nhs | new | risk_assessment
+        $rawCtx = strtolower((string) ($context['desired_type'] ?? ''));
+        if ($rawCtx !== '') {
+            $intent = in_array($rawCtx, ['risk-assessment','risk_assessment','raf'], true) ? 'risk_assessment' : $rawCtx;
+        }
+        if ($intent === null || $intent === '') {
+            $m = $this->decodeToArray($order->meta);
+            $cType = strtolower((string) (Arr::get($m, 'consultation.type') ?: Arr::get($m, 'consultation.mode') ?: Arr::get($m, 'type') ?: ''));
+            if ($cType !== '') {
+                $intent = in_array($cType, ['risk-assessment','risk_assessment','raf'], true) ? 'risk_assessment' : $cType;
+            }
+        }
+        if ($intent === null || $intent === '') {
+            $intent = 'risk_assessment';
         }
 
         // Helper to fetch a specific form_type with sensible fallbacks:
@@ -212,12 +229,15 @@ class StartConsultation
         };
 
         // Determine if this is a reorder style flow
-        $isReorder = (bool) (
-            Arr::get($order->meta ?? [], 'is_reorder')
-            || Arr::get($order->meta ?? [], 'reorder')
-            || Str::contains((string) $treat, ['reorder','repeat','maintenance'])
-            || Str::contains((string) $service, ['reorder','repeat'])
-        );
+        $isReorder = ($intent === 'reorder');
+        if (! $isReorder) {
+            $isReorder = (bool) (
+                Arr::get($order->meta ?? [], 'is_reorder')
+                || Arr::get($order->meta ?? [], 'reorder')
+                || Str::contains((string) $treat, ['reorder','repeat','maintenance'])
+                || Str::contains((string) $service, ['reorder','repeat'])
+            );
+        }
 
         // Service-first templates and step order
         if ($isReorder) {
@@ -299,6 +319,11 @@ class StartConsultation
         $maxIndex     = max(0, count($stepKeys) - 1);
         $currentIndex = (is_int($session?->current) && $session->current <= $maxIndex) ? $session->current : 0;
 
+        // Persist intent onto existing session meta so downstream resolvers stay deterministic
+        $sessMeta = (array) ($session?->meta ?? []);
+        data_set($sessMeta, 'consultation.type', $isReorder ? 'reorder' : 'risk_assessment');
+        data_set($sessMeta, 'consultation.mode', $isReorder ? 'reorder' : 'risk_assessment');
+
         $payload = [
             'user_id'   => (int) $order->user_id,
             'service'   => (string) $service,
@@ -306,13 +331,23 @@ class StartConsultation
             'templates' => (array) ($snapshot ?? []),
             'steps'     => array_values((array) ($stepKeys ?? [])),
             'current'   => $currentIndex,
-            'meta'      => (array) ($session?->meta ?? []),
+            'meta'      => (array) ($sessMeta ?? []),
         ];
 
         $session = ConsultationSession::updateOrCreate(
             ['order_id' => (int) $order->id],
             $payload
         );
+
+        // If the session has a form_type column, persist it for router normalisation
+        try {
+            if (property_exists($session, 'form_type')) {
+                $session->form_type = $isReorder ? 'reorder' : 'risk_assessment';
+                $session->save();
+            }
+        } catch (\Throwable $e) {
+            // ignore if not present
+        }
 
         // Denormalise essential info back onto the order->meta so downstream UIs can rely on it
         $meta = $this->decodeToArray($order->meta);
@@ -380,29 +415,43 @@ class StartConsultation
             // Also surface under formsQA for all UIs that expect this shape
             $meta['formsQA'] = $meta['formsQA'] ?? [];
             $meta['formsQA']['assessment'] = [
-                'qa'     => $qaRows,
-                'schema' => $assessmentSchemaSnap ?: $rafSchemaSnap,
+                'answers'     => is_array($answers) ? $answers : [],
+                'qa'          => $qaRows,
+                'schema'      => $assessmentSchemaSnap ?: $rafSchemaSnap,
+                'form_type'   => 'assessment',
+                'service_slug'=> $service,
             ];
 
             // Keep an immutable snapshot
             $meta['assessment_snapshot'] = $answers;
 
-            // Persist to this session's consultation_form_responses row (idempotent)
-            try {
-                DB::table('consultation_form_responses')->updateOrInsert(
-                    ['consultation_session_id' => $session->id, 'form_type' => 'risk_assessment'],
-                    [
-                        'clinic_form_id' => null,
-                        // keep legacy shape as answers-only for compatibility
-                        'data'          => json_encode($this->decodeToArray($answers)),
-                        'is_complete'   => 1,
-                        'completed_at'  => now(),
-                        'updated_at'    => now(),
-                        'created_at'    => now(),
-                    ]
-                );
-            } catch (Throwable $e) {
-                Log::warning('Unable to persist answers for this session: ' . $e->getMessage());
+            // Persist to this session's consultation_form_responses row (idempotent) for assessment (not reorder)
+            if (! $isReorder) {
+                try {
+                    $payloadForData = [
+                        'source'   => 'admin',
+                        'received' => now()->toIso8601String(),
+                        'answers'  => is_array($answers) ? $answers : [],
+                    ];
+
+                    DB::table('consultation_form_responses')->updateOrInsert(
+                        ['consultation_session_id' => $session->id, 'form_type' => 'assessment'],
+                        [
+                            'clinic_form_id' => $templates['assessment']['id'] ?? null,
+                            'step_slug'      => 'assessment',
+                            'service_slug'   => $service,
+                            'treatment_slug' => $treat,
+                            'answers'        => json_encode(is_array($answers) ? $answers : []),
+                            'data'           => json_encode($payloadForData),
+                            'is_complete'    => 1,
+                            'completed_at'   => now(),
+                            'updated_at'     => now(),
+                            'created_at'     => DB::raw('COALESCE(created_at, NOW())'),
+                        ]
+                    );
+                } catch (Throwable $e) {
+                    Log::warning('Unable to persist assessment answers for this session: ' . $e->getMessage());
+                }
             }
         }
 
@@ -421,6 +470,12 @@ class StartConsultation
                 if (! empty($answers)) {
                     $pm['assessment'] = $pm['assessment'] ?? [];
                     $pm['assessment']['answers'] = $answers;
+
+                    $pm['formsQA'] = $pm['formsQA'] ?? [];
+                    $pm['formsQA']['assessment'] = $pm['formsQA']['assessment'] ?? [];
+                    $pm['formsQA']['assessment']['answers'] = $answers;
+                    $pm['formsQA']['assessment']['form_type'] = 'assessment';
+                    $pm['formsQA']['assessment']['service_slug'] = $service;
                 }
 
                 $pending->meta = $pm;
@@ -492,6 +547,9 @@ class StartConsultation
             $meta['items'] = array_values($items);
         }
 
+        $meta['consultation'] = $meta['consultation'] ?? [];
+        $meta['consultation']['type'] = $isReorder ? 'reorder' : 'risk_assessment';
+        $meta['consultation']['mode'] = $isReorder ? 'reorder' : 'risk_assessment';
         $order->meta = $meta;
         $order->save();
 

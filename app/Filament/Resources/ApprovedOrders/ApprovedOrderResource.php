@@ -860,16 +860,58 @@ class ApprovedOrderResource extends Resource
                             ]),
                     ])
                     ->extraModalFooterActions([
-                        // Start Consultation action (refactored)
-                        Action::make('startConsultation')
+                    // Start Consultation action with reorder aware selection
+                    Action::make('startConsultation')
                         ->label('Start Consultation')
                         ->color('success')
                         ->icon('heroicon-o-play')
                         ->action(function (ApprovedOrder $record) {
+
                             // Load meta as array
                             $meta = is_array($record->meta)
                                 ? $record->meta
                                 : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                            // Decide desired form type with broader reorder hints
+                            $desiredType = 'risk_assessment';
+
+                            // 1 explicit query or stored hints
+                            $rawType = strtolower((string) (
+                                request()->query('mode')
+                                ?? request()->query('type')
+                                ?? data_get($meta, 'consultation.mode')
+                                ?? data_get($meta, 'consultation.type')
+                                ?? data_get($meta, 'mode')
+                                ?? data_get($meta, 'type')
+                                ?? ''
+                            ));
+
+                            // 2 meta order type and reference pattern
+                            $orderType = strtolower((string) (
+                                data_get($meta, 'order.type')
+                                ?? data_get($meta, 'order.meta.type')
+                                ?? ''
+                            ));
+                            $ref = (string) ($record->reference ?? data_get($meta, 'reference') ?? '');
+
+                            $refIsReorder = (bool) preg_match('/^PTC[A-Z]*R[0-9]{6}$/', $ref);
+
+                            // 3 boolean flags
+                            $isReorderFlag = false;
+                            foreach (['is_reorder', 'reorder', 'flags.reorder'] as $k) {
+                                $v = data_get($meta, $k);
+                                if (is_bool($v)) $isReorderFlag = $isReorderFlag || $v;
+                                elseif (is_numeric($v)) $isReorderFlag = $isReorderFlag || ((int) $v === 1);
+                                elseif (is_string($v)) $isReorderFlag = $isReorderFlag || in_array(strtolower($v), ['1','true','yes','y'], true);
+                            }
+
+                            if (in_array($rawType, ['reorder'], true) || $orderType === 'reorder' || $refIsReorder || $isReorderFlag) {
+                                $desiredType = 'reorder';
+                            }
+
+                            // Persist the intent so downstream resolvers can pick the right form
+                            data_set($meta, 'consultation.mode', $desiredType);
+                            data_set($meta, 'consultation.type', $desiredType);
 
                             // Pull answers from common paths
                             $answers = data_get($meta, 'assessment.answers')
@@ -877,19 +919,15 @@ class ApprovedOrderResource extends Resource
                                 ?? data_get($meta, 'answers')
                                 ?? null;
 
-                            // Normalize answers to string JSON for any downstream json_decode
+                            // Normalize answers to string JSON
                             $answersJson = null;
                             if (is_string($answers)) {
-                                $answersJson = $answers;
-                                $decoded = json_decode($answersJson, true);
-                                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                                    // keep also an array copy in snapshot later
-                                }
+                                $decoded = json_decode($answers, true);
+                                if (json_last_error() === JSON_ERROR_NONE) $answersJson = $answers;
                             } elseif (is_array($answers)) {
                                 $answersJson = json_encode($answers, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                             }
 
-                            // Push normalized string back to meta so any service that calls json_decode works
                             if ($answersJson !== null) {
                                 data_set($meta, 'assessment.answers', $answersJson);
                                 data_set($meta, 'assessment_answers', $answersJson);
@@ -900,38 +938,42 @@ class ApprovedOrderResource extends Resource
                             $record->meta = $meta;
                             $record->save();
 
-                            // Store a durable snapshot on the order and in consultation_form_responses
+                            // Store a durable snapshot on the order
                             if ($answers !== null) {
-                                $answersArray = is_array($answers)
-                                    ? $answers
-                                    : (json_decode((string) $answers, true) ?: []);
-
+                                $answersArray = is_array($answers) ? $answers : (json_decode((string) $answers, true) ?: []);
                                 data_set($meta, 'assessment_snapshot', $answersArray);
                                 $record->meta = $meta;
                                 $record->save();
 
-                                $existingSid = (int) (data_get($meta, 'consultation_session_id') ?? 0);
-                                if ($existingSid > 0) {
-                                    \Illuminate\Support\Facades\DB::table('consultation_form_responses')->updateOrInsert(
-                                        ['consultation_session_id' => $existingSid, 'form_type' => 'risk_assessment'],
-                                        [
-                                            'clinic_form_id' => null,
-                                            'data'          => $answersJson ?? json_encode($answersArray, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                                            'is_complete'   => 1,
-                                            'completed_at'  => now(),
-                                            'updated_at'    => now(),
-                                            'created_at'    => now(),
-                                        ]
-                                    );
+                                if ($desiredType === 'risk_assessment') {
+                                    $existingSid = (int) (data_get($meta, 'consultation_session_id') ?? 0);
+                                    if ($existingSid > 0) {
+                                        \Illuminate\Support\Facades\DB::table('consultation_form_responses')->updateOrInsert(
+                                            ['consultation_session_id' => $existingSid, 'form_type' => 'risk_assessment'],
+                                            [
+                                                'clinic_form_id' => null,
+                                                'data'          => $answersJson ?? json_encode($answersArray, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                                                'is_complete'   => 1,
+                                                'completed_at'  => now(),
+                                                'updated_at'    => now(),
+                                                'created_at'    => now(),
+                                            ]
+                                        );
+                                    }
                                 }
                             }
 
                             // Start consultation
-                            /** @var \App\Models\ConsultationSession $session */
-                            $session = app(\App\Services\Consultations\StartConsultation::class)($record);
+                            $starter = app(\App\Services\Consultations\StartConsultation::class);
+                            try {
+                                /** @var \App\Models\ConsultationSession $session */
+                                $session = $starter($record, ['desired_type' => $desiredType]);
+                            } catch (\ArgumentCountError $e) {
+                                $session = $starter($record);
+                            }
 
-                            // If a new session exists and we have answers push them into responses
-                            if (isset($session) && isset($session->id) && ($answersJson !== null)) {
+                            // If a new session exists and we have answers copy them only for risk assessment flow
+                            if (isset($session) && isset($session->id) && ($answersJson !== null) && $desiredType === 'risk_assessment') {
                                 \Illuminate\Support\Facades\DB::table('consultation_form_responses')->updateOrInsert(
                                     ['consultation_session_id' => (int) $session->id, 'form_type' => 'risk_assessment'],
                                     [
@@ -945,10 +987,37 @@ class ApprovedOrderResource extends Resource
                                 );
                             }
 
-                            // Go to runner
-                            $url = route('consultations.runner.start', ['session' => $session->id]);
-                            return redirect()->to($url);
+                            // Try to persist the session form_type if the attribute exists on the model
+                            try {
+                                $attrs = method_exists($session, 'getAttributes') ? $session->getAttributes() : [];
+                                if (array_key_exists('form_type', $attrs)) {
+                                    $session->form_type = $desiredType;
+                                    $session->save();
+                                }
+                            } catch (\Throwable $e) {
+                                // non-fatal
+                            }
+
+                            // Build redirect with explicit step routing when reorder
+                            $params = [
+                                'session' => $session->id,
+                            ];
+
+                            if ($desiredType === 'reorder') {
+                                if (\Illuminate\Support\Facades\Route::has('consultations.runner.reorder')) {
+                                    return redirect()->route('consultations.runner.reorder', $params);
+                                }
+                                if (\Illuminate\Support\Facades\Route::has('consultations.reorder')) {
+                                    return redirect()->route('consultations.reorder', $params);
+                                }
+                                // direct path fallback
+                                return redirect()->to(url("/admin/consultations/{$session->id}/reorder"));
+                            }
+
+                            // Fallback to generic start route with type hint
+                            return redirect()->route('consultations.runner.start', $params);
                         }),
+            
                         Action::make('addAdminNote')
                             ->label('Add Admin Note')
                             ->color('primary')
@@ -1037,9 +1106,78 @@ class ApprovedOrderResource extends Resource
     }
     public function startConsultationAction($record)
     {
-        /** @var ConsultationSession $session */
-        $session = app(StartConsultation::class)($record);
-        $url = route('consultations.runner.start', ['session' => $session->id]);
-        return redirect()->to($url);
+        // Normalise meta
+        $meta = is_array($record->meta)
+            ? $record->meta
+            : (json_decode($record->meta ?? '[]', true) ?: []);
+
+        // Resolve desired type: query wins then meta then heuristic
+        $rq = function (string $k): ?string {
+            try {
+                $v = request()->query($k);
+                return is_string($v) ? strtolower($v) : null;
+            } catch (\Throwable $e) {
+                return null; // not in HTTP ctx
+            }
+        };
+
+        $desiredType = $rq('type') ?: $rq('mode')
+            ?: strtolower((string) (
+                data_get($meta, 'consultation.type')
+                ?: data_get($meta, 'consultation.mode')
+                ?: data_get($meta, 'type')
+                ?: ''
+            ));
+
+        if ($desiredType === '' || $desiredType === null) {
+            // simple reorder heuristic
+            $isReorder = false;
+            foreach (['is_reorder','reorder','flags.reorder'] as $k) {
+                $v = data_get($meta, $k);
+                if (is_bool($v)) $isReorder = $isReorder || $v;
+                elseif (is_numeric($v)) $isReorder = $isReorder || ((int)$v === 1);
+                elseif (is_string($v)) $isReorder = $isReorder || in_array(strtolower($v), ['1','true','yes'], true);
+            }
+            $desiredType = $isReorder ? 'reorder' : 'risk_assessment';
+        }
+
+        // Persist type intent so downstream resolvers can pick the right form
+        data_set($meta, 'consultation.type', $desiredType);
+        data_set($meta, 'consultation.mode', $desiredType);
+        $record->meta = $meta;
+        $record->save();
+
+        /** @var \App\Models\ConsultationSession $session */
+        $starter = app(\App\Services\Consultations\StartConsultation::class);
+        try {
+            $session = $starter($record, ['desired_type' => $desiredType]);
+        } catch (\ArgumentCountError $e) {
+            $session = $starter($record);
+        }
+
+        // Try to persist the session form_type if available
+        try {
+            if (isset($session) && isset($session->id) && property_exists($session, 'form_type')) {
+                $session->form_type = $desiredType;
+                $session->save();
+            }
+        } catch (\Throwable $e) {
+            // non-fatal
+        }
+
+        $params = [
+            'session' => $session->id,
+        ];
+
+        if ($desiredType === 'reorder') {
+            if (\Illuminate\Support\Facades\Route::has('consultations.runner.reorder')) {
+                return redirect()->route('consultations.runner.reorder', $params);
+            }
+            if (\Illuminate\Support\Facades\Route::has('consultations.reorder')) {
+                return redirect()->route('consultations.reorder', $params);
+            }
+        }
+
+        return redirect()->route('consultations.runner.start', $params);
     }
 }

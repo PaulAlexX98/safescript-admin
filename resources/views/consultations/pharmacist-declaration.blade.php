@@ -93,7 +93,32 @@
         }
     }
 
-    // Load last saved data for prefill
+    // Load last saved data for prefill (robust across shapes)
+    $toArr = function ($v) {
+        if (is_array($v)) return $v;
+        if (is_string($v)) {
+            $d = json_decode($v, true);
+            return is_array($d) ? $d : [];
+        }
+        return (array) $v;
+    };
+    $flatten = function (array $a) {
+        $out = [];
+        foreach ($a as $k => $v) {
+            if (is_array($v) && \Illuminate\Support\Arr::isAssoc($v)) {
+                $out[$k] = $v['raw'] ?? $v['answer'] ?? $v['value'] ?? $v;
+                foreach ($v as $ik => $iv) {
+                    if (!array_key_exists($ik, $out)) {
+                        $out[$ik] = $iv;
+                    }
+                }
+            } else {
+                $out[$k] = $v;
+            }
+        }
+        return $out;
+    };
+
     $oldData = [];
     if ($form && isset($sessionLike->id)) {
         $resp = \App\Models\ConsultationFormResponse::query()
@@ -101,8 +126,88 @@
             ->where('clinic_form_id', $form->id)
             ->latest('id')
             ->first();
-        $oldData = $resp?->data ?? [];
+
+        $raw = $resp?->data ?? [];
+        $arr = $toArr($raw);
+        $oldData = (array) ($arr['answers'] ?? $arr['data'] ?? ($arr['assessment']['answers'] ?? []) ?? $arr);
+
+        // If it's a list of rows [{ key, value }], normalise to a map
+        $isList = array_keys($oldData) === range(0, count($oldData) - 1);
+        if ($isList) {
+            $map = [];
+            foreach ($oldData as $row) {
+                if (!is_array($row)) continue;
+                $k = $row['key'] ?? $row['name'] ?? $row['question'] ?? $row['label'] ?? null;
+                $v = $row['value'] ?? $row['answer'] ?? $row['raw'] ?? ($row['selected']['value'] ?? null);
+                if ($k !== null) $map[(string) $k] = $v;
+            }
+            $oldData = $map;
+        }
+
+        $oldData = $flatten($oldData);
     }
+
+    // Fallback: session meta by step slug / aliases
+    if (empty($oldData) && isset($sessionLike->meta)) {
+        $m = $toArr($sessionLike->meta);
+        foreach (['pharmacist-declaration', 'declaration', 'pharmacist_declaration'] as $a) {
+            $v = data_get($m, "forms.$a.answers")
+              ?: data_get($m, "forms.$a.data")
+              ?: data_get($m, "$a.answers")
+              ?: data_get($m, "$a.data");
+            if (is_array($v) && !empty($v)) { $oldData = $flatten($toArr($v)); break; }
+        }
+    }
+
+    // Defaults from the signed-in user's profile (used if no saved value exists)
+    $user = auth()->user();
+    $defaultsByKey = [
+        // Name aliases
+        'pharmacist_name'       => $user?->pharmacist_display_name ?: $user?->name,
+        'pharmacist-name'       => $user?->pharmacist_display_name ?: $user?->name,
+        'pharmacist'            => $user?->pharmacist_display_name ?: $user?->name,
+        'pharmacist_full_name'  => $user?->pharmacist_display_name ?: $user?->name,
+        'pharmacist-full-name'  => $user?->pharmacist_display_name ?: $user?->name,
+        'name'                  => $user?->pharmacist_display_name ?: $user?->name,
+
+        // GPhC / Registration aliases
+        'gphc'                  => $user?->gphc_number,
+        'gphc_number'           => $user?->gphc_number,
+        'gphc-number'           => $user?->gphc_number,
+        'gphcno'                => $user?->gphc_number,
+        'gphcNo'                => $user?->gphc_number,
+        'registration'          => $user?->gphc_number,
+        'registration_number'   => $user?->gphc_number,
+        'registration-number'   => $user?->gphc_number,
+        'reg_number'            => $user?->gphc_number,
+        'reg-number'            => $user?->gphc_number,
+        'reg_no'                => $user?->gphc_number,
+        'reg-no'                => $user?->gphc_number,
+        'reg'                   => $user?->gphc_number,
+
+        // Signature aliases
+        'signature'             => $user?->signature_url,
+        'signature_path'        => $user?->signature_url,
+        'pharmacist_signature'  => $user?->signature_url,
+        'pharmacist-signature'  => $user?->signature_url,
+        'sig'                   => $user?->signature_url,
+    ];
+
+    // Keys that should always mirror the user's profile unless the user just posted a value
+    $profileKeys = [
+        'pharmacist_name','pharmacist-name','pharmacist','pharmacist_full_name','pharmacist-full-name','name',
+        'gphc','gphc_number','gphc-number','gphcno','gphcNo','registration','registration_number','registration-number',
+        'reg_number','reg-number','reg_no','reg-no','reg',
+        'signature','signature_path','pharmacist_signature','pharmacist-signature','sig',
+    ];
+
+    // Helper to interpret boolean-ish checkbox values
+    $isChecked = function ($v) {
+        if (is_bool($v)) return $v;
+        $s = strtolower(trim((string) $v));
+        if ($s === '' || $s === '0' || $s === 'false' || $s === 'no' || $s === 'off') return false;
+        return in_array($s, ['1', 'true', 'yes', 'on', 'checked', 'y'], true);
+    };
 
     // Helper to normalise options
     $normaliseOptions = function ($raw) {
@@ -125,7 +230,7 @@
     <style>
       .cf-section-card{border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:24px;margin-top:20px;box-shadow:0 1px 2px rgba(0,0,0,.45)}
       .cf-grid{display:grid;grid-template-columns:1fr;gap:16px}
-      .cf-field-card{border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:18px}
+      .cf-field-card{border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:18px;overflow:hidden}
       .cf-title{font-weight:600;font-size:16px;margin:0 0 6px 0}
       .cf-summary{font-size:13px;margin:0}
       .cf-label{font-size:14px;display:block;margin-bottom:6px}
@@ -135,8 +240,8 @@
       .cf-ul li{margin:4px 0}
       .cf-paras p{margin:8px 0;line-height:1.6}
       @media(min-width:768px){.cf-section-card{padding:28px}.cf-grid{gap:20px}.cf-field-card{padding:20px}}
-      .cf-signature{display:block}
-      .cf-signature-canvas{width:100%;height:180px;border:1px dashed rgba(0,0,0,.25);border-radius:8px;background:transparent;touch-action:none}
+      .cf-signature{display:block;width:100%}
+      .cf-signature-canvas{display:block;width:100%;max-width:100%;height:180px;border:1px dashed rgba(0,0,0,.25);border-radius:10px;background:transparent;touch-action:none;box-sizing:border-box}
       .cf-signature-actions{margin-top:8px;display:flex;gap:8px}
       .cf-btn{appearance:none;border:1px solid rgba(0,0,0,.25);background:transparent;border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer}
       .cf-btn:hover{background:rgba(0,0,0,.04)}
@@ -204,7 +309,19 @@
                             $help  = $field['help'] ?? ($field['description'] ?? null);
                             $req   = (bool) ($field['required'] ?? false);
                             $ph    = $field['placeholder'] ?? null;
-                            $val   = old($name, $oldData[$name] ?? '');
+                            // Prefer the just-posted value; otherwise for pharmacist identity fields, prefer the current profile over any old saved value.
+                            $posted = old($name, null);
+                            if ($posted !== null) {
+                                $val = $posted;
+                            } else {
+                                if (in_array($key, $profileKeys, true)) {
+                                    // Always reflect the latest profile defaults for these keys unless the user has just posted a value.
+                                    $val = $defaultsByKey[$key] ?? ($oldData[$name] ?? '');
+                                } else {
+                                    // Normal fields: prefer previously saved answer, then default from profile if defined.
+                                    $val = $oldData[$name] ?? ($defaultsByKey[$key] ?? '');
+                                }
+                            }
                         @endphp
 
                         {{-- Static rich text blocks --}}
@@ -294,7 +411,8 @@
                         @elseif ($type === 'checkbox')
                             <div class="{{ $fieldCard }}">
                                 <div class="cf-checkbox-row">
-                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" class="rounded-md focus:ring-2 mt-0.5" {{ $val ? 'checked' : '' }}>
+                                    <input type="hidden" name="{{ $name }}" value="0">
+                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" value="1" class="rounded-md focus:ring-2 mt-0.5" {{ $isChecked($val) ? 'checked' : '' }}>
                                     <label for="{{ $name }}" class="text-sm cursor-pointer select-none leading-6">{{ $label }}</label>
                                 </div>
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
@@ -361,21 +479,24 @@
     function dpr(){ return window.devicePixelRatio || 1; }
     function size(){
       var ratio = dpr();
-      var rectW = box.clientWidth || 600;
+      var rect = box.getBoundingClientRect();
+      var rectW = Math.max(0, Math.floor(rect.width)) || 600;
       var rectH = 180;
       canvas.width = Math.floor(rectW * ratio);
       canvas.height = Math.floor(rectH * ratio);
       canvas.style.width = rectW + 'px';
       canvas.style.height = rectH + 'px';
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.scale(ratio, ratio);
       ctx.lineWidth = 2;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
       // restore from existing value if present
-      if(input.value && /^data:image\//.test(input.value)){
-        var img = new Image();
-        img.onload = function(){ ctx.drawImage(img, 0, 0, rectW, rectH); };
-        img.src = input.value;
+      if (input.value) {
+          var img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = function(){ ctx.drawImage(img, 0, 0, rectW, rectH); };
+          img.src = input.value;
       }
     }
     function pos(e){

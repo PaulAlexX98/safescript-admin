@@ -32,6 +32,11 @@ use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Grid;
 use Filament\Forms\Components\Textarea;
+use Illuminate\Support\Facades\Mail;
+use App\Mail\OrderApprovedMail;
+use Illuminate\Support\Str;
+use Illuminate\Support\Arr;
+use Filament\Tables\Columns\BadgeColumn;
 
 
 class PendingOrderResource extends Resource
@@ -962,6 +967,42 @@ class PendingOrderResource extends Resource
                                     }
                                 } catch (Throwable $e) {
                                     // swallow to avoid breaking the UI; consider logging if needed
+                                }
+                                // Email the patient that the order is approved once
+                                try {
+                                    $metaForEmail = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                    if (!data_get($metaForEmail, 'emailed.order_approved_at')) {
+                                        // Find the related Order row
+                                        $orderForEmail = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+
+                                        // Resolve recipient email from Order first, then meta, then user
+                                        $orderMetaArr = [];
+                                        if ($orderForEmail) {
+                                            $orderMetaArr = is_array($orderForEmail->meta) ? $orderForEmail->meta : (json_decode($orderForEmail->meta ?? '[]', true) ?: []);
+                                        }
+
+                                        $to = $orderForEmail->email
+                                            ?? data_get($orderMetaArr, 'customer.email')
+                                            ?? data_get($metaForEmail, 'email')
+                                            ?? data_get($metaForEmail, 'customer.email')
+                                            ?? optional($record->user)->email;
+
+                                        if ($to && $orderForEmail) {
+                                            Mail::to($to)->queue(new OrderApprovedMail($orderForEmail));
+
+                                            // Flag on both PendingOrder and Order to prevent duplicate sends
+                                            data_set($metaForEmail, 'emailed.order_approved_at', now()->toIso8601String());
+                                            $record->meta = $metaForEmail;
+                                            $record->save();
+
+                                            $om = $orderMetaArr;
+                                            data_set($om, 'emailed.order_approved_at', now()->toIso8601String());
+                                            $orderForEmail->meta = $om;
+                                            $orderForEmail->save();
+                                        }
+                                    }
+                                } catch (Throwable $e) {
+                                    // swallow
                                 }
                                 // After syncing the Order, approve or create the matching appointment so it only shows once approved
                                 try {

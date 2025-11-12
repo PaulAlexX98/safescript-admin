@@ -57,7 +57,15 @@ class SubmitAssessmentController extends Controller
             $s = str_replace([' ', '-'], '_', $s);
             $s = preg_replace('/[^A-Za-z0-9_]/', '', $s);
             $s = strtolower($s);
-            return $s !== '' ? $s : 'raf';
+            if ($s === '') {
+                return 'raf';
+            }
+            $map = [
+                'riskassessment' => 'risk_assessment',
+                'risk_assesment' => 'risk_assessment', // common typo
+                'risk_assessment' => 'risk_assessment',
+            ];
+            return $map[$s] ?? $s;
         };
         $formKey = $normaliseKey($formType);
 
@@ -144,6 +152,38 @@ class SubmitAssessmentController extends Controller
                 $session->save();
             }
 
+            // Persist a canonical row into consultation_form_responses
+            $answersObj = is_array($answers) ? $answers : [];
+            $payloadForData = ['source' => 'admin', 'received' => now()->toIso8601String(), 'answers' => $answersObj];
+            $existing = DB::table('consultation_form_responses')->where([
+                'consultation_session_id' => $session->id,
+                'form_type'               => $formKey,
+            ])->first();
+            if ($existing) {
+                DB::table('consultation_form_responses')->where('id', $existing->id)->update([
+                    'step_slug'       => $formKey,
+                    'clinic_form_id'  => $form?->id,
+                    'service_slug'    => $service,
+                    'treatment_slug'  => $treatment,
+                    'answers'         => json_encode($answersObj),
+                    'data'            => json_encode($payloadForData),
+                    'updated_at'      => now(),
+                ]);
+            } else {
+                DB::table('consultation_form_responses')->insert([
+                    'consultation_session_id' => $session->id,
+                    'form_type'               => $formKey,
+                    'step_slug'               => $formKey,
+                    'clinic_form_id'          => $form?->id,
+                    'service_slug'            => $service,
+                    'treatment_slug'          => $treatment,
+                    'answers'                 => json_encode($answersObj),
+                    'data'                    => json_encode($payloadForData),
+                    'created_at'              => now(),
+                    'updated_at'              => now(),
+                ]);
+            }
+
             // Ensure an order exists and mirror `formsQA` there for pending views
             $order = $session->order_id ? Order::find($session->order_id) : null;
             if (! $order) {
@@ -151,17 +191,20 @@ class SubmitAssessmentController extends Controller
                     'user_id' => auth()->id(),
                     'status'  => 'pending',
                     'meta'    => [
-                        'service'    => $service,
-                        'treatment'  => $treatment,
-                        'type'       => $type,
-                        'lines'      => $lines,
-                        'session_id' => $session->id,
-                        'form_type'  => $formKey,
-                        'form_id'    => $form?->id,
-                        'formsQA'    => [
+                        'service'                 => $service,
+                        'treatment'               => $treatment,
+                        'type'                    => $type,
+                        'lines'                   => $lines,
+                        'session_id'              => $session->id,
+                        'consultation_session_id' => $session->id,
+                        'form_type'               => $formKey,
+                        'form_id'                 => $form?->id,
+                        'formsQA'                 => [
                             $formKey => [
-                                'qa'  => [],
-                                'raw' => $session->meta['answers'][$formKey] ?? $answers,
+                                'answers'      => $session->meta['answers'][$formKey] ?? $answersObj,
+                                'form_type'    => $formKey,
+                                'service_slug' => $service,
+                                'raw'          => $session->meta['answers'][$formKey] ?? $answersObj,
                             ],
                         ],
                     ],
@@ -177,16 +220,19 @@ class SubmitAssessmentController extends Controller
                     $om['formsQA'] = [];
                 }
 
-                $om['service']    = $service;
-                $om['treatment']  = $treatment ?? ($om['treatment'] ?? null);
-                $om['type']       = $type;
-                $om['lines']      = $lines ?: ($om['lines'] ?? []);
-                $om['session_id'] = $session->id;
-                $om['form_type']  = $formKey;
-                $om['form_id']    = $form?->id ?? ($om['form_id'] ?? null);
+                $om['service']                 = $service;
+                $om['treatment']               = $treatment ?? ($om['treatment'] ?? null);
+                $om['type']                    = $type;
+                $om['lines']                   = $lines ?: ($om['lines'] ?? []);
+                $om['session_id']              = $session->id;
+                $om['consultation_session_id'] = $session->id;
+                $om['form_type']               = $formKey;
+                $om['form_id']                 = $form?->id ?? ($om['form_id'] ?? null);
 
-                $raw = $session->meta['answers'][$formKey] ?? $answers;
-                $om['formsQA'][$formKey]['raw'] = $raw;
+                $om['formsQA'][$formKey]['raw']      = $session->meta['answers'][$formKey] ?? $answersObj;
+                $om['formsQA'][$formKey]['answers']  = $session->meta['answers'][$formKey] ?? $answersObj;
+                $om['formsQA'][$formKey]['form_type'] = $formKey;
+                $om['formsQA'][$formKey]['service_slug'] = $service;
 
                 $order->meta = $om;
                 $order->save();

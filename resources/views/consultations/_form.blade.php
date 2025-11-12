@@ -12,11 +12,48 @@
         $schema = is_array($decoded) ? $decoded : [];
     }
 
-    // If controller didn't pass oldData, pull persisted answers from session meta so refresh repopulates fields
+    // If controller didn't pass oldData, try hydrate from any canonical store used across the app
     if ($form && $session && empty($oldData)) {
         $meta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
-        $formKey = $form->form_type ?: (string) $form->id;
-        $oldData = (array) data_get($meta, "forms.{$formKey}.answers", []);
+
+        // Candidate keys for this form
+        $keys = array_values(array_filter([
+            $form->form_type ?? null,
+            (string) $form->id,
+            $slug,
+        ]));
+
+        // Try multiple known locations and shapes
+        $candidates = [];
+        foreach ($keys as $k) {
+            $candidates[] = data_get($meta, "forms.$k.answers");
+            $candidates[] = data_get($meta, "forms.$k.data");
+            $candidates[] = data_get($meta, "formsQA.$k");
+            $candidates[] = data_get($meta, "forms_qa.$k");
+        }
+        // Session-level fallbacks used by PDF and earlier versions
+        $candidates[] = data_get($session, 'formsQA');
+        $candidates[] = data_get($session, 'assessment.answers');
+
+        foreach ($candidates as $cand) {
+            if (is_array($cand) && !empty($cand)) {
+                $oldData = $cand;
+                break;
+            } elseif (is_string($cand)) {
+                $decoded = json_decode($cand, true);
+                if (is_array($decoded) && !empty($decoded)) {
+                    $oldData = $decoded;
+                    break;
+                }
+            }
+        }
+
+        // Normalise shape if we were handed a nested {answers: {...}}
+        if (is_array($oldData) && array_key_exists('answers', $oldData) && is_array($oldData['answers'])) {
+            $oldData = $oldData['answers'];
+        }
+
+        $oldData = (array) ($oldData ?? []);
     }
 @endphp
 
@@ -48,8 +85,15 @@
         ];
     @endphp
 
-    @php $formDomId = 'cf_'.$slug; @endphp
-    <form id="{{ $formDomId }}" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab={{ $slug }}" class="space-y-4" enctype="multipart/form-data">
+    @php
+      $formDomId = 'cf_' . $slug;
+      // Only add ?type=reorder for the reorder step itself so other tabs don't bounce back
+      $isCurrentReorder = ($slug === 'reorder');
+      $actionUrl = route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id])
+                 . '?tab=' . $slug
+                 . ($isCurrentReorder ? '&type=reorder' : '');
+    @endphp
+    <form id="{{ $formDomId }}" method="POST" action="{{ $actionUrl }}" class="space-y-4" enctype="multipart/form-data">
         @csrf
         <input type="hidden" name="__step_slug" value="{{ $slug }}">
         <input type="hidden" name="session_id" value="{{ $session->id }}">
@@ -58,6 +102,11 @@
         <input type="hidden" name="service" value="{{ $form->service_slug ?? ($session->service ?? '') }}">
         <input type="hidden" name="treatment" value="{{ $form->treatment_slug ?? ($session->treatment ?? '') }}">
         <input type="hidden" id="__go_next" name="__go_next" value="0">
+
+        @if($isCurrentReorder)
+            <input type="hidden" name="type" value="reorder">
+            <input type="hidden" name="mode" value="reorder">
+        @endif
 
         @forelse($schema as $i => $field)
             @php
@@ -112,23 +161,23 @@
                     <input type="checkbox" name="answers[{{ $name }}]" value="1" class="rounded bg-gray-800 border-gray-600" @checked((bool)$val) @if($req) required @endif>
                     <span>{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</span>
                 </label>
-                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+                @error("answers.$name") <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'date')
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
                 <input type="date" name="answers[{{ $name }}]" value="{{ \Illuminate\Support\Str::of((string)($val ?? ($cfg['date'] ?? '')))->limit(10,'') }}" @if($req) required @endif placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
-                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+                @error("answers.$name") <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'number')
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
                 @php $stepAttr = $cfg['step'] ?? ((str_contains($labelLower,'strength') || str_contains($labelLower,'dose')) ? '0.1' : 'any'); @endphp
                 <input type="number" name="answers[{{ $name }}]" value="{{ $val }}" @if($req) required @endif step="{{ $stepAttr }}" inputmode="decimal" placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
-                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+                @error("answers.$name") <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'textarea')
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
                 <textarea name="answers[{{ $name }}]" @if($req) required @endif rows="{{ (int) ($cfg['rows'] ?? 4) }}" placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">{{ is_string($val) ? $val : '' }}</textarea>
-                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+                @error("answers.$name") <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'select')
                 @php
@@ -148,7 +197,7 @@
                         <option value="{{ $optValue }}" @if($selected) selected @endif>{{ $optLabel }}</option>
                     @endforeach
                 </select>
-                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+                @error("answers.$name") <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'radio')
                 <fieldset class="space-y-2">
@@ -165,7 +214,7 @@
                         </label>
                     @endforeach
                 </fieldset>
-                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+                @error("answers.$name") <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif(in_array($type, ['file','upload','file_upload','image']))
                 @php
@@ -184,17 +233,17 @@
                         </ul>
                     </template>
                 </div>
-                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+                @error("answers.$name") <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @elseif($type === 'signature')
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
                 <input type="text" name="answers[{{ $name }}]" value="{{ $val }}" @if($req) required @endif class="w-full rounded-md bg-gray-800 border border-gray-600 p-2 text-gray-100" placeholder="signature data url">
-                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+                @error("answers.$name") <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
 
             @else
                 <label class="block text-sm text-gray-300 mb-1">{{ $label }} @if($req)<span class="text-red-500">*</span>@endif</label>
                 <input type="text" name="answers[{{ $name }}]" value="{{ $val }}" @if($req) required @endif placeholder="{{ $cfg['placeholder'] ?? '' }}" class="w-full rounded-md bg-white/5 bg-opacity-10 border border-gray-600 p-2 text-gray-100 placeholder-gray-400">
-                @error($name) <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
+                @error("answers.$name") <p class="text-xs text-red-400 mt-1">{{ $message }}</p> @enderror
             @endif
             </div>
         @empty

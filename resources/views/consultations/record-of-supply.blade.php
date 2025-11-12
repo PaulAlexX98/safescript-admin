@@ -157,6 +157,19 @@
     } catch (Throwable $e) {
         // fail silent – admin notes are optional
     }
+
+    // --- Defaults from the first order line (for prefill) ---
+    $lineItems = is_array($order->items ?? null) ? $order->items : [];
+    $firstItem = $lineItems[0] ?? [];
+    $defaultVaccine = (string) ($firstItem['name'] ?? '');
+    $defaultSpecific = (string) (
+        $firstItem['variation']
+        ?? $firstItem['variations']
+        ?? $firstItem['optionLabel']
+        ?? $firstItem['strength']
+        ?? $firstItem['dose']
+        ?? ''
+    );
 @endphp
 
 @once
@@ -234,6 +247,92 @@
                             $req   = (bool) ($field['required'] ?? false);
                             $ph    = $field['placeholder'] ?? null;
                             $val   = old($name, $oldData[$name] ?? '');
+
+                            // Autofill from order for Vaccine / Specific Vaccine when no saved value yet
+                            $slugKey   = \Illuminate\Support\Str::slug($key);
+                            $slugLabel = \Illuminate\Support\Str::slug($label ?? '');
+                            $isVaccineKey = in_array('vaccine', [$slugKey, $slugLabel], true);
+                            $isSpecificKey = in_array('specific-vaccine', [$slugKey, $slugLabel], true)
+                                             || in_array('specific', [$slugKey, $slugLabel], true);
+
+                            if ($val === '' && ($isVaccineKey || $isSpecificKey)) {
+                                if ($isVaccineKey) {
+                                    // For selects, choose the matching option value by label/value/slug
+                                    if (($type === 'select') && isset($field['options'])) {
+                                        foreach ($normaliseOptions($field['options']) as $op) {
+                                            if (
+                                                strcasecmp((string)$op['label'], (string)$defaultVaccine) === 0
+                                                || \Illuminate\Support\Str::slug((string)$op['label']) === \Illuminate\Support\Str::slug((string)$defaultVaccine)
+                                                || (string)$op['value'] === (string)$defaultVaccine
+                                                || \Illuminate\Support\Str::slug((string)$op['value']) === \Illuminate\Support\Str::slug((string)$defaultVaccine)
+                                            ) {
+                                                $val = (string)$op['value'];
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    // For non-selects, just use the readable name
+                                    if ($val === '') { $val = $defaultVaccine; }
+                                } elseif ($isSpecificKey) {
+                                    // For selects, choose the matching option value; else set text
+                                    if (($type === 'select') && isset($field['options'])) {
+                                        foreach ($normaliseOptions($field['options']) as $op) {
+                                            if (
+                                                strcasecmp((string)$op['label'], (string)$defaultSpecific) === 0
+                                                || \Illuminate\Support\Str::slug((string)$op['label']) === \Illuminate\Support\Str::slug((string)$defaultSpecific)
+                                                || (string)$op['value'] === (string)$defaultSpecific
+                                                || \Illuminate\Support\Str::slug((string)$op['value']) === \Illuminate\Support\Str::slug((string)$defaultSpecific)
+                                            ) {
+                                                $val = (string)$op['value'];
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if ($val === '') { $val = $defaultSpecific; }
+                                }
+                            }
+
+                            // Prefill item and item-variation using the same logic as vaccine/specific; fallback to "other" if still empty
+                            $isItemKey = in_array('item', [$slugKey, $slugLabel], true);
+                            $isItemVarKey = in_array('item-variation', [$slugKey, $slugLabel], true) || in_array('item-variant', [$slugKey, $slugLabel], true);
+
+                            if ($val === '' && ($isItemKey || $isItemVarKey)) {
+                                $target = $isItemKey ? (string) $defaultVaccine : (string) $defaultSpecific;
+
+                                if ($target !== '') {
+                                    if (($type === 'select') && isset($field['options'])) {
+                                        foreach ($normaliseOptions($field['options']) as $op) {
+                                            if (
+                                                strcasecmp((string)$op['label'], $target) === 0
+                                                || \Illuminate\Support\Str::slug((string)$op['label']) === \Illuminate\Support\Str::slug($target)
+                                                || (string)$op['value'] === $target
+                                                || \Illuminate\Support\Str::slug((string)$op['value']) === \Illuminate\Support\Str::slug($target)
+                                            ) {
+                                                $val = (string) $op['value'];
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    // For non-selects or if no select match, use the readable target
+                                    if ($val === '') { $val = $target; }
+                                }
+
+                                // Final fallback to an "other" option if present, else literal 'other'
+                                if ($val === '') {
+                                    if (($type === 'select') && isset($field['options'])) {
+                                        foreach ($normaliseOptions($field['options']) as $op) {
+                                            $valSlug = strtolower((string) $op['value']);
+                                            $labSlug = \Illuminate\Support\Str::slug((string) $op['label']);
+                                            if (in_array($valSlug, ['other','others'], true) || in_array($labSlug, ['other','others'], true)) {
+                                                $val = (string) $op['value'];
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if ($val === '') { $val = 'other'; }
+                                }
+                            }
+
                             $spanClass = in_array($type, ['textarea','signature']) ? ' cf-span-2' : '';
                         @endphp
 
@@ -245,7 +344,7 @@
                                 $hasHtml = (bool) preg_match('/<\w+[^>]*>/', $html ?? '');
                             @endphp
                             @if (trim(strip_tags($html)) !== '')
-                                <div class="{{ $fieldCard }}" style="text-align: {{ $align }};">
+                                <div class="{{ $cardBase }} cf-span-2" style="text-align: {{ $align }};">
                                     @if ($hasHtml)
                                         {!! $html !!}
                                     @else

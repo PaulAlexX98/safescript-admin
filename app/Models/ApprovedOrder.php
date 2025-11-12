@@ -342,7 +342,7 @@ class ApprovedOrder extends Model
 
     /**
      * Direct URL to start or continue the consultation on the new split pages.
-     * Chooses first step based on whether the order looks like a reorder.
+     * Chooses correct step and type for the desired consultation flow.
      */
     public function getConsultationUrlAttribute(): ?string
     {
@@ -357,9 +357,10 @@ class ApprovedOrder extends Model
             return null;
         }
 
-        // decide first step
+        // decide type then step
         $meta = is_array($this->meta) ? $this->meta : [];
-        $isReorder = $this->detectReorderFromMeta($meta);
+        $desiredType = $this->resolveDesiredConsultationType($meta);
+        $isReorder = $desiredType === 'reorder' ? true : $this->detectReorderFromMeta($meta);
         $step = $isReorder ? 'reorder' : 'risk-assessment';
 
         // candidate named routes for each step
@@ -377,13 +378,61 @@ class ApprovedOrder extends Model
         ];
 
         foreach ($nameSets[$step] as $name) {
-            if (Route::has($name)) {
-                return route($name, ['session' => $sessionId]);
+            if (\Illuminate\Support\Facades\Route::has($name)) {
+                // Pass along type to keep downstream resolvers deterministic
+                return route($name, ['session' => $sessionId, 'type' => $desiredType]);
             }
         }
 
         // final fallback
         return url("/admin/consultations/{$sessionId}/{$step}");
+    }
+
+    /**
+     * Accessor: resolved consultation type for this order.
+     */
+    public function getConsultationTypeAttribute(): string
+    {
+        $meta = is_array($this->meta) ? $this->meta : [];
+        return $this->resolveDesiredConsultationType($meta);
+    }
+
+    /**
+     * Resolve the desired consultation type from request hints and meta.
+     * Returns one of: reorder, nhs, new, risk_assessment
+     */
+    private function resolveDesiredConsultationType(array $meta): string
+    {
+        // request query hints if present
+        $rq = function (string $key): ?string {
+            try {
+                $v = request()->query($key);
+                return is_string($v) ? strtolower($v) : null;
+            } catch (\Throwable $e) {
+                return null; // not in HTTP context
+            }
+        };
+
+        $candidates = array_filter([
+            $rq('type') ?: $rq('mode'),
+            strtolower((string) data_get($meta, 'consultation.type')),
+            strtolower((string) data_get($meta, 'consultation.mode')),
+            strtolower((string) data_get($meta, 'type')),
+            strtolower((string) data_get($meta, 'flow')),
+            strtolower((string) data_get($meta, 'order_type')),
+        ], fn ($v) => is_string($v) && $v !== '');
+
+        foreach ($candidates as $c) {
+            if ($c === 'reorder') return 'reorder';
+            if ($c === 'nhs') return 'nhs';
+            if ($c === 'new') return 'new';
+            if (in_array($c, ['risk_assessment', 'risk-assessment', 'raf'], true)) return 'risk_assessment';
+        }
+
+        // Heuristic: if meta smells like reorder, prefer it
+        if ($this->detectReorderFromMeta($meta)) return 'reorder';
+
+        return 'risk_assessment';
     }
 
     /**
@@ -402,21 +451,23 @@ class ApprovedOrder extends Model
             if (is_bool($v)) return $v === true;
             if (is_numeric($v)) return ((int) $v) === 1;
             if (is_string($v) && $v !== '') {
-                $sv = Str::slug($v);
+                $sv = \Illuminate\Support\Str::slug($v);
                 if (in_array($sv, ['1','true','yes','reorder','repeat','refill','maintenance'], true)) return true;
             }
         }
 
         // string style type or flow
         foreach ([
+            'consultation.type',
+            'consultation.mode',
             'type',
+            'mode',
             'flow',
             'order_type',
-            'meta.flow',
         ] as $path) {
             $v = data_get($meta, $path);
             if (!is_string($v) || $v === '') continue;
-            $sv = Str::slug($v);
+            $sv = \Illuminate\Support\Str::slug($v);
             if (str_contains($sv, 'reorder') ||
                 str_contains($sv, 'repeat') ||
                 str_contains($sv, 'refill') ||
@@ -434,7 +485,7 @@ class ApprovedOrder extends Model
         ] as $path) {
             $v = data_get($meta, $path);
             if (!is_string($v) || $v === '') continue;
-            $sv = Str::slug($v);
+            $sv = \Illuminate\Support\Str::slug($v);
             if (str_contains($sv, 'repeat') ||
                 str_contains($sv, 'refill') ||
                 str_contains($sv, 'maintenance') ||

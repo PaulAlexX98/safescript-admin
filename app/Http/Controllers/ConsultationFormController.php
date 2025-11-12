@@ -104,6 +104,12 @@ class ConsultationFormController extends Controller
         $stepSlug     = $validated['__step_slug'];
         $markComplete = (bool)($validated['__mark_complete'] ?? false);
         $goNext       = (bool) $request->boolean('__go_next');
+        \Log::info('consultation.flags', [
+            'session_id'    => $sessionId,
+            'step'          => $stepSlug,
+            'mark_complete' => $markComplete,
+            'ship_now'      => $request->boolean('__ship_now'),
+        ]);
         $userId       = auth()->id();
 
         // Normalise nested payloads to flat keys so schema mapping sees everything
@@ -514,6 +520,65 @@ class ConsultationFormController extends Controller
         if ($markComplete && !$isComplete) {
             $isComplete  = true;
             $completedAt = now();
+
+            // Trigger Royal Mail Click & Drop on completion when requested by the UI
+            if ($request->boolean('__ship_now')) {
+                try {
+                    \Log::info('clickanddrop.start', [
+                        'session' => $session->id,
+                        'reference_guess' => ($session->order->reference ?? ('CONS-' . $session->id))
+                    ]);
+
+                    $order = $session->order ?? null; // optional relation
+
+                    // Work with a normalised session meta array
+                    $metaArr = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
+
+                    // Patient identifiers with tolerant fallbacks
+                    $firstName = data_get($metaArr, 'patient.first_name')
+                        ?? data_get($metaArr, 'patient.name.first')
+                        ?? data_get($metaArr, 'first_name');
+                    $lastName  = data_get($metaArr, 'patient.last_name')
+                        ?? data_get($metaArr, 'patient.name.last')
+                        ?? data_get($metaArr, 'last_name');
+
+                    $out = app(\App\Services\Shipping\ClickAndDrop::class)->createOrder([
+                        'reference'  => $order->reference ?? ('CONS-' . $session->id),
+                        'first_name' => $firstName,
+                        'last_name'  => $lastName,
+                        'email'      => data_get($metaArr, 'patient.email'),
+                        'phone'      => data_get($metaArr, 'patient.phone'),
+                        'address1'   => data_get($metaArr, 'patient.address1') ?? data_get($metaArr, 'patient.address.line1'),
+                        'address2'   => data_get($metaArr, 'patient.address2') ?? data_get($metaArr, 'patient.address.line2'),
+                        'city'       => data_get($metaArr, 'patient.city') ?? data_get($metaArr, 'patient.address.city'),
+                        'county'     => data_get($metaArr, 'patient.county') ?? data_get($metaArr, 'patient.address.county'),
+                        'postcode'   => data_get($metaArr, 'patient.postcode') ?? data_get($metaArr, 'patient.address.postcode'),
+                        'item_name'  => $session->service ?? 'Pharmacy order',
+                        'sku'        => data_get($metaArr, 'sku') ?? 'RX',
+                        'weight'     => 100,
+                        'value'      => 0,
+                    ]);
+                    \Log::info('clickanddrop.ok', [
+                        'session'  => $session->id,
+                        'tracking' => $out['tracking'] ?? null,
+                        'label'    => $out['label_path'] ?? null,
+                    ]);
+
+                    // Persist shipping info back onto the session for viewers and PDFs
+                    data_set($metaArr, 'shipping.carrier', 'royal_mail_click_and_drop');
+                    data_set($metaArr, 'shipping.tracking', $out['tracking'] ?? null);
+                    data_set($metaArr, 'shipping.label', $out['label_path'] ?? null);
+                    data_set($metaArr, 'shipping.raw', $out['raw'] ?? null);
+
+                    $session->meta = $metaArr;
+                    $session->save();
+                } catch (\Throwable $e) {
+                    \Log::error('clickanddrop.failed', [
+                        'session' => $session->id,
+                        'error'   => $e->getMessage(),
+                    ]);
+                }
+            }
         }
 
         // Ensure a non-null form_version for NOT NULL constraint
@@ -638,6 +703,14 @@ class ConsultationFormController extends Controller
         data_set($sessionMeta, "forms.$formSlug.schema",  $rawSchema);
         data_set($sessionMeta, "forms.$formSlug.updated_at", now()->toIso8601String());
 
+        // Backward compatible mirrors for legacy consumers that expect top-level formsQA or forms_qa
+        data_set($sessionMeta, "formsQA.$formKeyUnderscore", $persistData);
+        data_set($sessionMeta, "formsQA.$formSlug",        $persistData);
+        data_set($sessionMeta, "forms_qa.$formKeyUnderscore", $persistData);
+        data_set($sessionMeta, "forms_qa.$formSlug",          $persistData);
+        data_set($sessionMeta, "formsQA.updated_at", now()->toIso8601String());
+        data_set($sessionMeta, "forms_qa.updated_at", now()->toIso8601String());
+
         $session->meta = $sessionMeta;
         $session->save();
 
@@ -672,6 +745,61 @@ class ConsultationFormController extends Controller
             : back()->with('success', 'Form saved successfully!');
     }
     /**
+     * Build a best-effort answers array for hydration by checking DB records first
+     * then falling back to session meta stores used across the app.
+     */
+    protected function gatherAnswersFor(ConsultationSession $session, string $formKeyUnderscore, string $formSlug, ?int $clinicFormId = null): array
+    {
+        // 1. Most recent DB response for this form type within the session
+        $resp = \App\Models\ConsultationFormResponse::query()
+            ->where('consultation_session_id', $session->id)
+            ->where('form_type', $formKeyUnderscore)
+            ->orderByDesc('updated_at')
+            ->first();
+        if ($resp && is_array($resp->data ?? null)) {
+            return (array) $resp->data;
+        }
+
+        // 1b. If clinic form id is known, try that as well
+        if ($clinicFormId) {
+            $byCf = \App\Models\ConsultationFormResponse::query()
+                ->where('consultation_session_id', $session->id)
+                ->where('clinic_form_id', $clinicFormId)
+                ->orderByDesc('updated_at')
+                ->first();
+            if ($byCf && is_array($byCf->data ?? null)) {
+                return (array) $byCf->data;
+            }
+        }
+
+        // 2. Session meta fallbacks  forms and legacy formsQA shapes
+        $meta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
+        $cands = [
+            data_get($meta, "forms.$formKeyUnderscore.answers"),
+            data_get($meta, "forms.$formSlug.answers"),
+            data_get($meta, "formsQA.$formKeyUnderscore"),
+            data_get($meta, "formsQA.$formSlug"),
+            data_get($meta, "forms_qa.$formKeyUnderscore"),
+            data_get($meta, "forms_qa.$formSlug"),
+            data_get($session, 'formsQA'),
+            data_get($session, 'assessment.answers'),
+        ];
+        foreach ($cands as $cand) {
+            if (is_array($cand) && !empty($cand)) {
+                return (array) $cand;
+            }
+            if (is_string($cand)) {
+                $dec = json_decode($cand, true);
+                if (is_array($dec) && !empty($dec)) {
+                    return (array) $dec;
+                }
+            }
+        }
+
+        return [];
+    }
+
+    /**
      * REORDER step viewer
      * Opens the Reorder form for the given consultation session.
      */
@@ -704,10 +832,12 @@ class ConsultationFormController extends Controller
                 ->first();
         }
 
+        $oldData = $this->gatherAnswersFor($session, 'reorder', 'reorder', $form?->id);
         return view('consultations.reorder', [
             'session' => $session,
             'form'    => $form,
             'step'    => 'reorder',
+            'oldData' => $oldData,
         ]);
     }
 

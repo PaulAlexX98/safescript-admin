@@ -2,9 +2,10 @@
     use Illuminate\Support\Arr;
     use Illuminate\Support\Facades\Http;
 
-    // Helper normaliser: accept array or JSON string and always return array
+    // Helper normaliser accept array stdClass or JSON string and return array
     $arr = function ($v) {
         if (is_array($v)) return $v;
+        if (is_object($v)) return json_decode(json_encode($v), true) ?: [];
         if (is_string($v) && $v !== '') {
             $d = json_decode($v, true);
             return (json_last_error() === JSON_ERROR_NONE && is_array($d)) ? $d : [];
@@ -12,20 +13,295 @@
         return [];
     };
 
-    // 1) Load meta and answers from the order
-    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-    $formsQA = $arr(data_get($meta, 'formsQA') ?: data_get($meta, 'consultation.formsQA', []));
-    $qaKeyUsed = null;
-    if (!empty($tmp = data_get($formsQA, 'assessment.qa', []))) {
-        $qa = array_values($tmp);
-        $qaKeyUsed = 'assessment';
-    } elseif (!empty($tmp = data_get($formsQA, 'risk_assessment.qa', []))) {
-        $qa = array_values($tmp);
-        $qaKeyUsed = 'risk_assessment';
-    } else {
-        $qa = array_values(data_get($formsQA, 'raf.qa', []) ?: []);
-        $qaKeyUsed = 'raf';
+    // Resolve $record from Filament ViewEntry when provided as a callable
+    if (!isset($record) && isset($getRecord) && is_callable($getRecord)) {
+        $record = $getRecord();
     }
+
+    // 1) Load meta and answers from the order
+    $recMeta = isset($record) ? ($record->meta ?? []) : [];
+    // Normalise stdClass | array | JSON string into a plain array so data_get works
+    $meta    = $arr($recMeta);
+
+    // Hard lock to meta.assessment.answers if present
+    $qa = [];
+    $qaSource = '';
+    $qaKeyUsed = 'assessment';
+    $aa = data_get($meta, 'assessment.answers');
+
+    if ($aa instanceof \stdClass) { $aa = json_decode(json_encode($aa), true) ?: []; }
+    if (is_string($aa)) {
+        $tmp = json_decode($aa, true);
+        if (json_last_error() === JSON_ERROR_NONE) $aa = $tmp;
+    }
+
+    if (is_array($aa) && !empty($aa)) {
+        foreach ($aa as $k => $v) {
+            $qa[] = ['key' => (string) $k, 'question' => \Illuminate\Support\Str::headline((string) $k), 'answer' => $v];
+        }
+        $qaSource = 'meta.assessment.answers';
+    }
+
+    // Keep these for the probe and later pretty printing only
+    $stateArr = $arr($state ?? []);
+    $formsQA  = $arr(data_get($meta, 'formsQA') ?: data_get($meta, 'consultation.formsQA', []));
+
+    // formsQA-only finder  no cross-record lookups
+    $findQa = function ($node) use (&$findQa, $arr) {
+        if ($node instanceof \stdClass) $node = (array) $node;
+        if (!is_array($node)) return [];
+
+        // if root is already a rows list like [['key'=>..,'question'=>..,'answer'=>..], ...]
+        if (isset($node[0]) && is_array($node[0]) && (isset($node[0]['question']) || isset($node[0]['key']))) {
+            return array_values($node);
+        }
+
+        // direct qa array
+        if (isset($node['qa']) && is_array($node['qa']) && !empty($node['qa'])) {
+            return array_values($node['qa']);
+        }
+
+        // assessment.answers map under formsQA
+        if (isset($node['assessment']['answers']) && is_array($node['assessment']['answers'])) {
+            $out = [];
+            foreach ($node['assessment']['answers'] as $k => $v) {
+                $out[] = ['key' => (string) $k, 'question' => \Illuminate\Support\Str::headline((string) $k), 'answer' => $v];
+            }
+            return $out;
+        }
+
+        // NEW handle direct 'answers' map under this node
+        if (isset($node['answers']) && is_array($node['answers']) && !empty($node['answers'])) {
+            $out = [];
+            foreach ($node['answers'] as $k => $v) {
+                $out[] = ['key' => (string) $k, 'question' => \Illuminate\Support\Str::headline((string) $k), 'answer' => $v];
+            }
+            return $out;
+        }
+
+        // NEW handle flat associative maps like ["changes"=>"yes", ...] (no qa key)
+        if (\Illuminate\Support\Arr::isAssoc($node)) {
+            $allScalar = true;
+            foreach ($node as $k => $v) {
+                if (!(is_scalar($v) || $v === null)) { $allScalar = false; break; }
+            }
+            if ($allScalar && !isset($node['schema']) && !isset($node['components']) && !isset($node['qa'])) {
+                $out = [];
+                foreach ($node as $k => $v) {
+                    // ignore obvious non-answer keys
+                    if (in_array((string) $k, ['schema','components','type','label','title'], true)) continue;
+                    $out[] = [
+                        'key'      => (string) $k,
+                        'question' => \Illuminate\Support\Str::headline((string) $k),
+                        'answer'   => $v,
+                    ];
+                }
+                if (!empty($out)) return $out;
+            }
+        }
+
+        // shallow first level scan for qa or rows arrays
+        foreach ($node as $v) {
+            if ($v instanceof \stdClass) $v = (array) $v;
+            if (!is_array($v)) continue;
+
+            if (isset($v['qa']) && is_array($v['qa']) && !empty($v['qa'])) {
+                return array_values($v['qa']);
+            }
+
+            if (isset($v[0]) && is_array($v[0]) && (isset($v[0]['question']) || isset($v[0]['key']))) {
+                return array_values($v);
+            }
+        }
+
+        // recursive scan restricted to formsQA only
+        foreach ($node as $v) {
+            if ($v instanceof \stdClass || is_array($v)) {
+                $found = $findQa($v);
+                if (!empty($found)) return $found;
+            }
+        }
+
+        return [];
+    };
+
+    // 1) record accessor answers first
+    if (empty($qa) && isset($record)) {
+        $aaRec = $record->answers ?? null;
+        if (is_string($aaRec)) {
+            $tmp = json_decode($aaRec, true);
+            if (json_last_error() === JSON_ERROR_NONE) $aaRec = $tmp;
+        }
+        if (is_array($aaRec) && !empty($aaRec)) {
+            foreach ($aaRec as $k => $v) {
+                $lbl = \Illuminate\Support\Str::headline((string) $k);
+                $qa[] = ['key' => (string) $k, 'question' => $lbl, 'answer' => $v];
+            }
+            $qaSource = 'record.answers';
+        }
+    }
+
+    // 2) meta assessment.answers or answers
+    if (empty($qa)) {
+        $aa = data_get($meta, 'assessment.answers')
+            ?? data_get($meta, 'assessment_answers')
+            ?? data_get($meta, 'answers');
+
+        // Coerce stdClass or JSON string into array
+        if ($aa instanceof \stdClass) {
+            $aa = json_decode(json_encode($aa), true) ?: [];
+        } elseif (is_string($aa)) {
+            $tmp = json_decode($aa, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $aa = $tmp;
+            }
+        }
+
+        if (is_array($aa) && !empty($aa)) {
+            foreach ($aa as $k => $v) {
+                $lbl = \Illuminate\Support\Str::headline((string) $k);
+                $qa[] = ['key' => (string) $k, 'question' => $lbl, 'answer' => $v];
+            }
+            $qaSource = 'meta.assessment.answers|answers';
+        }
+    }
+
+    // 3) only if still empty, fall back to formsQA present on this record
+    if (empty($qa)) {
+        $stateLooksLikeForms = is_array($stateArr)
+            && (data_get($stateArr, 'assessment.qa') || data_get($stateArr, 'risk_assessment.qa') || data_get($stateArr, 'raf.qa'));
+
+        $formsQA = $stateLooksLikeForms
+            ? $stateArr
+            : $arr(data_get($meta, 'formsQA') ?: data_get($meta, 'consultation.formsQA', []));
+
+        // Try common direct paths inside formsQA before the generic scanner
+        if (empty($qa)) {
+            $direct = [
+                'assessment.qa',
+                'assessment.answers',
+                'assessment.data.qa',
+                'assessment.data.answers',
+                'assessment.values',
+                'risk_assessment.qa',
+                'risk_assessment.answers',
+                'risk_assessment.data.qa',
+                'risk_assessment.data.answers',
+                'raf.qa',
+                'raf.answers',
+            ];
+            foreach ($direct as $path) {
+                $v = data_get($formsQA, $path);
+                if (empty($v)) continue;
+                // normalise strings and objects
+                if (is_string($v)) {
+                    $tmp = json_decode($v, true);
+                    if (json_last_error() === JSON_ERROR_NONE) $v = $tmp;
+                } elseif ($v instanceof \stdClass) {
+                    $v = json_decode(json_encode($v), true) ?: [];
+                }
+                if (!is_array($v) || empty($v)) continue;
+                // If it's a flat associative answers map, convert to rows
+                if (\Illuminate\Support\Arr::isAssoc($v) && !isset($v[0])) {
+                    $rows = [];
+                    foreach ($v as $k => $val) {
+                        if (in_array((string)$k, ['schema','components','type','label','title'], true)) continue;
+                        $rows[] = [
+                            'key'      => (string) $k,
+                            'question' => \Illuminate\Support\Str::headline((string) $k),
+                            'answer'   => $val,
+                        ];
+                    }
+                    if (!empty($rows)) {
+                        $qa = $rows;
+                        $qaSource = 'formsQA.' . $path;
+                        $qaKeyUsed = str_contains($path, 'raf') ? 'raf' : 'assessment';
+                        break;
+                    }
+                }
+                // If it's already rows like [{question:, answer:}...]
+                if (isset($v[0]) && is_array($v[0]) && (isset($v[0]['question']) || isset($v[0]['key']) || isset($v[0]['answer']))) {
+                    $qa = array_values($v);
+                    $qaSource = 'formsQA.' . $path;
+                    $qaKeyUsed = str_contains($path, 'raf') ? 'raf' : 'assessment';
+                    break;
+                }
+            }
+        }
+
+        $qa = $findQa($formsQA);
+        if (!empty($qa) && $qaSource === '') { $qaSource = 'formsQA.scan'; }
+    } else {
+        // ensure formsQA exists for probe
+        $formsQA = $arr(data_get($meta, 'formsQA') ?: []);
+    }
+
+    // Fallback C  deep-scan meta for any plausible answers structure
+    if (empty($qa) && is_array($meta) && !empty($meta)) {
+        $normaliseMapToRows = function ($map) {
+            if (!is_array($map) || empty($map)) return [];
+            $out = [];
+            foreach ($map as $k => $v) {
+                // only accept simple scalar-ish keys
+                if (!is_string($k) && !is_int($k)) continue;
+                $label = \Illuminate\Support\Str::headline((string) $k);
+                $out[] = [
+                    'key' => (string) $k,
+                    'question' => $label,
+                    'answer' => $v,
+                ];
+            }
+            return $out;
+        };
+
+        $stack = [$meta];
+        $foundRows = [];
+        while ($stack) {
+            $node = array_pop($stack);
+            if ($node instanceof \stdClass) $node = (array) $node;
+            if (!is_array($node)) continue;
+
+            // Case 1  explicit QA rows under a `qa` key
+            if (isset($node['qa']) && is_array($node['qa']) && !empty($node['qa']) && isset($node['qa'][0])) {
+                $rows = [];
+                foreach ($node['qa'] as $r) {
+                    if ($r instanceof \stdClass) $r = (array) $r;
+                    if (!is_array($r)) continue;
+                    $rows[] = [
+                        'key' => (string) ($r['key'] ?? ($r['question'] ?? '')),
+                        'question' => (string) ($r['question'] ?? (isset($r['key']) ? \Illuminate\Support\Str::headline((string) $r['key']) : 'Question')),
+                        'answer' => $r['answer'] ?? ($r['raw'] ?? null),
+                    ];
+                }
+                if (!empty($rows)) { $foundRows = $rows; break; }
+            }
+
+            // Case 2  associative `answers` map of key => value
+            if (isset($node['answers']) && is_array($node['answers']) && !empty($node['answers'])) {
+                $rows = $normaliseMapToRows($node['answers']);
+                if (!empty($rows)) { $foundRows = $rows; break; }
+            }
+
+            // Case 3  look for q_N style map
+            $qKeys = array_filter(array_keys($node), fn($k) => is_string($k) && preg_match('/^q_\d+$/', $k));
+            if (!empty($qKeys)) {
+                $rows = $normaliseMapToRows($node);
+                if (!empty($rows)) { $foundRows = $rows; break; }
+            }
+
+            // Recurse into children
+            foreach ($node as $v) {
+                if ($v instanceof \stdClass || is_array($v)) $stack[] = $v;
+            }
+        }
+
+        if (!empty($foundRows)) {
+            $qa = $foundRows;
+            $qaSource = 'meta.deep';
+            $qaKeyUsed = 'assessment';
+        }
+    }
+
 
     // Ensure assessmentAnswers exists and is an array for fallback rendering later
     $assessmentAnswers = [];
@@ -235,6 +511,16 @@
     $labels = $labelsByIdx + $labelsByKey; // index labels, overridden by explicit keys
     $options = $optionsByIdx + $optionsByKey;
     $sections = ($sectionsByIdx ?? []) + ($sectionsByKey ?? []);
+
+    // Seed labels from QA keys if schema did not provide them
+    if (empty($labels) && !empty($qa)) {
+        foreach ($qa as $__row) {
+            $k = (string) (\Illuminate\Support\Arr::get($__row, 'key') ?? '');
+            if ($k !== '' && !isset($labels[$k])) {
+                $labels[$k] = \Illuminate\Support\Str::headline($k);
+            }
+        }
+    }
 
     // Build a fallback lookup from field label -> section, in case QA rows don't carry keys
     $sectionsByLabel = [];
@@ -553,7 +839,61 @@
 
         return json_encode($val);
     };
+
+
 @endphp
+@php
+    $formsQAKeys = is_array($formsQA ?? null) ? implode(',', array_slice(array_keys($formsQA), 0, 8)) : '';
+    $len = function ($v) {
+        if (is_string($v)) { $d = json_decode($v, true); $v = (json_last_error()===JSON_ERROR_NONE)?$d:$v; }
+        if ($v instanceof \stdClass) $v = json_decode(json_encode($v), true) ?: [];
+        return is_array($v) ? count($v) : 0;
+    };
+    $assQa  = $len(data_get($formsQA ?? [], 'assessment.qa'));
+    $assAns = $len(data_get($formsQA ?? [], 'assessment.answers'));
+    $assDq  = $len(data_get($formsQA ?? [], 'assessment.data.qa'));
+    $assDa  = $len(data_get($formsQA ?? [], 'assessment.data.answers'));
+    $riskQa = $len(data_get($formsQA ?? [], 'risk_assessment.qa'));
+    $riskAn = $len(data_get($formsQA ?? [], 'risk_assessment.answers'));
+@endphp
+<div style="font-family:ui-monospace,Menlo,monospace;font-size:12px;padding:6px 10px;background:#111827;color:#93c5fd;border:1px dashed #374151;border-radius:6px;margin-bottom:8px;">
+  qa probe
+  rows={{ is_countable($qa ?? []) ? count($qa) : 0 }}
+  source={{ $qaSource ?: 'none' }}
+  answerMap={{ ((is_array(data_get($meta,'assessment.answers')) || is_object(data_get($meta,'assessment.answers'))) || (is_array(data_get($meta,'answers')) || is_object(data_get($meta,'answers')))) ? 'yes' : 'no' }}
+  stateType={{ gettype($state ?? null) }}
+  formsQA={{ empty($formsQA ?? []) ? 'no' : 'yes' }}
+  formsQA.keys={{ $formsQAKeys }}
+  assessment.qa={{ $assQa }} assessment.answers={{ $assAns }} assessment.data.qa={{ $assDq }} assessment.data.answers={{ $assDa }} risk_assessment.qa={{ $riskQa }} risk_assessment.answers={{ $riskAn }}
+</div>
+
+@php $debugOn = request()->boolean('debug'); @endphp
+@if ($debugOn)
+    @php
+        // what the ViewEntry passed in
+        $stateType = gettype($state ?? null);
+        $stateCount = is_array($state ?? null) ? count($state) : 0;
+
+        // what we can see in meta
+        $metaHasFormsQA = data_get($meta ?? [], 'formsQA') ? 'yes' : 'no';
+        $metaHasAssessAnswers = data_get($meta ?? [], 'assessment.answers') ? 'yes' : 'no';
+        $metaHasAnswers = data_get($meta ?? [], 'answers') ? 'yes' : 'no';
+
+        // shallow peek at keys to avoid dumping huge blobs
+        $metaKeys = implode(',', array_slice(array_keys($meta ?? []), 0, 10));
+        $stateKeys = is_array($state ?? null) ? implode(',', array_slice(array_keys($state), 0, 10)) : '';
+    @endphp
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12px;padding:6px 10px;background:#0b1220;color:#9ae6b4;border:1px solid #1f2937;border-radius:8px;margin-bottom:10px;">
+        consultation-qa debug
+        stateType={{ $stateType }}
+        stateCount={{ $stateCount }}
+        meta.formsQA={{ $metaHasFormsQA }}
+        meta.assessment.answers={{ $metaHasAssessAnswers }}
+        meta.answers={{ $metaHasAnswers }}
+        metaKeys={{ $metaKeys }}
+        stateKeys={{ $stateKeys }}
+    </div>
+@endif
 
 <div class="space-y-4">
     @if (empty($qa))

@@ -24,51 +24,55 @@
       let next = form.querySelector('[name=__go_next]');
       if(!next){ next = document.createElement('input'); next.type='hidden'; next.name='__go_next'; form.appendChild(next); }
       next.value = '0';
+      let ship = form.querySelector('[name=__ship_now]');
+      if(!ship){ ship = document.createElement('input'); ship.type='hidden'; ship.name='__ship_now'; form.appendChild(ship); }
+      ship.value = '1';
       this.showConfirm=false;
       this.isSubmitting = true;
       if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
     }
   }">
   @php
-    $tabs = [
-      'risk-assessment' => 'Risk Assessment',
-      'pharmacist-advice' => 'Pharmacist Advice',
-      'pharmacist-declaration' => 'Pharmacist Declaration',
-      'record-of-supply' => 'Record of Supply',
-    ];
+      // Base tab order
+      $tabs = [
+          'risk-assessment'        => 'Risk Assessment',
+          'pharmacist-advice'      => 'Pharmacist Advice',
+          'pharmacist-declaration' => 'Pharmacist Declaration',
+          'record-of-supply'       => 'Record of Supply',
+      ];
 
-    // Only show the Reorder tab when this consultation is a reorder
-    $ordType = data_get($session, 'order.type')
-      ?: data_get($session, 'order.meta.type')
-      ?: data_get($session, 'type')
-      ?: data_get($session, 'meta.type');
+      // Figure out if this session is a reorder flow
+      $consultType        = data_get($session, 'meta.consultation.type') ?: data_get($session, 'meta.consultation.mode');
+      $hasReorderTemplate = (bool) data_get($session, 'templates.reorder');
+      $stepsHasReorder    = in_array('reorder', (array) ($session->steps ?? []), true);
 
-    $hasReorderTemplate = (bool) data_get($session, 'templates.reorder');
-    $stepsHasReorder    = in_array('reorder', (array) ($session->steps ?? []), true);
+      $isReorder = ($consultType === 'reorder') || $hasReorderTemplate || $stepsHasReorder;
 
-    $isReorder = ($ordType === 'reorder') || $hasReorderTemplate || $stepsHasReorder;
+      // For reorder flows: hide RAF completely and make Reorder the first tab
+      if ($isReorder) {
+          unset($tabs['risk-assessment']);
+          $tabs = array_merge(['reorder' => 'Reorder'], $tabs);
+      }
 
-    if ($isReorder && !array_key_exists('reorder', $tabs)) {
-        $tabs['reorder'] = 'Reorder';
-    }
+      // Decide which tab is active: route segment -> ?tab= -> flow default
+      $requestedTab = request()->segment(4)
+          ?: request()->query('tab')
+          ?: ($isReorder ? 'reorder' : 'risk-assessment');
 
-    $requestedTab = request()->segment(4) ?: request()->query('tab', 'risk-assessment');
-    $currentTab = str_replace('_', '-', strtolower((string) $requestedTab));
+      $currentTab = str_replace('_', '-', strtolower((string) $requestedTab));
 
-    // If the requested tab isn't in the visible tab list, only fall back
-    // to the first tab when there is no matching view. This enables routes
-    // like /reorder to render their dedicated blade.
-    if (! array_key_exists($currentTab, $tabs)) {
-        $vc = [
-            'consultations.tabs.' . $currentTab,
-            'consultations.' . $currentTab,
-            'consultations.' . str_replace('pharmacist-', '', $currentTab),
-        ];
-        $hasView = collect($vc)->first(fn ($v) => view()->exists((string) $v));
-        if (! $hasView) {
-            $currentTab = array_key_first($tabs);
-        }
-    }
+      // If the requested tab isn't in the visible list and we don't have a view for it, fall back to the first tab
+      if (! array_key_exists($currentTab, $tabs)) {
+          $variants = [
+              'consultations.tabs.' . $currentTab,
+              'consultations.' . $currentTab,
+              'consultations.' . str_replace('pharmacist-', '', $currentTab),
+          ];
+          $hasView = collect($variants)->first(fn ($v) => view()->exists((string) $v));
+          if (! $hasView) {
+              $currentTab = array_key_first($tabs);
+          }
+      }
   @endphp
   <style>
     /* Remove any white borders or rings from Filament sections on this page */
