@@ -10,6 +10,9 @@
 .ec .ec-event { background: transparent !important; }
 .ec .ec-event { border: 1px solid var(--gray-300); color: inherit !important; }
 
-@layer utilities {
-  .pill { @apply px-5 py-2 text-sm font-medium rounded-full; }
+.pill {
+  padding: 0.5rem 1.25rem; /* approx Tailwind py-2 px-5 */
+  font-size: 0.875rem; /* text-sm */
+  font-weight: 500; /* font-medium */
+  border-radius: 9999px; /* rounded-full */
 }
