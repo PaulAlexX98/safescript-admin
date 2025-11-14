@@ -1,3 +1,4 @@
+@reference "../../app.css";
 @source "../../../resources/**/*.blade.php";
 @source "../../../../vendor/filament/**/*.blade.php";
 @source "../../../../vendor/guava/calendar/resources/**/*.blade.php";
