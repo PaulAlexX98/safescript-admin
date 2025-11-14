@@ -8,9 +8,9 @@ return new class extends Migration {
     public function up(): void
     {
         Schema::table('clinic_forms', function (Blueprint $table) {
-            $table->json('raf_schema')->nullable()->after('schema_json');
-            $table->unsignedInteger('raf_version')->default(1)->after('raf_schema');
-            $table->string('raf_status', 20)->default('published')->after('raf_version');
+            $table->json('raf_schema')->nullable();
+            $table->unsignedInteger('raf_version')->default(1);
+            $table->string('raf_status', 20)->default('published');
         });
     }
 
