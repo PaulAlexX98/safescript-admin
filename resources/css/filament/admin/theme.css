@@ -10,12 +10,6 @@
 .ec .ec-event { background: transparent !important; }
 .ec .ec-event { border: 1px solid var(--gray-300); color: inherit !important; }
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@import "../../../../vendor/guava/calendar/resources/css/theme.css";
-
 @layer utilities {
   .pill { @apply px-5 py-2 text-sm font-medium rounded-full; }
 }
