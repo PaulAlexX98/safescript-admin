@@ -9,8 +9,8 @@ return new class extends Migration {
     {
         Schema::create('product_service', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('service_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('product_id')->constrained()->cascadeOnDelete();
+            $table->unsignedBigInteger('service_id');
+            $table->unsignedBigInteger('product_id');
             $table->boolean('active')->default(true);
             $table->unsignedInteger('sort_order')->default(0);
             $table->unsignedTinyInteger('min_qty')->default(1);
@@ -20,10 +20,29 @@ return new class extends Migration {
 
             $table->unique(['service_id', 'product_id']);
         });
+
+        if (Schema::hasTable('services')) {
+            Schema::table('product_service', function (Blueprint $table) {
+                $table->foreign('service_id')->references('id')->on('services')->cascadeOnDelete();
+            });
+        }
+
+        if (Schema::hasTable('products')) {
+            Schema::table('product_service', function (Blueprint $table) {
+                $table->foreign('product_id')->references('id')->on('products')->cascadeOnDelete();
+            });
+        }
     }
 
     public function down(): void
     {
+        if (Schema::hasTable('product_service')) {
+            Schema::table('product_service', function (Blueprint $table) {
+                $table->dropForeign(['service_id']);
+                $table->dropForeign(['product_id']);
+            });
+        }
+
         Schema::dropIfExists('product_service');
     }
 };
