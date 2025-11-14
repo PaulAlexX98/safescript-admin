@@ -8,6 +8,9 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (! Schema::hasTable('users')) {
+            return;
+        }
         Schema::table('users', function (Blueprint $table) {
             // Only add if missing (running on fresh DB will just add them)
             if (!Schema::hasColumn('users', 'first_name'))  $table->string('first_name')->nullable()->after('id');
@@ -33,6 +36,9 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (! Schema::hasTable('users')) {
+            return;
+        }
         Schema::table('users', function (Blueprint $table) {
             foreach ([
                 'first_name','last_name','gender','phone','dob',
