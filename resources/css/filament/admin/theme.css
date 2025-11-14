@@ -1,9 +1,6 @@
-@import "tailwindcss";
-
 @source "../../../resources/**/*.blade.php";
 @source "../../../../vendor/filament/**/*.blade.php";
 @source "../../../../vendor/guava/calendar/resources/**/*.blade.php";
-@import '../../../../vendor/guava/calendar/resources/css/theme.css';
 @source '../../../../vendor/guava/calendar/resources/**/*';
 
 /* Neutralise Guava calendar colours */
