@@ -7,33 +7,61 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
+        if (! Schema::hasTable('services')) {
+            return;
+        }
+
         Schema::table('services', function (Blueprint $table) {
-            // If these columns might already exist on some envs, guard with conditions in raw SQL or ignore errors.
-            $table->string('name')->after('id');
-            $table->string('slug')->unique()->after('name');
+            if (! Schema::hasColumn('services', 'name')) {
+                $table->string('name')->after('id');
+            }
 
-            $table->text('description')->nullable()->after('slug');
+            if (! Schema::hasColumn('services', 'slug')) {
+                $table->string('slug')->unique()->after('name');
+            }
 
-            // Booking flow config like { step1:'service', step2:'raf', ... }
-            $table->json('booking_flow')->nullable()->after('description');
+            if (! Schema::hasColumn('services', 'description')) {
+                $table->text('description')->nullable()->after('slug');
+            }
 
-            // Form assignments like { raf: 1, advice: 2, ... }
-            $table->json('forms_assignment')->nullable()->after('booking_flow');
+            if (! Schema::hasColumn('services', 'booking_flow')) {
+                $table->json('booking_flow')->nullable()->after('description');
+            }
 
-            $table->string('status')->default('draft')->after('forms_assignment'); // draft|published
-            $table->boolean('active')->default(true)->after('status');
+            if (! Schema::hasColumn('services', 'forms_assignment')) {
+                $table->json('forms_assignment')->nullable()->after('booking_flow');
+            }
 
-            // Optional nice-to-haves you mentioned before:
-            $table->string('view_type')->default('same_tab')->after('active'); // same_tab|new_tab
-            $table->string('cta_text')->nullable()->after('view_type');
-            $table->string('image')->nullable()->after('cta_text');
+            if (! Schema::hasColumn('services', 'status')) {
+                $table->string('status')->default('draft')->after('forms_assignment'); // draft|published
+            }
+
+            if (! Schema::hasColumn('services', 'active')) {
+                $table->boolean('active')->default(true)->after('status');
+            }
+
+            if (! Schema::hasColumn('services', 'view_type')) {
+                $table->string('view_type')->default('same_tab')->after('active'); // same_tab|new_tab
+            }
+
+            if (! Schema::hasColumn('services', 'cta_text')) {
+                $table->string('cta_text')->nullable()->after('view_type');
+            }
+
+            if (! Schema::hasColumn('services', 'image')) {
+                $table->string('image')->nullable()->after('cta_text');
+            }
         });
     }
 
     public function down(): void
     {
+        if (! Schema::hasTable('services')) {
+            return;
+        }
+
         Schema::table('services', function (Blueprint $table) {
-            $table->dropColumn([
+            $columns = [
                 'name',
                 'slug',
                 'description',
@@ -44,7 +72,19 @@ return new class extends Migration {
                 'view_type',
                 'cta_text',
                 'image',
-            ]);
+            ];
+
+            $drop = [];
+
+            foreach ($columns as $column) {
+                if (Schema::hasColumn('services', $column)) {
+                    $drop[] = $column;
+                }
+            }
+
+            if (! empty($drop)) {
+                $table->dropColumn($drop);
+            }
         });
     }
 };

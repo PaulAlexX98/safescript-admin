@@ -7,6 +7,11 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
+        if (Schema::hasTable('product_service')) {
+            // Table already exists in this database, so do not try to recreate it.
+            return;
+        }
+
         Schema::create('product_service', function (Blueprint $table) {
             $table->id();
             $table->unsignedBigInteger('service_id');
