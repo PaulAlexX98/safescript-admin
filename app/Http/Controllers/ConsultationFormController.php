@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Log;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use App\Models\ClinicForm;
 use App\Models\ConsultationFormResponse;
@@ -520,65 +521,7 @@ class ConsultationFormController extends Controller
         if ($markComplete && !$isComplete) {
             $isComplete  = true;
             $completedAt = now();
-
-            // Trigger Royal Mail Click & Drop on completion when requested by the UI
-            if ($request->boolean('__ship_now')) {
-                try {
-                    \Log::info('clickanddrop.start', [
-                        'session' => $session->id,
-                        'reference_guess' => ($session->order->reference ?? ('CONS-' . $session->id))
-                    ]);
-
-                    $order = $session->order ?? null; // optional relation
-
-                    // Work with a normalised session meta array
-                    $metaArr = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
-
-                    // Patient identifiers with tolerant fallbacks
-                    $firstName = data_get($metaArr, 'patient.first_name')
-                        ?? data_get($metaArr, 'patient.name.first')
-                        ?? data_get($metaArr, 'first_name');
-                    $lastName  = data_get($metaArr, 'patient.last_name')
-                        ?? data_get($metaArr, 'patient.name.last')
-                        ?? data_get($metaArr, 'last_name');
-
-                    $out = app(\App\Services\Shipping\ClickAndDrop::class)->createOrder([
-                        'reference'  => $order->reference ?? ('CONS-' . $session->id),
-                        'first_name' => $firstName,
-                        'last_name'  => $lastName,
-                        'email'      => data_get($metaArr, 'patient.email'),
-                        'phone'      => data_get($metaArr, 'patient.phone'),
-                        'address1'   => data_get($metaArr, 'patient.address1') ?? data_get($metaArr, 'patient.address.line1'),
-                        'address2'   => data_get($metaArr, 'patient.address2') ?? data_get($metaArr, 'patient.address.line2'),
-                        'city'       => data_get($metaArr, 'patient.city') ?? data_get($metaArr, 'patient.address.city'),
-                        'county'     => data_get($metaArr, 'patient.county') ?? data_get($metaArr, 'patient.address.county'),
-                        'postcode'   => data_get($metaArr, 'patient.postcode') ?? data_get($metaArr, 'patient.address.postcode'),
-                        'item_name'  => $session->service ?? 'Pharmacy order',
-                        'sku'        => data_get($metaArr, 'sku') ?? 'RX',
-                        'weight'     => 100,
-                        'value'      => 0,
-                    ]);
-                    \Log::info('clickanddrop.ok', [
-                        'session'  => $session->id,
-                        'tracking' => $out['tracking'] ?? null,
-                        'label'    => $out['label_path'] ?? null,
-                    ]);
-
-                    // Persist shipping info back onto the session for viewers and PDFs
-                    data_set($metaArr, 'shipping.carrier', 'royal_mail_click_and_drop');
-                    data_set($metaArr, 'shipping.tracking', $out['tracking'] ?? null);
-                    data_set($metaArr, 'shipping.label', $out['label_path'] ?? null);
-                    data_set($metaArr, 'shipping.raw', $out['raw'] ?? null);
-
-                    $session->meta = $metaArr;
-                    $session->save();
-                } catch (\Throwable $e) {
-                    \Log::error('clickanddrop.failed', [
-                        'session' => $session->id,
-                        'error'   => $e->getMessage(),
-                    ]);
-                }
-            }
+            // Shipping is now triggered in the dedicated complete() endpoint.
         }
 
         // Ensure a non-null form_version for NOT NULL constraint
@@ -714,6 +657,46 @@ class ConsultationFormController extends Controller
         $session->meta = $sessionMeta;
         $session->save();
 
+        // 6b) If we were asked to complete the consultation, mark the session (and order) complete
+        //     and prefer redirecting to an appropriate "done" page.
+        $redirectAfterComplete = null;
+        if ($markComplete) {
+            try {
+                // Mark the consultation session complete
+                if (empty($session->status) || $session->status !== 'completed') {
+                    $session->status = 'completed';
+                    $session->save();
+                }
+
+                // If there's a related order, flip it to approved/completed if your domain model supports it
+                try {
+                    if (method_exists($session, 'order') || property_exists($session, 'order')) {
+                        $ord = $session->order;
+                        if ($ord) {
+                            // Set some reasonable "completed" semantics while keeping existing values when present
+                            if (empty($ord->status) || in_array($ord->status, ['pending','processing','approved'], true)) {
+                                $ord->status = 'completed';
+                            }
+                            // Persist shipping meta echo for quick access from order views
+                            $meta = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
+                            $sessMeta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
+                            if (data_get($sessMeta, 'shipping')) {
+                                $meta['shipping'] = array_replace_recursive($meta['shipping'] ?? [], (array) data_get($sessMeta, 'shipping'));
+                            }
+                            $ord->meta = $meta;
+                            $ord->save();
+
+                            // Prefer redirecting to the completed order details page
+                            $redirectAfterComplete = url('/admin/orders/completed-orders/'.$ord->getKey().'/details');
+                        }
+                    }
+                } catch (\Throwable $oe) {
+                    \Log::warning('consultation.complete.order_update_failed', ['session' => $session->id, 'error' => $oe->getMessage()]);
+                }
+            } catch (\Throwable $se) {
+                \Log::warning('consultation.complete.session_update_failed', ['session' => $session->id, 'error' => $se->getMessage()]);
+            }
+        }
         // 7) Smart redirect: keep user on the same tab
         $backUrl = url()->previous();
         $tabKey  = $this->defaultTabKeyForSlug($stepSlug);
@@ -728,6 +711,10 @@ class ConsultationFormController extends Controller
             $target .= (str_contains($target, '?') ? '&' : '?') . 'next=1';
         }
 
+        // If we completed the consultation this request and computed a post‑completion target, use it.
+        if ($markComplete && $redirectAfterComplete) {
+            return redirect()->to($redirectAfterComplete)->with('success', 'Consultation completed');
+        }
         if ($request->wantsJson()) {
             return response()->json([
                 'ok'            => true,
@@ -797,6 +784,388 @@ class ConsultationFormController extends Controller
         }
 
         return [];
+    }
+
+    /**
+     * Final step page: show a simple confirmation screen before completing the consultation.
+     */
+    public function showComplete(ConsultationSession $session)
+    {
+        $order   = $session->order ?? null;
+        $patient = $order?->patient ?? null;
+
+        return view('consultations.complete', [
+            'session'     => $session,
+            'order'       => $order,
+            'patient'     => $patient,
+            'sessionLike' => $session,
+        ]);
+    }
+
+    /**
+     * Handle the final Confirm and complete action.
+     * Marks the session as completed and, if present, updates the linked order.
+     */
+    public function complete(Request $request, ConsultationSession $session)
+    {
+        $request->validate([
+            'confirm_complete' => 'accepted',
+        ]);
+
+        // First mark session and order as completed
+        DB::transaction(function () use ($session) {
+            if (empty($session->status) || $session->status !== 'completed') {
+                $session->status = 'completed';
+                $session->save();
+            }
+
+            try {
+                $order = $session->order ?? null;
+                if ($order) {
+                    if (empty($order->status) || in_array($order->status, ['pending', 'processing', 'approved'], true)) {
+                        $order->status = 'completed';
+                    }
+                    $order->save();
+                }
+            } catch (\Throwable $e) {
+                Log::warning('consultation.complete.order_update_failed', [
+                    'session' => $session->id,
+                    'error'   => $e->getMessage(),
+                ]);
+            }
+        });
+
+        // After successfully completing, attempt to create a Royal Mail Click & Drop order
+        try {
+            $order = $session->order ?? null;
+            if ($order) {
+                \Log::info('clickanddrop.complete.start', [
+                    'session'   => $session->id,
+                    'order'     => $order->getKey(),
+                    'reference' => $order->reference ?? ('CONS-' . $session->id),
+                ]);
+
+                // Normalise meta as array
+                $metaArr = is_array($session->meta)
+                    ? $session->meta
+                    : (json_decode($session->meta ?? '[]', true) ?: []);
+
+                // Hydrate missing patient identity and address fields from order->shipping_address and meta
+                try {
+                    $addr = [];
+
+                    if ($order) {
+                        // 1) Try the concrete shipping_address column first
+                        if (is_array($order->shipping_address)) {
+                            $addr = $order->shipping_address;
+                        } else {
+                            $addr = json_decode($order->shipping_address ?? '[]', true) ?: [];
+                        }
+
+                        // 2) If still empty, fall back to common paths inside order->meta
+                        if (! is_array($addr) || empty($addr)) {
+                            $orderMeta = is_array($order->meta)
+                                ? $order->meta
+                                : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                            $candidatePaths = [
+                                'shipping_address',
+                                'shipping.address',
+                                'address.shipping',
+                                'address',
+                                'patient.address',
+                                'patient.shipping_address',
+                            ];
+
+                            foreach ($candidatePaths as $path) {
+                                $found = data_get($orderMeta, $path);
+                                if (is_array($found) && ! empty($found)) {
+                                    $addr = $found;
+                                    break;
+                                }
+                            }
+
+                            // 3) As a last resort, try to build an address from top-level keys in meta
+                            if ((! is_array($addr) || empty($addr)) && ! empty($orderMeta)) {
+                                $guess = [
+                                    'first_name'   => $orderMeta['first_name']   ?? $orderMeta['firstName']   ?? null,
+                                    'last_name'    => $orderMeta['last_name']    ?? $orderMeta['lastName']    ?? null,
+                                    'email'        => $orderMeta['email']        ?? null,
+                                    'phone'        => $orderMeta['phone']        ?? $orderMeta['mobile']      ?? null,
+                                    'address1'     => $orderMeta['address1']     ?? $orderMeta['line1']       ?? $orderMeta['addressLine1'] ?? null,
+                                    'address2'     => $orderMeta['address2']     ?? $orderMeta['line2']       ?? $orderMeta['addressLine2'] ?? null,
+                                    'city'         => $orderMeta['city']         ?? $orderMeta['town']        ?? $orderMeta['addressCity']  ?? null,
+                                    'county'       => $orderMeta['county']       ?? null,
+                                    'postcode'     => $orderMeta['postcode']     ?? $orderMeta['postCode']    ?? null,
+                                    'country_code' => $orderMeta['country_code'] ?? $orderMeta['country']     ?? $orderMeta['countryCode'] ?? null,
+                                ];
+
+                                $nonEmpty = array_filter($guess, fn ($v) => $v !== null && $v !== '');
+                                if (! empty($nonEmpty)) {
+                                    $addr = $guess;
+                                }
+                            }
+                        }
+                    }
+
+                    if (is_array($addr) && ! empty($addr)) {
+                        $changed = false;
+
+                        $map = [
+                            'patient.first_name'   => ['first_name', 'firstName', 'name.first', 'first'],
+                            'patient.last_name'    => ['last_name', 'lastName', 'name.last', 'last'],
+                            'patient.email'        => ['email'],
+                            'patient.phone'        => ['phone', 'mobile'],
+                            'patient.address1'     => ['address1', 'line1', 'address.line1', 'addressLine1'],
+                            'patient.address2'     => ['address2', 'line2', 'address.line2', 'addressLine2'],
+                            'patient.city'         => ['city', 'town', 'address.city'],
+                            'patient.county'       => ['county', 'address.county'],
+                            'patient.postcode'     => ['postcode', 'postCode', 'address.postcode'],
+                            'patient.country_code' => ['country_code', 'country', 'address.country_code', 'countryCode'],
+                        ];
+
+                        foreach ($map as $to => $fromPaths) {
+                            $cur = data_get($metaArr, $to);
+                            $val = null;
+
+                            foreach ($fromPaths as $from) {
+                                $val = data_get($addr, $from);
+                                if ($val !== null && $val !== '') {
+                                    break;
+                                }
+                            }
+
+                            if (($cur === null || $cur === '') && ($val !== null && $val !== '')) {
+                                data_set($metaArr, $to, $val);
+                                $changed = true;
+                            }
+                        }
+
+                        if ($changed) {
+                            $session->meta = $metaArr;
+                            $session->save();
+                            \Log::info('consultation.patient_meta.hydrated_from_order', [
+                                'session' => $session->id,
+                                'source'  => 'order.shipping_address',
+                            ]);
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    \Log::warning('consultation.patient_meta.hydrate_failed', [
+                        'session' => $session->id,
+                        'error'   => $e->getMessage(),
+                    ]);
+                }
+
+                // Try to also hydrate from a concrete Patient model (session or order)
+                // Try to also hydrate from a concrete Patient model (session or order or user)
+                
+                $patientModel = null;
+                try {
+                    if (method_exists($session, 'patient') || property_exists($session, 'patient')) {
+                        $patientModel = $session->patient;
+                    }
+
+                    if (! $patientModel && $order && (method_exists($order, 'patient') || property_exists($order, 'patient'))) {
+                        $patientModel = $order->patient;
+                    }
+
+                    // Fallback to the owning user if there is no dedicated Patient record
+                    if (! $patientModel && (method_exists($session, 'user') || property_exists($session, 'user'))) {
+                        $patientModel = $session->user;
+                    }
+
+                    if (! $patientModel && $order && (method_exists($order, 'user') || property_exists($order, 'user'))) {
+                        $patientModel = $order->user;
+                    }
+                } catch (\Throwable $e) {
+                    \Log::warning('consultation.patient_model.resolve_failed', [
+                        'session' => $session->id,
+                        'error'   => $e->getMessage(),
+                    ]);
+                }
+
+                if ($patientModel) {
+                    $changed = false;
+                    $map = [
+                        'patient.first_name'   => ['first_name'],
+                        'patient.last_name'    => ['last_name'],
+                        'patient.email'        => ['email'],
+                        'patient.phone'        => ['phone'],
+                        'patient.address1'     => ['address1'],
+                        'patient.address2'     => ['address2'],
+                        'patient.city'         => ['city'],
+                        'patient.county'       => ['county'],
+                        'patient.postcode'     => ['postcode'],
+                        'patient.country_code' => ['country_code', 'country'],
+                    ];
+
+                    foreach ($map as $to => $fromPaths) {
+                        $cur = data_get($metaArr, $to);
+                        if ($cur !== null && $cur !== '') {
+                            continue;
+                        }
+                        foreach ($fromPaths as $from) {
+                            $val = data_get($patientModel, $from);
+                            if ($val !== null && $val !== '') {
+                                data_set($metaArr, $to, $val);
+                                $changed = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if ($changed) {
+                        $session->meta = $metaArr;
+                        $session->save();
+
+                        \Log::info('consultation.patient_meta.hydrated_from_patient', [
+                            'session'    => $session->id,
+                            'patient_id' => method_exists($patientModel, 'getKey') ? $patientModel->getKey() : null,
+                        ]);
+                    }
+                }
+
+                // Helper to pull values from any nested meta key that ends with one of the given suffixes
+                $findMeta = function (array $meta, array $suffixes) {
+                    $flat = \Illuminate\Support\Arr::dot($meta);
+                    foreach ($flat as $key => $val) {
+                        if ($val === null || $val === '') {
+                            continue;
+                        }
+                        foreach ($suffixes as $suffix) {
+                            if (\Illuminate\Support\Str::endsWith($key, $suffix)) {
+                                return $val;
+                            }
+                        }
+                    }
+                    return null;
+                };
+
+                // Build a lightweight patient object using hydrated meta plus deep fallbacks
+                $firstName = data_get($metaArr, 'patient.first_name')
+                    ?? data_get($metaArr, 'patient.name.first')
+                    ?? data_get($metaArr, 'first_name')
+                    ?? $findMeta($metaArr, ['.first_name', '.firstName', '.name.first']);
+                $lastName  = data_get($metaArr, 'patient.last_name')
+                    ?? data_get($metaArr, 'patient.name.last')
+                    ?? data_get($metaArr, 'last_name')
+                    ?? $findMeta($metaArr, ['.last_name', '.lastName', '.name.last']);
+
+                $email    = data_get($metaArr, 'patient.email')
+                    ?? $findMeta($metaArr, ['.email']);
+                $phone    = data_get($metaArr, 'patient.phone')
+                    ?? $findMeta($metaArr, ['.phone', '.mobile']);
+                $address1 = data_get($metaArr, 'patient.address1')
+                    ?? data_get($metaArr, 'patient.address.line1')
+                    ?? $findMeta($metaArr, ['.address1', '.line1', '.addressLine1']);
+                $address2 = data_get($metaArr, 'patient.address2')
+                    ?? data_get($metaArr, 'patient.address.line2')
+                    ?? $findMeta($metaArr, ['.address2', '.line2', '.addressLine2']);
+                $city     = data_get($metaArr, 'patient.city')
+                    ?? data_get($metaArr, 'patient.address.city')
+                    ?? $findMeta($metaArr, ['.city', '.town']);
+                $county   = data_get($metaArr, 'patient.county')
+                    ?? data_get($metaArr, 'patient.address.county')
+                    ?? $findMeta($metaArr, ['.county']);
+                $postcode = data_get($metaArr, 'patient.postcode')
+                    ?? data_get($metaArr, 'patient.address.postcode')
+                    ?? $findMeta($metaArr, ['.postcode', '.postCode']);
+                $country  = data_get($metaArr, 'patient.country_code')
+                    ?? data_get($metaArr, 'patient.address.country_code')
+                    ?? $findMeta($metaArr, ['.country_code', '.countryCode', '.country'])
+                    ?? 'GB';
+
+                $patient = (object) [
+                    'first_name'    => $firstName,
+                    'last_name'     => $lastName,
+                    'email'         => $email,
+                    'phone'         => $phone,
+                    'address1'      => $address1,
+                    'address2'      => $address2,
+                    'city'          => $city,
+                    'county'        => $county,
+                    'postcode'      => $postcode,
+                    'country_code'  => $country,
+                ];
+
+                \Log::info('clickanddrop.patient_built', [
+                    'session'  => $session->id,
+                    'first'    => $patient->first_name ?? null,
+                    'last'     => $patient->last_name ?? null,
+                    'address1' => $patient->address1 ?? null,
+                    'city'     => $patient->city ?? null,
+                    'postcode' => $patient->postcode ?? null,
+                ]);
+
+                $service = app(\App\Services\Shipping\ClickAndDrop::class);
+                $out = $service->createOrder($order, $patient);
+
+                // Try to pull a tracking number from the response if present
+                $response = $out['response'] ?? [];
+                $tracking = data_get($response, 'createdOrders.0.trackingNumber')
+                    ?? data_get($response, 'createdOrders.0.trackingNumbers.0');
+
+                \Log::info('clickanddrop.complete.ok', [
+                    'session'   => $session->id,
+                    'order'     => $order->getKey(),
+                    'tracking'  => $tracking,
+                    'labels'    => $out['label_paths'] ?? [],
+                ]);
+
+                // Persist shipping info back onto the session for viewers and PDFs
+                data_set($metaArr, 'shipping.carrier', 'royal_mail_click_and_drop');
+                if ($tracking) {
+                    data_set($metaArr, 'shipping.tracking', $tracking);
+                }
+                if (! empty($out['label_paths'])) {
+                    data_set($metaArr, 'shipping.label_paths', $out['label_paths']);
+                }
+                if (! empty($response)) {
+                    data_set($metaArr, 'shipping.response', $response);
+                }
+                if (! empty($out['request'])) {
+                    data_set($metaArr, 'shipping.request', $out['request']);
+                }
+
+                $session->meta = $metaArr;
+                $session->save();
+
+                // Also mirror shipping meta back onto the order for order-based viewers
+                $orderMeta = is_array($order->meta)
+                    ? $order->meta
+                    : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                $orderMeta['shipping'] = array_replace_recursive(
+                    $orderMeta['shipping'] ?? [],
+                    (array) data_get($metaArr, 'shipping', [])
+                );
+
+                $order->meta = $orderMeta;
+                $order->save();
+            } else {
+                \Log::info('clickanddrop.complete.skip_no_order', [
+                    'session' => $session->id,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            \Log::error('clickanddrop.complete.failed', [
+                'session' => $session->id,
+                'error'   => $e->getMessage(),
+            ]);
+        }
+
+        // Prefer redirecting to the order if present, otherwise back to the consultation
+        $order = $session->order ?? null;
+        if ($order) {
+            return redirect()
+                ->to(url('/admin/orders/completed-orders/' . $order->getKey() . '/details'))
+                ->with('success', 'Consultation completed');
+        }
+
+        return redirect()
+            ->to(url('/admin/consultations/' . $session->id))
+            ->with('success', 'Consultation completed');
     }
 
     /**

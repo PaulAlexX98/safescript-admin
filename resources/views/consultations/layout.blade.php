@@ -11,27 +11,23 @@
       this.isSubmitting = true;
       if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
     },
-    showConfirm:false,
-    openCompleteConfirm(){ this.showConfirm = true; try{ document.body.style.overflow='hidden'; }catch(e){} },
-    cancelComplete(){ this.showConfirm = false; try{ document.body.style.overflow=''; }catch(e){} },
-    confirmComplete(){
+    goComplete(){
       const area = document.getElementById('consultation-section');
       const form = area ? area.querySelector('form') : document.querySelector('form');
-      if(form){
-        let mark = form.querySelector('[name=__mark_complete]');
-        if(!mark){ mark = document.createElement('input'); mark.type='hidden'; mark.name='__mark_complete'; form.appendChild(mark); }
-        mark.value = '1';
-        let next = form.querySelector('[name=__go_next]');
-        if(!next){ next = document.createElement('input'); next.type='hidden'; next.name='__go_next'; form.appendChild(next); }
-        next.value = '0';
-        let ship = form.querySelector('[name=__ship_now]');
-        if(!ship){ ship = document.createElement('input'); ship.type='hidden'; ship.name='__ship_now'; form.appendChild(ship); }
-        ship.value = '1';
-      }
-      this.showConfirm = false;
-      try{ document.body.style.overflow=''; }catch(e){}
+      if(!form) return;
+      let next = form.querySelector('[name=__go_next]');
+      if(!next){ next = document.createElement('input'); next.type='hidden'; next.name='__go_next'; form.appendChild(next); }
+      next.value = '0';
+      try { sessionStorage.setItem('consult_complete','1'); } catch(e){}
       this.isSubmitting = true;
-      // Livewire completes via wire:click on the confirm button
+      if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+    },
+    confirmComplete(){
+      // Submit only the explicit complete form
+      const form = document.getElementById('consult-complete-form');
+      if (!form) return;
+      this.isSubmitting = true;
+      form.submit();
     }
   }">
   @php
@@ -64,6 +60,8 @@
       $currentTab = str_replace('_', '-', strtolower((string) $requestedTab));
       $lastTab = array_key_last($tabs);
       $isLastTab = ($currentTab === $lastTab);
+
+      $isCompletePage = ($currentTab === 'complete') || request()->is('admin/consultations/*/complete');
 
       // If the requested tab isn't in the visible list and we don't have a view for it, fall back to the first tab
       if (! array_key_exists($currentTab, $tabs)) {
@@ -173,32 +171,51 @@
 
   <div class="max-w-5xl mx-auto mt-14 mb-10 w-full">
     <div class="flex flex-wrap items-center justify-start -m-2 md:-m-3">
-      <div class="p-2 md:p-3">
-        <x-filament::button type="button"
-          x-on:click="submitCurrent(false)"
-          x-bind:disabled="isSubmitting"
-          color="warning" size="md" class="px-8 py-3 text-lg">
-          Save
-        </x-filament::button>
-      </div>
-      @if ($isLastTab)
+      @if ($isCompletePage)
         <div class="p-2 md:p-3">
           <x-filament::button type="button"
-            x-on:click="openCompleteConfirm()"
+            x-on:click="confirmComplete()"
             x-bind:disabled="isSubmitting"
-            color="danger" size="md" class="px-8 py-3 text-lg">
-            Save and Complete Consultation
+            color="success" size="md" class="px-8 py-3 text-lg">
+            Confirm and complete
+          </x-filament::button>
+        </div>
+        <div class="p-2 md:p-3">
+          <x-filament::button
+            :tag="'a'"
+            href="{{ url('/admin/consultations/' . ($session->id ?? $session->getKey()) . '/risk-assessment') }}"
+            color="gray" size="md" class="px-8 py-3 text-lg">
+            Back to consultation
           </x-filament::button>
         </div>
       @else
         <div class="p-2 md:p-3">
           <x-filament::button type="button"
-            x-on:click="submitCurrent(true)"
+            x-on:click="submitCurrent(false)"
             x-bind:disabled="isSubmitting"
-            color="gray" size="md" class="px-8 py-3 text-lg">
-            Save and Next
+            color="warning" size="md" class="px-8 py-3 text-lg">
+            Save
           </x-filament::button>
         </div>
+        @if ($isLastTab)
+          <div class="p-2 md:p-3">
+            <x-filament::button type="button"
+              x-on:click="goComplete()"
+              x-bind:disabled="isSubmitting"
+              color="danger" size="md" class="px-8 py-3 text-lg">
+              Save and Complete Consultation
+            </x-filament::button>
+          </div>
+        @else
+          <div class="p-2 md:p-3">
+            <x-filament::button type="button"
+              x-on:click="submitCurrent(true)"
+              x-bind:disabled="isSubmitting"
+              color="gray" size="md" class="px-8 py-3 text-lg">
+              Save and Next
+            </x-filament::button>
+          </div>
+        @endif
       @endif
     </div>
   </div>
@@ -234,24 +251,13 @@
         }
       }
     } catch (e) {}
+    try {
+      if (sessionStorage.getItem('consult_complete') === '1') {
+        sessionStorage.removeItem('consult_complete');
+        const completeUrl = @json(url('/admin/consultations/' . ($session->id ?? $session->getKey()) . '/complete'));
+        window.location.replace(completeUrl);
+      }
+    } catch (e) {}
   });
 </script>
-<div x-cloak x-show="showConfirm"
-     style="position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:99999;">
-  <div style="position:absolute;inset:0;background:rgba(0,0,0,.6);" x-on:click="cancelComplete()"></div>
-  <div class="relative"
-       style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1;width:100%;max-width:520px;border-radius:12px;padding:24px;background:#0b0b0b;border:1px solid rgba(255,255,255,.12);box-shadow:0 10px 30px rgba(0,0,0,.4);">
-    <h3 class="text-lg font-semibold text-white mb-2">Complete consultation?</h3>
-    <p class="text-sm text-gray-300 mb-6">This will mark the consultation as complete after saving the current tab.</p>
-    <div class="flex" style="display:flex;justify-content:flex-end;gap:12px;">
-      <x-filament::button type="button" color="gray" size="sm" x-on:click="cancelComplete()">Cancel</x-filament::button>
-      <x-filament::button type="button" color="danger" size="sm" style="margin-left:8px;"
-        x-on:click="confirmComplete()"
-        wire:click="completeConsultation"
-      >
-        Yes, complete
-      </x-filament::button>
-    </div>
-  </div>
-</div>
 </x-filament-panels::page>

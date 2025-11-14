@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\DB;
 use App\Models\Order;
+use App\Models\Patient;
 use App\Services\Shipping\ClickAndDrop;
 
 class ConsultationRunner extends Page

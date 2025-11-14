@@ -1082,7 +1082,11 @@ class ApprovedOrderResource extends Resource
     {
         return parent::getEloquentQuery()
             ->with(['user'])
-            ->whereRaw("LOWER(booking_status) IN ('approved','booked')");
+            ->whereRaw("LOWER(booking_status) IN ('approved','booked')")
+            ->where(function (Builder $q) {
+                $q->whereNull('status')
+                  ->orWhere('status', '!=', 'completed');
+            });
     }
 
     public static function getNavigationBadge(): ?string

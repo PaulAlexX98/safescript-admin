@@ -2,156 +2,159 @@
 
 namespace App\Services\Shipping;
 
-use Illuminate\Http\Client\RequestException;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use RuntimeException;
 
 class ClickAndDrop
 {
     /**
-     * Remove null/empty-string entries recursively so the API doesn't receive invalid fields.
+     * Create a Royal Mail Click & Drop order for the given order/patient.
+     *
+     * $overrides may contain:
+     *  - api_key
+     *  - base
+     *  - service_identifier
+     *  - package_identifier
+     *  - sender (optional array for future extension)
      */
-    private function clean(array $data): array
+    public function createOrder(object $order, object $patient, array $overrides = []): array
     {
-        $out = [];
-        foreach ($data as $k => $v) {
-            if (is_array($v)) {
-                $v = $this->clean($v);
-                if ($v === []) { continue; }
-                $out[$k] = $v;
-            } else {
-                if ($v === null) { continue; }
-                if (is_string($v) && trim($v) === '') { continue; }
-                $out[$k] = $v;
-            }
+        // Resolve credentials and defaults (multi-tenant capable via $overrides)
+        // Use the dedicated clickanddrop config, which reads CLICK_AND_DROP_* env vars.
+        $base   = rtrim(
+            (string) ($overrides['base'] ?? config('clickanddrop.base') ?? 'https://api.parcel.royalmail.com/api/v1'),
+            '/'
+        );
+        $apiKey = (string) ($overrides['api_key'] ?? config('clickanddrop.key'));
+        $serviceId = (string) ($overrides['service_identifier'] ?? config('clickanddrop.default_service', 'RM24'));
+        $packageId = (string) ($overrides['package_identifier'] ?? config('clickanddrop.default_package', 'Parcel'));
+
+        if ($apiKey === '') {
+            throw new RuntimeException('Click & Drop API key is missing.');
         }
-        return $out;
-    }
 
-    /** Build a curl command string for local debugging only. */
-    private function buildCurl(string $url, array $headers, array $payload): string
-    {
-        $h = '';
-        foreach ($headers as $k => $v) {
-            $h .= ' -H ' . escapeshellarg($k . ': ' . $v);
+        // Pull safe fields from $order and $patient without assuming strict types
+        $ref       = (string) (data_get($order, 'reference') ?? data_get($order, 'ref') ?? 'REF-' . uniqid());
+        $createdAt = data_get($order, 'created_at');
+        $orderDate = is_string($createdAt)
+            ? $createdAt
+            : (method_exists($createdAt, 'toIso8601String') ? $createdAt->toIso8601String() : now()->toIso8601String());
+
+        $subtotal  = (float) (data_get($order, 'subtotal', 0));
+        $shipCost  = (float) (data_get($order, 'shipping_total', 0));
+        $total     = (float) (data_get($order, 'total', $subtotal + $shipCost));
+
+        $firstName = trim((string) data_get($patient, 'first_name', ''));
+        $lastName  = trim((string) data_get($patient, 'last_name', ''));
+        $fullName  = trim($firstName . ' ' . $lastName) ?: (string) data_get($patient, 'name', 'Patient');
+
+        $addr1   = (string) data_get($patient, 'address1', data_get($patient, 'address.line1'));
+        $addr2   = (string) (data_get($patient, 'address2', data_get($patient, 'address.line2')) ?? '');
+        $city    = (string) (data_get($patient, 'city', data_get($patient, 'address.city')) ?? data_get($patient, 'town', ''));
+        $postcode= (string) (data_get($patient, 'postcode', data_get($patient, 'address.postcode')) ?? '');
+        $country = (string) (data_get($patient, 'country_code', data_get($patient, 'address.country_code')) ?? 'GB');
+        $email   = (string) (data_get($patient, 'email') ?? '');
+        $phone   = (string) (data_get($patient, 'phone') ?? data_get($patient, 'mobile', ''));
+
+        // Weight fallback — if you measure per item, sum; else default 100g
+        $weightG = (int) (data_get($order, 'weight_g', 0));
+        if ($weightG <= 0) {
+            $weightG = 1000;
         }
-        $json = json_encode($payload, JSON_UNESCAPED_SLASHES);
-        return 'curl -i -X POST ' . escapeshellarg($url) . $h . ' -d ' . escapeshellarg($json);
-    }
 
-    public function createOrder(array $data): array
-    {
-        // Allow per-tenant overrides via $data while keeping config() as default
-        $service = $data['service'] ?? config('clickanddrop.service');
-        $package = $data['package'] ?? config('clickanddrop.package');
-        $base    = $data['base']    ?? config('clickanddrop.base');
-        $key     = $data['key']     ?? config('clickanddrop.key');
-
-        $weight = (int) ($data['weight'] ?? 100);
-        $value  = (float) ($data['value'] ?? 0);
-        $value = round($value, 2);
-
-        $payload = $this->clean([
-            'orders' => [[
-                'orderReference' => (string) $data['reference'],
-                'channelName'    => 'Website',
-                'orderDate'      => now()->toIso8601String(),
-
+        // Build the minimal working payload structure (matches your successful curl)
+        $payload = [
+            'items' => [[
+                'orderReference' => $ref,
+                'orderDate' => $this->iso8601($orderDate),
+                'subtotal' => $subtotal,
+                'shippingCostCharged' => $shipCost,
+                'total' => $total,
                 'recipient' => [
-                    'firstName' => $data['first_name'] ?? null,
-                    'lastName'  => $data['last_name']  ?? null,
-                    'email'     => $data['email']      ?? null,
-                    'phone'     => $data['phone']      ?? null,
-                    'address'   => [
-                        'addressLine1' => $data['address1'] ?? null,
-                        'addressLine2' => $data['address2'] ?? null,
-                        'town'         => $data['city']     ?? null,
-                        'county'       => $data['county']   ?? null,
-                        'postcode'     => $data['postcode'] ?? null,
-                        'countryCode'  => $data['country']  ?? 'GB',
+                    'address' => [
+                        'fullName' => $fullName,
+                        'addressLine1' => $addr1,
+                        'addressLine2' => $addr2,
+                        'city' => $city,
+                        'postcode' => $postcode,
+                        'countryCode' => strtoupper($country ?: 'GB'),
                     ],
+                    'email' => $email,
+                    'phone' => $phone,
                 ],
-
                 'packages' => [[
-                    'weightInGrams'           => (int) $weight,
-                    'packageFormatIdentifier' => (string) $package,
-                    'contents' => [[
-                        'name'              => $data['item_name'] ?? 'Private prescription',
-                        'SKU'               => $data['sku'] ?? 'RX',
-                        'quantity'          => 1,
-                        'unitValue'         => (float) $value,
-                        'unitWeightInGrams' => (int) $weight,
-                        'originCountryCode' => $data['origin'] ?? 'GB',
-                    ]],
+                    'packageFormatIdentifier' => $packageId,
+                    'weightInGrams' => $weightG,
                 ]],
-
                 'postage' => [
-                    'serviceIdentifier' => (string) $service,
+                    'serviceIdentifier' => $serviceId,
                 ],
-
+                // Ask the API to include label immediately when supported
                 'includeLabelInResponse' => true,
             ]],
-        ]);
-
-        $headers = [
-            'Authorization' => $key,
-            'Accept'        => 'application/json',
         ];
 
-        // Optional one-line curl log for LOCAL troubleshooting if explicitly enabled
-        if (app()->isLocal() && (bool) config('clickanddrop.log_curl', false)) {
-            $url = rtrim($base, '/') . '/Orders';
-            \Log::info('clickanddrop.curl', ['cmd' => $this->buildCurl($url, $headers, $payload)]);
-        }
+        // Fire the request using Bearer auth and JSON body
+        $url = $base . '/orders';
 
-        try {
-            $res = Http::withHeaders($headers)
-                ->baseUrl($base)
-                ->acceptJson()
-                ->asJson()
-                ->post('Orders', $payload);
-        } catch (RequestException $e) {
-            \Log::error('clickanddrop.http.exception', [
-                'reference' => $data['reference'] ?? null,
-                'message'   => $e->getMessage(),
-                'response'  => optional($e->response)->body(),
-            ]);
-            throw $e;
-        }
+        $res = Http::asJson()
+            ->withToken($apiKey) // Authorization: Bearer <key>
+            ->acceptJson()
+            ->post($url, $payload);
 
-        $res->throw();
+        // Minimal logging; avoid dumping full payload to logs in production
+        Log::info('clickanddrop.create', [
+            'ref' => $ref,
+            'status' => $res->status(),
+            'ok' => $res->successful(),
+        ]);
 
         if (! $res->successful()) {
-            \Log::error('clickanddrop.failed', [
-                'reference' => $data['reference'] ?? null,
-                'status'    => $res->status(),
-                'body'      => $res->body(),
-            ]);
+            throw new RuntimeException('Click & Drop error ' . $res->status() . ': ' . $res->body());
         }
 
-        $body = [];
-        try { $body = $res->json(); } catch (\Throwable $e) {
-            $raw = $res->body();
-            if (is_string($raw) && $raw !== '') {
-                try { $body = json_decode($raw, true) ?: []; } catch (\Throwable $e2) { $body = []; }
-            }
-        }
+        $data = $res->json();
 
-        $labelB64 = data_get($body, 'orders.0.label');
-        $tracking  = data_get($body, 'orders.0.trackingNumber');
+        Log::info('clickanddrop.response', [
+            'data' => $data,
+        ]);
 
-        if ($labelB64) {
-            $pdf = base64_decode($labelB64);
-            $path = "labels/{$data['reference']}.pdf";
-            if (!empty($pdf)) {
-                Storage::disk('local')->put($path, $pdf);
+        // Persist any inline label/document returned
+        $saved = [];
+        $docs = (array) data_get($data, 'createdOrders.0.generatedDocuments', []);
+        foreach ($docs as $i => $doc) {
+            $bytesB64 = data_get($doc, 'data') ?? data_get($doc, 'bytes') ?? null;
+            $ext = strtolower((string) data_get($doc, 'fileExtension', 'pdf'));
+            if (is_string($bytesB64) && $bytesB64 !== '') {
+                $path = 'labels/' . $ref . '-' . ($i + 1) . '.' . $ext;
+                Storage::disk('local')->put($path, base64_decode($bytesB64));
+                $saved[] = $path;
             }
         }
 
         return [
-            'tracking' => $tracking,
-            'label_path' => isset($path) ? storage_path("app/{$path}") : null,
-            'raw' => $body,
+            'request' => $payload,
+            'response' => $data,
+            'label_paths' => $saved,
         ];
+    }
+
+    private function iso8601($value): string
+    {
+        if (is_string($value)) {
+            // Try to normalise arbitrary strings
+            try {
+                return \Carbon\Carbon::parse($value)->toIso8601String();
+            } catch (\Throwable $e) {
+                return now()->toIso8601String();
+            }
+        }
+        if (is_object($value) && method_exists($value, 'toIso8601String')) {
+            return $value->toIso8601String();
+        }
+        return now()->toIso8601String();
     }
 }

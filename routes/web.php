@@ -166,6 +166,12 @@ Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admi
         Route::post('{session}/forms/{form}/save', [ConsultationFormController::class, 'save'])
             ->name('consultations.forms.save');
 
+        Route::get('{session}/complete', [ConsultationFormController::class, 'showComplete'])
+            ->name('consultations.complete');
+
+        Route::post('{session}/complete', [ConsultationFormController::class, 'complete'])
+            ->name('consultations.complete.store');
+
         Route::post('{session}/start', function (\App\Models\ConsultationSession $session) {
             return redirect()->to("/admin/consultations/{$session->id}");
         })->name('consultations.start');
@@ -240,10 +246,10 @@ Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admi
 
 
         // Submitted Forms: View / Edit / History pages (used by CompletedOrderDetails buttons)
-        Route::prefix('forms')->name('consultations.forms.')->controller(ConsultationFormController::class)->group(function () {
-            Route::get('{session}/{form}/view', 'view')->name('view');
-            Route::get('{session}/{form}/history', 'history')->name('history');
-            Route::get('{session}/{form}/edit', 'edit')->name('edit');
+        Route::prefix('forms')->name('consultations.forms.')->group(function () {
+            Route::get('{session}/{form}/view', [\App\Http\Controllers\ConsultationFormController::class, 'view'])->name('view');
+            Route::get('{session}/{form}/history', [\App\Http\Controllers\ConsultationFormController::class, 'history'])->name('history');
+            Route::get('{session}/{form}/edit', [\App\Http\Controllers\ConsultationFormController::class, 'edit'])->name('edit');
         });
 
         Route::get('{session}/{form}/__probe', function (\App\Models\ConsultationSession $session, $form, \Illuminate\Http\Request $req) {
