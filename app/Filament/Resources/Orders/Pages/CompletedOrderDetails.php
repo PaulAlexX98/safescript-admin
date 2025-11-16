@@ -867,7 +867,7 @@ class CompletedOrderDetails extends ViewRecord
             $body = "Hello {$name}\n\nHere is your {$label} for order {$ref}\nOpen the link below to view or download your PDF\n{$url}\n\nIf you did not request this please contact the pharmacy";
 
             Mail::raw($body, function ($m) use ($email, $subject) {
-                $fromAddress = config('mail.from.address') ?: 'orders@safescript1984.co.uk';
+                $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
                 $fromName    = config('mail.from.name') ?: 'Safescript Pharmacy';
                 $m->from($fromAddress, $fromName)
                   ->to($email)

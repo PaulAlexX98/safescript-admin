@@ -41,7 +41,10 @@ class User extends Authenticatable implements FilamentUser
 
     public function canAccessPanel(Panel $panel): bool
     {
-        // gate to pharmacists only
+        if ($panel->getId() === 'admin') {
+            return (bool) $this->is_staff;
+        }
+
         return true;
     }
 
