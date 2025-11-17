@@ -468,7 +468,9 @@
             return;
         }
 
-        $key   = \Illuminate\Support\Arr::get($node, 'name') ?? \Illuminate\Support\Arr::get($node, 'key');
+        $key   = \Illuminate\Support\Arr::get($node, 'name')
+               ?? \Illuminate\Support\Arr::get($node, 'key')
+               ?? \Illuminate\Support\Arr::get($node, 'data.key');
         $label = \Illuminate\Support\Arr::get($node, 'data.label') ?? \Illuminate\Support\Arr::get($node, 'label');
         $opts  = \Illuminate\Support\Arr::get($node, 'data.options') ?? \Illuminate\Support\Arr::get($node, 'options');
 
