@@ -656,38 +656,14 @@
     }
 
     // Helper to turn stored file paths into a browser-accessible URL
-    // Normalises any of the following into the public preview endpoint:
-    //   - absolute filesystem path
-    //   - /storage/... URL
-    //   - full http://.../storage/... URL
-    //   - plain "intakes/raf/xxx.png"
+    // Now uses direct storage URLs on the API base, no longer rewriting http(s) or building /uploads/view links.
     $makePublicUrl = function ($p) use ($apiBase) {
         if (!is_string($p) || $p === '') return '';
 
-        // If it's an http(s) URL we may still need to rewrite it, e.g.
-        //   http://localhost:8000/storage/intakes/raf/abc.png
-        // We'll try to extract a relative "intakes/raf/abc.png" from it.
+        // If it's already an http(s) URL (for example the intake-image
+        // endpoint returned https://api.safescript.co.uk/storage/...),
+        // just return it as-is.
         if (preg_match('/^https?:\\/\\//i', $p)) {
-            $rel = null;
-
-            $pathOnly = parse_url($p, PHP_URL_PATH) ?? '';
-
-            // Match /storage/app/public/intakes/raf/abc.png
-            if ($rel === null && preg_match('#/storage/app/public/(.*)$#', $pathOnly, $m)) {
-                $rel = $m[1];
-            }
-
-            // Match /storage/intakes/raf/abc.png
-            if ($rel === null && preg_match('#/storage/(.*)$#', $pathOnly, $m)) {
-                $rel = $m[1];
-            }
-
-            // If we successfully derived a relative path, build the preview endpoint URL.
-            if ($rel !== null && $rel !== '') {
-                return rtrim($apiBase, '/') . '/uploads/view?p=' . rawurlencode($rel);
-            }
-
-            // As a fallback, just return the original absolute URL.
             return $p;
         }
 
@@ -713,8 +689,8 @@
             $rel = ltrim($p, '/');
         }
 
-        // Final URL hits the pharmacy-api preview endpoint, which streams the file inline.
-        return rtrim($apiBase, '/') . '/uploads/view?p=' . rawurlencode($rel);
+        // Final URL points directly at the public storage path on the API base.
+        return rtrim($apiBase, '/') . '/storage/' . ltrim($rel, '/');
     };
 
     // Helper to generate an inline base64 preview for local files
