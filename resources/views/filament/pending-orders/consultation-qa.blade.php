@@ -684,7 +684,7 @@
 
             // If we successfully derived a relative path, build the preview endpoint URL.
             if ($rel !== null && $rel !== '') {
-                return rtrim($apiBase, '/') . '/api/uploads/view?p=' . rawurlencode($rel);
+                return rtrim($apiBase, '/') . '/uploads/view?p=' . rawurlencode($rel);
             }
 
             // As a fallback, just return the original absolute URL.
@@ -714,7 +714,7 @@
         }
 
         // Final URL hits the pharmacy-api preview endpoint, which streams the file inline.
-        return rtrim($apiBase, '/') . '/api/uploads/view?p=' . rawurlencode($rel);
+        return rtrim($apiBase, '/') . '/uploads/view?p=' . rawurlencode($rel);
     };
 
     // Helper to generate an inline base64 preview for local files
