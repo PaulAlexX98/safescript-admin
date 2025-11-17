@@ -336,7 +336,7 @@
     $apiBase = config('services.pharmacy_api.base')
         ?? env('API_BASE')
         ?? env('NEXT_PUBLIC_API_BASE')
-        ?? 'http://localhost:8000';
+        ?? config('app.url');
 
     $rafSchema = [];
     $assessmentSchema = [];

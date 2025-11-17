@@ -47,10 +47,7 @@ class ClinicFormForm
                                 Block::make('section')->label('Section')->schema([
                                     TextInput::make('label')
                                         ->label('Section title')
-                                        ->reactive()
-                                        ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     Textarea::make('summary')->label('Summary (optional)')->rows(2),
                                     TextInput::make('key')
                                         ->label('Section key')
@@ -70,10 +67,7 @@ class ClinicFormForm
                                 Block::make('text_input')->label('Text Input')->schema([
                                     TextInput::make('label')
                                         ->label('Field Label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     TextInput::make('placeholder')->label('Placeholder Text'),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     Toggle::make('required')->label('Required')->default(false),
@@ -96,10 +90,7 @@ class ClinicFormForm
                                 Block::make('email')->label('Email')->schema([
                                     TextInput::make('label')
                                         ->label('Field Label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     TextInput::make('placeholder')->label('Placeholder Text'),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     Toggle::make('required')->label('Required')->default(false),
@@ -120,10 +111,7 @@ class ClinicFormForm
                                 Block::make('number')->label('Number')->schema([
                                     TextInput::make('label')
                                         ->label('Field Label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     TextInput::make('placeholder')->label('Placeholder Text'),
                                     TextInput::make('min')->numeric()->label('Min'),
                                     TextInput::make('max')->numeric()->label('Max'),
@@ -146,10 +134,7 @@ class ClinicFormForm
                                 Block::make('textarea')->label('Textarea')->schema([
                                     TextInput::make('label')
                                         ->label('Field Label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     Textarea::make('placeholder')->label('Placeholder Text')->rows(2),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     Toggle::make('required')->label('Required')->default(false),
@@ -172,10 +157,7 @@ class ClinicFormForm
                                 Block::make('date')->label('Date')->schema([
                                     TextInput::make('label')
                                         ->label('Field Label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     TextInput::make('placeholder')->label('Placeholder Text')->default('dd-mm-yyyy'),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     Toggle::make('required')->label('Required')->default(false),
@@ -197,10 +179,7 @@ class ClinicFormForm
                                 Block::make('select')->label('Select')->schema([
                                     TextInput::make('label')
                                         ->label('Field Label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     Repeater::make('options')->label('Options')->schema([
                                         TextInput::make('value')->label('Value')->required(),
                                         TextInput::make('label')->label('Label'),
@@ -252,10 +231,7 @@ class ClinicFormForm
                                 Block::make('checkbox')->label('Checkbox')->schema([
                                     TextInput::make('label')
                                         ->label('Label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function (Set $set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     Toggle::make('required')->label('Required')->default(false),
                                     TextInput::make('key')
@@ -276,10 +252,7 @@ class ClinicFormForm
                                 Block::make('file_upload')->label('File Upload')->schema([
                                     TextInput::make('label')
                                         ->label('Field Label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function (Set $set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     Toggle::make('multiple')->label('Allow multiple')->default(false),
                                     Toggle::make('required')->label('Required')->default(false),
                                     Textarea::make('help')->label('Help Text')->rows(2),
@@ -306,10 +279,7 @@ class ClinicFormForm
                                     // Live signature preview canvas (mouse / touch drawing)
                                     TextInput::make('label')
                                         ->label('Field Label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function (Set $set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     ViewField::make('signature_pad')
                                         ->view('forms.components.signature-pad'),
                                     Textarea::make('help')->label('Help Text')->rows(2)->default('Draw your signature above'),
@@ -332,10 +302,7 @@ class ClinicFormForm
                                 Block::make('text_block')->label('Text Block')->schema([
                                     TextInput::make('label')
                                         ->label('Block label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function (Set $set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     RichEditor::make('content')
                                         ->label('Content')
                                         ->toolbarButtons([
@@ -446,10 +413,7 @@ class ClinicFormForm
                                 Block::make('image')->label('Image')->schema([
                                     TextInput::make('label')
                                         ->label('Block label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function (Set $set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->reactive(),
                                     FileUpload::make('image')->image()->directory('clinic-forms/blocks')->required(),
                                     TextInput::make('alt')->label('Alt text'),
                                     TextInput::make('key')
