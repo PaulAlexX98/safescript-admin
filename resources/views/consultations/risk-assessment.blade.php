@@ -16,10 +16,13 @@
     $treatFor   = $slugify($treatmentSlugForForm ?? ($sessionLike->treatment_slug ?? ($sessionLike->treatment ?? null)));
 
     // Public upload URL helper resolves any storage path to the API preview endpoint
-    $apiBase = config('services.pharmacy_api.base')
-    ?? env('API_BASE')
-    ?? env('NEXT_PUBLIC_API_BASE')
-    ?? config('app.url');
+    $apiBase = env('API_BASE')
+        ?: (config('services.pharmacy_api.base') ?: config('app.url'));
+
+    // If we are falling back to an admin subdomain, generically map admin. → api. without hardcoding any host name
+    if (is_string($apiBase) && str_contains($apiBase, '://admin.')) {
+        $apiBase = str_replace('://admin.', '://api.', $apiBase);
+    }
 
     $makePublicUrl = function ($p) use ($apiBase) {
         if (!is_string($p) || $p === '') return '';

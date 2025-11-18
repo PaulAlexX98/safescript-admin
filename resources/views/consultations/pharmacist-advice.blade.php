@@ -245,7 +245,7 @@
         @csrf
         <input type="hidden" name="__step_slug" value="pharmacist-advice">
         <input type="hidden" id="__go_next" name="__go_next" value="0">
-        <input type="hidden" name="form_type" value="{{ $form->form_type ?? 'advice' }}">
+        <input type="hidden" name="form_type" value="advice">
         <input type="hidden" name="service" value="{{ $serviceFor ?? 'weight-management-service' }}">
         <input type="hidden" name="treatment" value="{{ $treatFor ?? '' }}">
 
