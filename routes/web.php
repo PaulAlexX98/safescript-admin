@@ -170,7 +170,8 @@ Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admi
             ->name('consultations.complete');
 
         Route::post('{session}/complete', [ConsultationFormController::class, 'complete'])
-            ->name('consultations.complete.store');
+            ->name('consultations.complete.store')
+            ->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
 
         Route::post('{session}/start', function (\App\Models\ConsultationSession $session) {
             return redirect()->to("/admin/consultations/{$session->id}");
