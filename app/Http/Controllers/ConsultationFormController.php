@@ -172,21 +172,27 @@ class ConsultationFormController extends Controller
             $treatmentSlugForForm = Str::slug((string) $form->treatment_name);
         }
 
-        // 3) Verify posted form matches the session's service/treatment to avoid cross‑posting
-        // Normalize everything to slugs before comparing, and only enforce if the session has values.
-        // For generic REORDER forms we intentionally skip this guard so a single form can be reused
-        // across multiple services without tripping a 422.
+        // 3) Previously we enforced a strict service/treatment match between the session
+        //    and the ClinicForm, aborting with 422 on mismatch. This caused valid flows
+        //    to fail when generic forms were reused across services. We still compute
+        //    the values for potential logging, but we no longer block the save here.
         $sessionService    = Str::slug((string) (($session->service_slug ?? null) ?: ($session->service ?? '')));
         $sessionTreatment  = Str::slug((string) (($session->treatment_slug ?? null) ?: ($session->treatment ?? '')));
         $formService       = Str::slug((string) ($form->service_slug ?? ''));
         $formTreatment     = Str::slug((string) ($form->treatment_slug ?? ''));
-        
+
         $serviceMismatch   = $sessionService   !== '' && $formService   !== '' && $formService   !== $sessionService;
         $treatmentMismatch = $sessionTreatment !== '' && $formTreatment !== '' && $formTreatment !== $sessionTreatment;
-        
-        // Only enforce the mismatch guard for non‑reorder forms; reorder forms are allowed to be generic.
-        if ($derivedFormType !== 'reorder' && ($serviceMismatch || $treatmentMismatch)) {
-            abort(422, 'Form does not match the current consultation session.');
+
+        if ($serviceMismatch || $treatmentMismatch) {
+            \Log::info('consultation.save.service_mismatch', [
+                'session_id'        => $session->id,
+                'derived_form_type' => $derivedFormType,
+                'session_service'   => $sessionService,
+                'session_treatment' => $sessionTreatment,
+                'form_service'      => $formService,
+                'form_treatment'    => $formTreatment,
+            ]);
         }
 
         // 3b) Schema-driven validation for required fields
