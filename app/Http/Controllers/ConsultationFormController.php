@@ -173,7 +173,9 @@ class ConsultationFormController extends Controller
         }
 
         // 3) Verify posted form matches the session's service/treatment to avoid cross‑posting
-        // Normalize everything to slugs before comparing, and only enforce if the session has values
+        // Normalize everything to slugs before comparing, and only enforce if the session has values.
+        // For generic REORDER forms we intentionally skip this guard so a single form can be reused
+        // across multiple services without tripping a 422.
         $sessionService    = Str::slug((string) (($session->service_slug ?? null) ?: ($session->service ?? '')));
         $sessionTreatment  = Str::slug((string) (($session->treatment_slug ?? null) ?: ($session->treatment ?? '')));
         $formService       = Str::slug((string) ($form->service_slug ?? ''));
@@ -182,7 +184,8 @@ class ConsultationFormController extends Controller
         $serviceMismatch   = $sessionService   !== '' && $formService   !== '' && $formService   !== $sessionService;
         $treatmentMismatch = $sessionTreatment !== '' && $formTreatment !== '' && $formTreatment !== $sessionTreatment;
         
-        if ($serviceMismatch || $treatmentMismatch) {
+        // Only enforce the mismatch guard for non‑reorder forms; reorder forms are allowed to be generic.
+        if ($derivedFormType !== 'reorder' && ($serviceMismatch || $treatmentMismatch)) {
             abort(422, 'Form does not match the current consultation session.');
         }
 
