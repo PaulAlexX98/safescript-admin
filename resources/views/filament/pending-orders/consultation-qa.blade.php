@@ -359,8 +359,13 @@
                 );
 
                 $assessmentSchema = $arr(
+                    // primary ClinicFormForm assessment schema
                     data_get($json, 'assessment_form.schema')
+                    // legacy secondary copy stored as schema3
+                    ?? data_get($json, 'assessment_form.schema3')
+                    // legacy flat assessment schema
                     ?? data_get($json, 'assessment.schema')
+                    // risk assessment variants
                     ?? data_get($json, 'risk_assessment_form.schema')
                     ?? data_get($json, 'risk_assessment.schema')
                     ?? []
@@ -534,6 +539,7 @@
         }
     }
 
+    
     // Merge lookups for convenience
     $labels = $labelsByIdx + $labelsByKey; // index labels, overridden by explicit keys
     $options = $optionsByIdx + $optionsByKey;
@@ -558,6 +564,28 @@
             $norm = strtolower(trim(preg_replace('/\s+/', ' ', strip_tags($lbl))));
             if ($norm !== '' && !isset($sectionsByLabel[$norm])) {
                 $sectionsByLabel[$norm] = $sec;
+            }
+        }
+    }
+
+    // Slug based label lookup to bridge underscore vs hyphen and similar differences
+    $labelsBySlug = [];
+    foreach ($inputNodes as $field) {
+        $lbl = $field['label'] ?? null;
+        $key = $field['key'] ?? null;
+
+        if (is_string($lbl) && $lbl !== '') {
+            $slug = \Illuminate\Support\Str::slug(strip_tags($lbl));
+            if ($slug !== '' && ! isset($labelsBySlug[$slug])) {
+                $labelsBySlug[$slug] = $lbl;
+            }
+        }
+
+        if (is_string($key) && $key !== '') {
+            $slug = \Illuminate\Support\Str::slug($key);
+            if ($slug !== '' && ! isset($labelsBySlug[$slug])) {
+                // fall back to label if we have one otherwise the raw key
+                $labelsBySlug[$slug] = $lbl ?? $key;
             }
         }
     }
@@ -589,6 +617,18 @@
                 $label = preg_match('/^Question\s+\d+$/i', $savedQ)
                     ? ucwords(str_replace(['_', '-'], ' ', (string) $key))
                     : ($savedQ ?: ucwords(str_replace(['_', '-'], ' ', (string) $key)));
+            }
+
+            // Slug based override to handle underscore vs hyphen and similar key differences
+            if (!empty($labelsBySlug ?? [])) {
+                $keySlug = \Illuminate\Support\Str::slug((string) $key);
+                $qSlug   = isset($row['question']) ? \Illuminate\Support\Str::slug((string) $row['question']) : null;
+
+                if ($keySlug !== '' && isset($labelsBySlug[$keySlug])) {
+                    $label = $labelsBySlug[$keySlug];
+                } elseif ($qSlug !== null && $qSlug !== '' && isset($labelsBySlug[$qSlug])) {
+                    $label = $labelsBySlug[$qSlug];
+                }
             }
 
             // Prefer raw then fallback to answer
@@ -931,6 +971,18 @@
                             $label = preg_match('/^Question\s+\d+$/i', $savedQ)
                                 ? ucwords(str_replace(['_', '-'], ' ', (string) $key))
                                 : ($savedQ ?: ucwords(str_replace(['_', '-'], ' ', (string) $key)));
+                        }
+
+                        // Slug based override to handle underscore vs hyphen and similar key differences
+                        if (!empty($labelsBySlug ?? [])) {
+                            $keySlug = \Illuminate\Support\Str::slug((string) $key);
+                            $qSlug   = isset($row['question']) ? \Illuminate\Support\Str::slug((string) $row['question']) : null;
+
+                            if ($keySlug !== '' && isset($labelsBySlug[$keySlug])) {
+                                $label = $labelsBySlug[$keySlug];
+                            } elseif ($qSlug !== null && $qSlug !== '' && isset($labelsBySlug[$qSlug])) {
+                                $label = $labelsBySlug[$qSlug];
+                            }
                         }
 
                         $answer = array_key_exists('raw', $row) && $row['raw'] !== null && $row['raw'] !== ''

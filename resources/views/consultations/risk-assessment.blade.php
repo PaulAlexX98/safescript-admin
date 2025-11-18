@@ -18,8 +18,17 @@
     // Public upload URL helper resolves any storage path to the API preview endpoint
     $apiBase = config('services.pharmacy_api.base')
         ?? env('API_BASE')
-        ?? env('NEXT_PUBLIC_API_BASE')
-        ?? 'http://localhost:8000';
+        ?? env('NEXT_PUBLIC_API_BASE');
+
+    if (! $apiBase) {
+        // In production, default to the current host (so /api/uploads/view points at the live API domain)
+        if (app()->environment('production')) {
+            $apiBase = request()->getSchemeAndHttpHost();
+        } else {
+            // In local/dev, keep the previous default which points to the local API
+            $apiBase = 'http://localhost:8000';
+        }
+    }
 
     $makePublicUrl = function ($p) use ($apiBase) {
         if (!is_string($p) || $p === '') return '';
@@ -657,10 +666,63 @@
                         @endphp
 
                         {{-- Static rich text blocks --}}
-                        @if ($type === 'text_block')
+                        @if (in_array($type, ['text_block', 'text', 'html', 'content'], true))
                             @php
-                                $html  = (string) ($field['content'] ?? '');
-                                $align = (string) ($field['align'] ?? 'left');
+                                // Support both newer TipTap doc arrays and legacy HTML / plain text
+                                $rawContent = $field['content'] ?? ($field['html'] ?? ($field['text'] ?? null));
+                                $align      = (string) ($field['align'] ?? 'left');
+                                $html       = '';
+
+                                if (is_array($rawContent)) {
+                                    // Treat as TipTap-style doc
+                                    $doc  = $rawContent;
+                                    $nodes = $doc['content'] ?? [];
+                                    $lines = [];
+
+                                    if (is_array($nodes)) {
+                                        foreach ($nodes as $node) {
+                                            if (!is_array($node)) continue;
+                                            $typeNode = $node['type'] ?? 'paragraph';
+                                            $nodeText = '';
+
+                                            // Flatten simple paragraph / heading / list item content
+                                            $contentNodes = $node['content'] ?? [];
+                                            if (is_array($contentNodes)) {
+                                                foreach ($contentNodes as $cn) {
+                                                    if (!is_array($cn)) continue;
+
+                                                    if (($cn['type'] ?? null) === 'text' && isset($cn['text'])) {
+                                                        $nodeText .= $cn['text'];
+                                                        continue;
+                                                    }
+
+                                                    // Nested content (eg listItem -> paragraph -> text[])
+                                                    if (isset($cn['content']) && is_array($cn['content'])) {
+                                                        foreach ($cn['content'] as $sub) {
+                                                            if (is_array($sub) && ($sub['type'] ?? null) === 'text' && isset($sub['text'])) {
+                                                                $nodeText .= $sub['text'];
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            $nodeText = trim($nodeText);
+                                            if ($nodeText === '') continue;
+
+                                            if (in_array($typeNode, ['bulletList', 'orderedList', 'listItem'], true)) {
+                                                $lines[] = $nodeText;
+                                            } else {
+                                                $lines[] = $nodeText;
+                                            }
+                                        }
+                                    }
+
+                                    $html = implode("\n", $lines);
+                                } else {
+                                    $html = (string) ($rawContent ?? '');
+                                }
+
                                 $hasHtml = (bool) preg_match('/<\w+[^>]*>/', $html ?? '');
                             @endphp
                             @if (trim(strip_tags($html)) !== '')
@@ -839,7 +901,7 @@
                                 <input type="date" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" />
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
-                        @elseif ($type === 'file' || $type === 'file_upload')
+                        @elseif ($type === 'file' || $type === 'file_upload' || $type === 'image')
                             @php
                                 $accept   = $field['accept'] ?? null;
                                 $multiple = (bool) ($field['multiple'] ?? false);
