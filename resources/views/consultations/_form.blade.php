@@ -92,13 +92,30 @@
       $actionUrl = route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id])
                  . '?tab=' . $slug
                  . ($isCurrentReorder ? '&type=reorder' : '');
+
+      // Normalise form_type so the controller sees consistent logical types even if the underlying ClinicForm uses a custom value
+      $stepFormTypeMap = [
+          'risk-assessment'    => 'raf',
+          'risk_assessment'    => 'raf',
+          'raf'                => 'raf',
+          'reorder'            => 'reorder',
+          'pharmacist-advice'  => 'advice',
+          'pharmacist_advice'  => 'advice',
+          'pharmacist'         => 'advice',
+          'pharmacist-advice-step' => 'advice',
+          'record-of-supply'   => 'clinical_notes',
+          'record_of_supply'   => 'clinical_notes',
+          'ros'                => 'clinical_notes',
+      ];
+
+      $effectiveFormType = $form->form_type ?? ($stepFormTypeMap[$slug] ?? $slug);
     @endphp
     <form id="{{ $formDomId }}" method="POST" action="{{ $actionUrl }}" class="space-y-4" enctype="multipart/form-data">
         @csrf
         <input type="hidden" name="__step_slug" value="{{ $slug }}">
         <input type="hidden" name="session_id" value="{{ $session->id }}">
         <input type="hidden" name="form_id" value="{{ $form->id }}">
-        <input type="hidden" name="form_type" value="{{ $form->form_type ?? $slug }}">
+        <input type="hidden" name="form_type" value="{{ $effectiveFormType }}">
         <input type="hidden" name="service" value="{{ $form->service_slug ?? ($session->service ?? '') }}">
         <input type="hidden" name="treatment" value="{{ $form->treatment_slug ?? ($session->treatment ?? '') }}">
         <input type="hidden" id="__go_next" name="__go_next" value="0">
