@@ -170,6 +170,7 @@
         ?? $firstItem['dose']
         ?? ''
     );
+    $defaultQty = (int) ($firstItem['qty'] ?? $firstItem['quantity'] ?? 0);
 @endphp
 
 @once
@@ -245,13 +246,18 @@
                             $type  = $field['type'] ?? 'text_input';
                             $label = $field['label'] ?? null;
                             $key   = $field['key'] ?? ($label ? \Illuminate\Support\Str::slug($label) : ('field_'.$loop->index));
-                            $name  = $key;
+                            // Always use a slugged name so it matches validation rules (eg scale_photo -> scale-photo)
+                            $name  = \Illuminate\Support\Str::slug((string) $key);
                             $help  = $field['help'] ?? ($field['description'] ?? null);
                             $req   = (bool) ($field['required'] ?? false);
                             $ph    = $field['placeholder'] ?? null;
-                            $val   = old($name, $oldData[$name] ?? '');
-
-                            // Autofill from order for Vaccine / Specific Vaccine when no saved value yet
+                            // Try both the slugged key and the original key when prefilling saved data
+                            $val   = old($name, $oldData[$name] ?? ($oldData[$key] ?? ''));
+                            // For date fields, default to today's date if nothing saved yet
+                            if ($type === 'date' && $val === '') {
+                                $val = now()->format('Y-m-d');
+                            }
+                            // Slug variants of key and label for matching special fields (vaccine, specific etc)
                             $slugKey   = \Illuminate\Support\Str::slug($key);
                             $slugLabel = \Illuminate\Support\Str::slug($label ?? '');
                             $isVaccineKey = in_array('vaccine', [$slugKey, $slugLabel], true);
@@ -293,6 +299,12 @@
                                     }
                                     if ($val === '') { $val = $defaultSpecific; }
                                 }
+                            }
+
+                            // Prefill quantity from order line when field key/label looks like quantity
+                            $isQtyKey = in_array('quantity', [$slugKey, $slugLabel], true) || in_array('qty', [$slugKey, $slugLabel], true);
+                            if ($val === '' && $isQtyKey && $defaultQty) {
+                                $val = (string) $defaultQty;
                             }
 
                             // Prefill item and item-variation using the same logic as vaccine/specific; fallback to "other" if still empty

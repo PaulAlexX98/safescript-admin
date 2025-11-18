@@ -162,8 +162,9 @@
             $labelTmp = $fTmp['label'] ?? null;
             $keyTmp   = $fTmp['key'] ?? null;
 
-            // Recreate the name as the renderer does
-            $nameTmp = $keyTmp ?? ($labelTmp ? \Illuminate\Support\Str::slug($labelTmp) : ('field_' . $__idxAlias));
+            // Recreate the name exactly as the renderer does (slugged key)
+            $baseName = $keyTmp ?? ($labelTmp ? \Illuminate\Support\Str::slug($labelTmp) : ('field_' . $__idxAlias));
+            $nameTmp  = \Illuminate\Support\Str::slug((string) $baseName);
 
             // Collect aliases
             $aliases = [];
@@ -613,7 +614,8 @@
 
                             $label = $field['label'] ?? null;
                             $key   = $field['key'] ?? ($label ? \Illuminate\Support\Str::slug($label) : ('field_'.$loop->index));
-                            $name  = $key;
+                            // Always use a slugged name so it matches validation rules and aliases (scale_photo -> scale-photo)
+                            $name  = \Illuminate\Support\Str::slug((string) $key);
                             $help  = $field['help'] ?? ($field['description'] ?? null);
                             $req   = (bool) ($field['required'] ?? false);
                             $ph    = $field['placeholder'] ?? null;
