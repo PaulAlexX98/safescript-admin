@@ -199,7 +199,7 @@ class ConsultationFormController extends Controller
         $rawSchema = is_array($form->schema) ? $form->schema : (json_decode($form->schema ?? '[]', true) ?: []);
         $rules = [];
         foreach ($rawSchema as $idx => $fld) {
-            $type = $fld['type'] ?? 'text_input';
+            $type = strtolower($fld['type'] ?? 'text_input');
             $cfg  = (array)($fld['data'] ?? []);
 
             // Skip non-input blocks
@@ -223,7 +223,14 @@ class ConsultationFormController extends Controller
 
             $name = null;
             foreach ($candidates as $cand) {
-                if ($request->has($cand)) { $name = $cand; break; }
+                if (
+                    $request->has($cand)
+                    || $request->hasFile($cand)
+                    || array_key_exists($cand, $request->all())
+                ) {
+                    $name = $cand;
+                    break;
+                }
             }
             if (!$name) {
                 // Prefer explicit name in schema, then slug of label, then field_{idx}
@@ -272,6 +279,10 @@ class ConsultationFormController extends Controller
                               : array_filter(['required', Rule::in($values), $notAllowed ? Rule::notIn($notAllowed) : null]);
                       }
                       break;
+                    case 'file_upload':
+                    case 'image':
+                        $rules[$name] = 'required';
+                        break;
                     case 'signature':
                         $rules[$name] = 'required';
                         break;
