@@ -213,6 +213,7 @@
 @else
     <form id="cf_record-of-supply" data-cf-form="1" data-step="record-of-supply" method="POST" enctype="multipart/form-data" action="{{ route('consultations.forms.save', ['session' => $sessionLike->id ?? ($session->id ?? null), 'form' => $form->id]) }}?tab=record-of-supply">
         @csrf
+        <input type="hidden" name="form_type" value="{{ $form->form_type ?? 'clinical_notes' }}">
         <input type="hidden" name="__step_slug" value="record-of-supply">
         <input type="hidden" id="__go_next" name="__go_next" value="0">
 

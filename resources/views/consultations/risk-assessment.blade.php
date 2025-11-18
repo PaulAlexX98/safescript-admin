@@ -17,18 +17,9 @@
 
     // Public upload URL helper resolves any storage path to the API preview endpoint
     $apiBase = config('services.pharmacy_api.base')
-        ?? env('API_BASE')
-        ?? env('NEXT_PUBLIC_API_BASE');
-
-    if (! $apiBase) {
-        // In production, default to the current host (so /api/uploads/view points at the live API domain)
-        if (app()->environment('production')) {
-            $apiBase = request()->getSchemeAndHttpHost();
-        } else {
-            // In local/dev, keep the previous default which points to the local API
-            $apiBase = 'http://localhost:8000';
-        }
-    }
+    ?? env('API_BASE')
+    ?? env('NEXT_PUBLIC_API_BASE')
+    ?? config('app.url');
 
     $makePublicUrl = function ($p) use ($apiBase) {
         if (!is_string($p) || $p === '') return '';
