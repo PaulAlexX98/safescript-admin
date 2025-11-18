@@ -97,15 +97,20 @@
         }
     }
 
-    // Load last saved data for prefill
+    // Load last saved Record of Supply data for this session
     $oldData = [];
-    if ($form && isset($sessionLike->id)) {
+    if (isset($sessionLike->id)) {
         $resp = \App\Models\ConsultationFormResponse::query()
             ->where('consultation_session_id', $sessionLike->id)
-            ->where('clinic_form_id', $form->id)
+            // Match the step slug that this form posts with (__step_slug = record-of-supply)
+            ->where('data->__step_slug', 'record-of-supply')
             ->latest('id')
             ->first();
-        $oldData = $resp?->data ?? [];
+
+        $rawData = $resp?->data ?? [];
+        $oldData = is_array($rawData)
+            ? $rawData
+            : (json_decode($rawData ?? '[]', true) ?: []);
     }
 
     // Helper to normalise options
@@ -499,11 +504,17 @@
                 </div>
                 <div class="cf-grid">
                     <div class="cf-field-flat cf-span-2">
+                        @php
+                            $otherNotesVal = old(
+                                'other_clinical_notes',
+                                $oldData['other_clinical_notes'] ?? ($oldData['other-clinical-notes'] ?? '')
+                            );
+                        @endphp
                         <input
                             type="text"
                             id="other_clinical_notes"
                             name="other_clinical_notes"
-                            value="{{ old('other_clinical_notes', $oldData['other_clinical_notes'] ?? '') }}"
+                            value="{{ $otherNotesVal }}"
                             placeholder="Add any additional clinical notes"
                             class="cf-input"
                         />

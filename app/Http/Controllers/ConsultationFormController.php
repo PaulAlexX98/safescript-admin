@@ -12,6 +12,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Filament\Notifications\Notification;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\HtmlString;
 use App\Models\ConsultationSession;
 
@@ -855,20 +856,19 @@ class ConsultationFormController extends Controller
             }
         });
 
+        $this->sendApprovedEmail($session);
+
         // After successfully completing, attempt to create a Royal Mail Click & Drop order
         try {
             $order = $session->order ?? null;
             if ($order) {
+                // <--- nothing here, see instructions
+
                 \Log::info('clickanddrop.complete.start', [
                     'session'   => $session->id,
                     'order'     => $order->getKey(),
                     'reference' => $order->reference ?? ('CONS-' . $session->id),
                 ]);
-
-                // Normalise meta as array
-                $metaArr = is_array($session->meta)
-                    ? $session->meta
-                    : (json_decode($session->meta ?? '[]', true) ?: []);
 
                 // Hydrate missing patient identity and address fields from order->shipping_address and meta
                 try {
@@ -1186,6 +1186,54 @@ class ConsultationFormController extends Controller
         return redirect()
             ->to(url('/admin/consultations/' . $session->id))
             ->with('success', 'Consultation completed');
+    }
+
+    /**
+     * Send an approval email to the patient after order approval.
+     */
+    protected function sendApprovedEmail(ConsultationSession $session): void
+    {
+        $order = $session->order ?? null;
+        if (! $order) return;
+
+        $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+
+        $email = data_get($meta, 'email')
+            ?? optional($order->patient)->email
+            ?? optional($order->user)->email
+            ?? optional($session->user)->email;
+
+        if (! $email) {
+            Notification::make()->danger()->title('No patient email on record')->send();
+            return;
+        }
+
+        $first = data_get($meta, 'firstName')
+            ?? data_get($meta, 'first_name')
+            ?? optional($order->patient)->first_name
+            ?? optional($order->user)->first_name
+            ?? optional($session->user)->first_name
+            ?? '';
+
+        $name = is_string($first) ? trim($first) : 'there';
+        $ref = $order->reference ?? $order->getKey();
+
+        $subject = 'Your order has been approved';
+        $body = "Hi {$name}\n\nYour order {$ref} has been approved and confirmed by the pharmacist\nIf you did not request this order please contact the pharmacy immediately";
+
+        try {
+            $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
+            $fromName    = config('mail.from.name') ?: 'Safescript Pharmacy';
+
+            Mail::raw($body, function ($m) use ($email, $subject, $fromAddress, $fromName) {
+                $m->from($fromAddress, $fromName)->to($email)->subject($subject);
+            });
+
+            Notification::make()->success()->title('Approval email sent to ' . $email)->send();
+        } catch (\Throwable $e) {
+            Notification::make()->danger()->title('Could not send approval email')->body(substr($e->getMessage(), 0, 200))->send();
+            report($e);
+        }
     }
 
     /**

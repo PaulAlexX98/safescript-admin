@@ -20,6 +20,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\Mail;
 use Filament\Notifications\Notification;
+use Illuminate\Http\Request;
 
 class CompletedOrderDetails extends ViewRecord
 {
@@ -827,54 +828,106 @@ class CompletedOrderDetails extends ViewRecord
             return;
         }
 
-        // Resolve URL and label based on requested document
+        // Resolve label and route/path for the requested document
+        $routeName = null;
+        $fallbackPath = null;
+
         switch ($which) {
             case 'full':
                 $label = 'Full Consultation Record';
-                $url = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.full')
-                    ? route('admin.consultations.pdf.full', ['session' => $sessionId])
-                    : url("/admin/consultations/{$sessionId}/pdf/full");
+                $routeName = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.full')
+                    ? 'admin.consultations.pdf.full'
+                    : null;
+                $fallbackPath = "/admin/consultations/{$sessionId}/pdf/full";
                 break;
             case 'pre':
                 $label = 'Private Prescription';
-                $url = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.pre')
-                    ? route('admin.consultations.pdf.pre', ['session' => $sessionId])
-                    : url("/admin/consultations/{$sessionId}/pdf/private-prescription");
+                $routeName = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.pre')
+                    ? 'admin.consultations.pdf.pre'
+                    : null;
+                $fallbackPath = "/admin/consultations/{$sessionId}/pdf/private-prescription";
                 break;
             case 'ros':
                 $label = 'Record of Supply';
-                $url = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.ros')
-                    ? route('admin.consultations.pdf.ros', ['session' => $sessionId])
-                    : url("/admin/consultations/{$sessionId}/pdf/record-of-supply");
+                $routeName = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.ros')
+                    ? 'admin.consultations.pdf.ros'
+                    : null;
+                $fallbackPath = "/admin/consultations/{$sessionId}/pdf/record-of-supply";
                 break;
             case 'invoice':
                 $label = 'Invoice';
-                $url = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.invoice')
-                    ? route('admin.consultations.pdf.invoice', ['session' => $sessionId])
-                    : url("/admin/consultations/{$sessionId}/pdf/invoice");
+                $routeName = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.invoice')
+                    ? 'admin.consultations.pdf.invoice'
+                    : null;
+                $fallbackPath = "/admin/consultations/{$sessionId}/pdf/invoice";
                 break;
             default:
                 Notification::make()->danger()->title('Unknown document type.')->send();
                 return;
         }
 
+        // Try to generate the PDF by dispatching an internal request to the existing PDF route
+        $pdfContent = null;
         try {
-            $first = data_get($meta, 'firstName') ?? data_get($meta, 'first_name') ?? optional($rec->user)->first_name ?? '';
-            $name = is_string($first) ? trim($first) : '';
-            $ref  = $rec->reference ?? $rec->getKey();
+            if ($routeName) {
+                $url = route($routeName, ['session' => $sessionId]);
+            } else {
+                $url = url($fallbackPath);
+            }
 
-            $subject = $label;
-            $body = "Hello {$name}\n\nHere is your {$label} for order {$ref}\nOpen the link below to view or download your PDF\n{$url}\n\nIf you did not request this please contact the pharmacy";
+            $request = Request::create($url, 'GET');
+            $response = \Illuminate\Support\Facades\Route::dispatch($request);
 
-            Mail::raw($body, function ($m) use ($email, $subject) {
-                $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
-                $fromName    = config('mail.from.name') ?: 'Safescript Pharmacy';
-                $m->from($fromAddress, $fromName)
-                  ->to($email)
-                  ->subject($subject);
-            });
+            if ($response->getStatusCode() === 200) {
+                $pdfContent = $response->getContent();
+            }
+        } catch (\Throwable $e) {
+            // If anything goes wrong, we'll fall back to sending the old-style link email
+            report($e);
+        }
 
-            Notification::make()->success()->title($label . ' email sent to ' . $email . '.')->send();
+        $first = data_get($meta, 'firstName') ?? data_get($meta, 'first_name') ?? optional($rec->user)->first_name ?? '';
+        $name = is_string($first) ? trim($first) : '';
+        $ref  = $rec->reference ?? $rec->getKey();
+
+        try {
+            $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
+            $fromName    = config('mail.from.name') ?: 'Safescript Pharmacy';
+
+            if ($pdfContent !== null) {
+                // Preferred path: send a clean email with the PDF attached, no admin/localhost link
+                $subject = $label;
+                $body = "Hello {$name}\n\n"
+                    . "Here is your {$label} for order {$ref}.\n"
+                    . "Your PDF is attached to this email.\n\n"
+                    . "If you did not request this please contact the pharmacy";
+
+                \Illuminate\Support\Facades\Mail::send([], [], function ($m) use ($email, $subject, $body, $pdfContent, $label, $ref, $fromAddress, $fromName) {
+                    $m->from($fromAddress, $fromName)
+                        ->to($email)
+                        ->subject($subject)
+                        ->text($body)
+                        ->attachData(
+                            $pdfContent,
+                            $label . '-' . $ref . '.pdf',
+                            ['mime' => 'application/pdf']
+                        );
+                });
+
+                Notification::make()->success()->title($label . ' email with PDF attachment sent to ' . $email . '.')->send();
+            } else {
+                // Fallback: preserve previous behaviour and send a link if we could not generate the PDF
+                $subject = $label;
+                $body = "Hello {$name}\n\nHere is your {$label} for order {$ref}\nOpen the link below to view or download your PDF\n{$url}\n\nIf you did not request this please contact the pharmacy";
+
+                \Illuminate\Support\Facades\Mail::raw($body, function ($m) use ($email, $subject, $fromAddress, $fromName) {
+                    $m->from($fromAddress, $fromName)
+                        ->to($email)
+                        ->subject($subject);
+                });
+
+                Notification::make()->warning()->title($label . ' email sent with link only because PDF could not be generated.')->send();
+            }
         } catch (\Throwable $e) {
             Notification::make()->danger()->title('Could not send email right now')->body(substr($e->getMessage(), 0, 200))->send();
             report($e);
