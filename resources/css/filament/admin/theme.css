@@ -3,6 +3,7 @@
 @source "../../../../vendor/filament/**/*.blade.php";
 @source "../../../../vendor/guava/calendar/resources/**/*.blade.php";
 @source '../../../../vendor/guava/calendar/resources/**/*';
+@import '../../../../vendor/guava/calendar/resources/css/theme.css';
 
 /* Neutralise Guava calendar colours */
 .ec .ec-today,

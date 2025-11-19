@@ -57,7 +57,7 @@ class PageForm
                         (function () {
                             if (class_exists(FilamentLexicalEditor::class)) {
                                 return FilamentLexicalEditor::make('content_rich_ui')
-                                    ->label('Visual editor (optional)')
+                                    ->label('Visual editor')
                                     ->columnSpanFull()
                                     ->extraAlpineAttributes([
                                         'x-init' => '(() => { const root = $el; const setFS = on => { root.style.maxHeight = on ? "" : "520px"; root.style.overflow = on ? "" : "auto"; document.documentElement.classList.toggle("prevent-scroll", on); document.body.classList.toggle("prevent-scroll", on); }; const isFS = () => { if (document.fullscreenElement) return true; let el = root; while (el) { const cls = ((el.getAttribute("class")||"")+" "+(el.getAttribute("data-state")||"")); if (/fullscreen/i.test(cls) || el.hasAttribute("data-fullscreen")) return true; el = el.parentElement; } return false; }; const update = () => setFS(isFS()); update(); document.addEventListener("fullscreenchange", update); const mo = new MutationObserver(update); mo.observe(root, {attributes:true, attributeFilter:["class","data-fullscreen","style"]}); let anc = root.parentElement; let i=0; while (anc && anc !== document.body && i++ < 6) { mo.observe(anc, {attributes:true, attributeFilter:["class","data-fullscreen","style"]}); anc = anc.parentElement; } root.addEventListener("click", e => { const t = e.target && e.target.closest("[data-fullscreen-toggle],[aria-label=fullscreen],.ri-fullscreen-fill,.ri-fullscreen-exit-fill,.fi-icon-fullscreen"); if (t) setTimeout(update, 0); }); })()'
