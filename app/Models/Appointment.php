@@ -13,14 +13,37 @@ class Appointment extends Model
     protected $fillable = [
         'start_at', 'end_at',
         'patient_name', 'first_name', 'last_name',
-        'service_slug', 'service_name',
-        'status', 'order_id',
+        'service_slug', 'service_name', 'service',
+        'status', 'order_id', 'order_reference',
     ];
 
     protected $casts = [
         'start_at' => 'datetime',
         'end_at'   => 'datetime',
     ];
+
+    protected static function booted(): void
+    {
+        static::creating(function (Appointment $appointment) {
+            // If an order_reference was already set (e.g. from an Order), leave it alone
+            if (! empty($appointment->order_reference)) {
+                return;
+            }
+
+            // Generate a unique PCAO + 6 digit reference for manual appointments
+            do {
+                try {
+                    $rand = random_int(0, 999999);
+                } catch (\Throwable $e) {
+                    $rand = mt_rand(0, 999999);
+                }
+
+                $ref = 'PCAO' . str_pad((string) $rand, 6, '0', STR_PAD_LEFT);
+            } while (static::where('order_reference', $ref)->exists());
+
+            $appointment->order_reference = $ref;
+        });
+    }
 
     // Nice title used by Filament (Resource record title)
     public function getDisplayTitleAttribute(): string
@@ -58,17 +81,23 @@ class Appointment extends Model
         }
 
         // Optional fallback: try by order reference if the appointment carries one
-        $ref = $this->attributes['ref'] ?? ($this->ref ?? null);
+        $ref = $this->order_reference ?? null;
         if ($ref) {
             $o = \App\Models\Order::query()
-                ->where('ref', $ref)
+                ->where(function ($q) use ($ref) {
+                    $q->where('reference', $ref)
+                      ->orWhere('ref', $ref);
+                })
                 ->where(function ($q) {
-                    $q->where('status', 'completed')->orWhere('state', 'completed');
+                    $q->where('status', 'completed')
+                      ->orWhere('state', 'completed');
                 })
                 ->latest('id')
                 ->first();
 
-            if ($o) return $o;
+            if ($o) {
+                return $o;
+            }
         }
 
         return null;

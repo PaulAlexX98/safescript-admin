@@ -715,6 +715,24 @@ class ConsultationFormController extends Controller
                             $ord->meta = $meta;
                             $ord->save();
 
+                            // Also mark any linked appointment as completed
+                            try {
+                                $appointment = \App\Models\Appointment::where('order_reference', $ord->reference)->latest()->first();
+                                if ($appointment) {
+                                    $st = strtolower((string) $appointment->status);
+                                    if (in_array($st, ['booked', 'approved', 'pending', ''], true)) {
+                                        $appointment->status = 'completed';
+                                        $appointment->save();
+                                    }
+                                }
+                            } catch (\Throwable $ae) {
+                                \Log::warning('consultation.save.appointment_update_failed', [
+                                    'session' => $session->id,
+                                    'order'   => $ord->getKey(),
+                                    'error'   => $ae->getMessage(),
+                                ]);
+                            }
+
                             // Prefer redirecting to the completed order details page
                             $redirectAfterComplete = url('/admin/orders/completed-orders/'.$ord->getKey().'/details');
                         }
@@ -855,6 +873,24 @@ class ConsultationFormController extends Controller
                         $order->status = 'completed';
                     }
                     $order->save();
+
+                    // Also mark any linked appointment as completed by order_reference
+                    try {
+                        $appointment = \App\Models\Appointment::where('order_reference', $order->reference)->latest()->first();
+                        if ($appointment) {
+                            $st = strtolower((string) $appointment->status);
+                            if (in_array($st, ['booked', 'approved', 'pending', ''], true)) {
+                                $appointment->status = 'completed';
+                                $appointment->save();
+                            }
+                        }
+                    } catch (\Throwable $ae) {
+                        \Log::warning('consultation.complete.appointment_update_failed', [
+                            'session' => $session->id,
+                            'order'   => $order->getKey(),
+                            'error'   => $ae->getMessage(),
+                        ]);
+                    }
                 }
             } catch (\Throwable $e) {
                 Log::warning('consultation.complete.order_update_failed', [

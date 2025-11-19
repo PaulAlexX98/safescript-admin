@@ -13,6 +13,10 @@ use App\Models\Appointment;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\DatePicker;
+use Filament\Notifications\Notification;
+use Illuminate\Support\Facades\Mail;
 use Filament\Schemas\Schema;
 use Filament\Resources\Resource;
 use Filament\Tables;
@@ -45,11 +49,30 @@ class AppointmentResource extends Resource
             ->components([
                 \Filament\Forms\Components\Placeholder::make('ref_display')
                     ->label('Ref')
-                    ->content(fn ($record) => static::resolveOrderRef($record) ?? '—')
+                    ->content(function ($record) {
+                        // If linked order exists, show the real reference
+                        $ref = static::resolveOrderRef($record);
+                        if (is_string($ref) && trim($ref) !== '') {
+                            return trim($ref);
+                        }
+
+                        // For brand-new appointments (no ID yet), show a temporary PCAO + 6-digit code
+                        if (! $record || ! $record->getKey()) {
+                            try {
+                                $rand = random_int(0, 999999);
+                            } catch (\Throwable $e) {
+                                $rand = mt_rand(0, 999999);
+                            }
+                            return 'PCAO' . str_pad((string) $rand, 6, '0', STR_PAD_LEFT);
+                        }
+
+                        // For existing records with no linked order, just show a dash
+                        return '—';
+                    })
                     ->columnSpan(3),
-                \Filament\Forms\Components\Placeholder::make('item_display')
+                \Filament\Forms\Components\TextInput::make('service_name')
                     ->label('Item')
-                    ->content(fn ($record) => static::resolveOrderItem($record) ?? '—')
+                    ->maxLength(191)
                     ->columnSpan(9),
 
                 \Filament\Forms\Components\DateTimePicker::make('start_at')
@@ -73,25 +96,22 @@ class AppointmentResource extends Resource
 
                 \Filament\Forms\Components\TextInput::make('first_name')
                     ->label('First name')
-                    ->disabled()
-                    ->dehydrated(false)
+                    ->maxLength(191)
                     ->columnSpan(6),
 
                 \Filament\Forms\Components\TextInput::make('last_name')
                     ->label('Last name')
-                    ->disabled()
-                    ->dehydrated(false)
+                    ->maxLength(191)
                     ->columnSpan(6),
 
-                \Filament\Forms\Components\TextInput::make('service_name')
+                \Filament\Forms\Components\TextInput::make('service')
                     ->label('Service')
-                    ->disabled()
-                    ->dehydrated(false)
+                    ->maxLength(191)
                     ->columnSpan(6),
 
                 \Filament\Forms\Components\TextInput::make('service_slug')
                     ->label('Service key')
-                    ->disabled()
+                    ->hidden()
                     ->dehydrated(false)
                     ->columnSpan(6),
 
@@ -119,44 +139,30 @@ class AppointmentResource extends Resource
                 TextColumn::make('reference')
                     ->label('Ref')
                     ->getStateUsing(function ($record) {
-                        if (!$record) return '—';
-                        try {
-                            // 1) Direct link via order_id if present
-                            if (\Illuminate\Support\Facades\Schema::hasColumn('appointments','order_id') && !empty($record->order_id)) {
-                                $ord = \App\Models\Order::find($record->order_id);
-                                if ($ord) {
-                                    $ref = is_string($ord->reference ?? null) ? trim($ord->reference) : '';
-                                    if ($ref !== '') return $ref;
-                                }
-                            }
+                        if (! $record) {
+                            return '—';
+                        }
 
-                            // 2) Match by stored appointment time in order meta
-                            if (!empty($record->start_at)) {
-                                try {
-                                    $s = \Carbon\Carbon::parse($record->start_at);
-                                    $isoUtc = $s->copy()->setTimezone('UTC')->toIso8601String();
-                                    $ymsLon = $s->copy()->setTimezone('Europe/London')->format('Y-m-d H:i:s');
+                        $ref = static::resolveOrderRef($record);
 
-                                    foreach (['appointment_start_at','appointment_at'] as $key) {
-                                        $ref = \App\Models\Order::query()
-                                            ->whereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.$key')) in (?,?)", [$isoUtc, $ymsLon])
-                                            ->orderByDesc('id')
-                                            ->value('reference');
-                                        if (is_string($ref) && trim($ref) !== '') return trim($ref);
-                                    }
-                                } catch (\Throwable $e) { /* ignore parse issues */ }
-                            }
-                        } catch (\Throwable $e) { /* ignore */ }
-                        return '—';
+                        return (is_string($ref) && trim($ref) !== '')
+                            ? trim($ref)
+                            : '—';
                     })
                     ->toggleable()
                     ->searchable(true, function (Builder $query, string $search): Builder {
                         $like = "%" . $search . "%";
-                        return $query->whereExists(function ($sub) use ($like) {
-                            $sub->select(\DB::raw('1'))
-                                ->from('orders')
-                                ->whereColumn('orders.id', 'appointments.order_id')
-                                ->where('orders.reference', 'like', $like);
+
+                        return $query->where(function ($q) use ($like) {
+                            // search the appointment's own reference
+                            $q->where('order_reference', 'like', $like)
+                              // plus any linked order reference
+                              ->orWhereExists(function ($sub) use ($like) {
+                                  $sub->select(\DB::raw('1'))
+                                      ->from('orders')
+                                      ->whereColumn('orders.id', 'appointments.order_id')
+                                      ->where('orders.reference', 'like', $like);
+                              });
                         });
                     }),
                 TextColumn::make('order_item')
@@ -194,7 +200,13 @@ class AppointmentResource extends Resource
                         };
 
                         $ord = $findOrder();
-                        if (!$ord) return '—';
+                        if (!$ord) {
+                            $name = is_string($record->service_name ?? null) ? trim($record->service_name) : '';
+                            if ($name === '') {
+                                $name = is_string($record->service ?? null) ? trim($record->service) : '';
+                            }
+                            return $name !== '' ? $name : '—';
+                        }
 
                         $meta = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
 
@@ -433,6 +445,28 @@ class AppointmentResource extends Resource
                     }),
                 TextColumn::make('service')
                     ->label('Service')
+                    ->getStateUsing(function ($record) {
+                        if (! $record) {
+                            return null;
+                        }
+
+                        $service = is_string($record->getRawOriginal('service') ?? null)
+                            ? trim($record->getRawOriginal('service'))
+                            : '';
+                        $serviceSlug = is_string($record->getRawOriginal('service_slug') ?? null)
+                            ? trim($record->getRawOriginal('service_slug'))
+                            : '';
+
+                        if ($service !== '') {
+                            return $service;
+                        }
+
+                        if ($serviceSlug !== '') {
+                            return $serviceSlug;
+                        }
+
+                        return null;
+                    })
                     ->formatStateUsing(function ($state) {
                         if (empty($state)) return '—';
                         return \Illuminate\Support\Str::of((string) $state)
@@ -484,7 +518,7 @@ class AppointmentResource extends Resource
                     })
                     ->indicateUsing(function ($state) {
                         $date = is_array($state) ? ($state['value'] ?? null) : $state;
-                        return $date ? 'Day: ' . \Illuminate\Support\Carbon::parse($date)->format('D d M') : null;
+                        return $date ? 'Day ' . \Illuminate\Support\Carbon::parse($date)->format('D d M') : null;
                     }),
 
                 // Status filter (inserted after Day)
@@ -499,7 +533,7 @@ class AppointmentResource extends Resource
                         'cancelled' => 'Cancelled',
                         'rejected'  => 'Rejected',
                     ])
-                    ->default(['completed'])
+                    ->default(['approved'])
                     ->query(function (Builder $query, array $data): Builder {
                         // $data may be ['values' => [...]] for multiple select
                         $values = $data['values'] ?? [];
@@ -541,7 +575,125 @@ class AppointmentResource extends Resource
                     ->button()
                     ->color('warning')
                     ->icon('heroicon-o-calendar')
-                    ->url(fn ($record) => static::getUrl('edit', ['record' => $record])),
+                    ->modalHeading('Reschedule appointment')
+                    ->form([
+                        DateTimePicker::make('start_at')
+                            ->label('New start')
+                            ->native(false)
+                            ->displayFormat('d M Y, H:i')
+                            ->timezone('Europe/London')
+                            ->seconds(false)
+                            ->minutesStep(5)
+                            ->required()
+                            ->default(fn ($record) => $record->start_at),
+                        DateTimePicker::make('end_at')
+                            ->label('New end')
+                            ->native(false)
+                            ->displayFormat('d M Y, H:i')
+                            ->timezone('Europe/London')
+                            ->seconds(false)
+                            ->minutesStep(5)
+                            ->default(fn ($record) => $record->end_at),
+                        Textarea::make('reason')
+                            ->label('Reason for change')
+                            ->rows(3)
+                            ->required(),
+                    ])
+                    ->action(function (Appointment $record, array $data): void {
+                        $oldStart = $record->start_at;
+
+                        // Update start/end
+                        $record->start_at = $data['start_at'];
+
+                        if (!empty($data['end_at'])) {
+                            $record->end_at = $data['end_at'];
+                        } elseif ($record->end_at && $oldStart) {
+                            try {
+                                $oldEnd = \Carbon\Carbon::parse($record->end_at);
+                                $oldStartDt = \Carbon\Carbon::parse($oldStart);
+                                $duration = $oldEnd->diffInMinutes($oldStartDt);
+                                $record->end_at = \Carbon\Carbon::parse($data['start_at'])->addMinutes($duration);
+                            } catch (\Throwable $e) {
+                                // If parsing fails, just leave end_at as-is
+                            }
+                        }
+
+                        $record->save();
+
+                        // Find related order (using existing helper)
+                        $order = static::findRelatedOrder($record);
+
+                        // Work out email address
+                        $email = null;
+                        if (is_string($record->email ?? null) && trim($record->email) !== '') {
+                            $email = trim($record->email);
+                        } elseif ($order) {
+                            $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                            $email = data_get($meta, 'patient.email')
+                                ?? data_get($meta, 'customer.email')
+                                ?? $order->email
+                                ?? optional($order->user)->email;
+                        }
+
+                        // Prepare email body if we have a target
+                        if ($email) {
+                            $whenOld = $oldStart
+                                ? \Carbon\Carbon::parse($oldStart)->tz('Europe/London')->format('d M Y, H:i')
+                                : 'your previous time';
+
+                            $whenNew = $record->start_at
+                                ? \Carbon\Carbon::parse($record->start_at)->tz('Europe/London')->format('d M Y, H:i')
+                                : 'a new time';
+
+                            $service = $record->service_name
+                                ?? $record->service
+                                ?? ($order ? (data_get(is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []), 'service') ?? '') : '');
+
+                            $reason = trim($data['reason'] ?? '');
+
+                            $subject = 'Your appointment has been rescheduled';
+
+                            $lines = [];
+                            $lines[] = 'Hello,';
+                            $lines[] = '';
+                            $lines[] = 'Your appointment' . ($service ? " for {$service}" : '') . ' has been rescheduled.';
+                            $lines[] = "Previous time: {$whenOld}";
+                            $lines[] = "New time: {$whenNew}";
+                            if ($reason !== '') {
+                                $lines[] = '';
+                                $lines[] = 'Reason for change';
+                                $lines[] = $reason;
+                            }
+                            $lines[] = '';
+                            $lines[] = 'If this time is not suitable, please contact the pharmacy to rearrange.';
+
+                            $body = implode("\n", $lines);
+
+                            try {
+                                $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
+                                $fromName    = config('mail.from.name') ?: 'Safescript Pharmacy';
+
+                                Mail::raw($body, function ($m) use ($email, $subject, $fromAddress, $fromName) {
+                                    $m->from($fromAddress, $fromName)
+                                        ->to($email)
+                                        ->subject($subject);
+                                });
+                            } catch (\Throwable $e) {
+                                Notification::make()
+                                    ->danger()
+                                    ->title('Appointment updated but email could not be sent')
+                                    ->body(substr($e->getMessage(), 0, 200))
+                                    ->send();
+                                return;
+                            }
+                        }
+
+                        Notification::make()
+                            ->success()
+                            ->title('Appointment rescheduled')
+                            ->body('The appointment has been updated' . ($email ? ' and the patient has been notified at '.$email : '.'))
+                            ->send();
+                    }),
             ])
             ->defaultSort('start_at', 'asc')
             ->defaultPaginationPageOption(25)
@@ -549,12 +701,9 @@ class AppointmentResource extends Resource
             ->recordUrl(fn ($record) => static::getUrl('edit', ['record' => $record]));
     }
 
-    // Allow the TrashedFilter to work (include trashed in base query)
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->withoutGlobalScopes([
-            SoftDeletingScope::class,
-        ]);
+        return parent::getEloquentQuery();
     }
 
     public static function getNavigationBadge(): ?string
@@ -623,6 +772,18 @@ class AppointmentResource extends Resource
             }
         } catch (\Throwable $e) {}
 
+        // 1.5) Match by stored order_reference if present
+        try {
+            $ref = is_string($record->order_reference ?? null) ? trim($record->order_reference) : '';
+            if ($ref !== '') {
+                $o = \App\Models\Order::query()
+                    ->where('reference', $ref)
+                    ->orderByDesc('id')
+                    ->first();
+                if ($o) return $o;
+            }
+        } catch (\Throwable $e) {}
+
         // 2) Heuristic by matching appointment time stored in order meta
         try {
             if (!empty($record->start_at)) {
@@ -645,8 +806,18 @@ class AppointmentResource extends Resource
 
     protected static function resolveOrderRef($record): ?string
     {
+        // 1) Use linked order ref if available
         $o = static::findRelatedOrder($record);
-        return is_string($o?->reference ?? null) ? trim($o->reference) : null;
+        if ($o) {
+            $ref = $o->reference ?? $o->ref ?? null;
+            if (is_string($ref) && trim($ref) !== '') {
+                return trim($ref);
+            }
+        }
+
+        // 2) Fall back to appointment's own saved reference
+        $own = $record->order_reference ?? null;
+        return is_string($own) && trim($own) !== '' ? trim($own) : null;
     }
 
     protected static function resolveOrderItem($record): ?string
@@ -699,12 +870,6 @@ class AppointmentResource extends Resource
         }
 
         $segment = 'completed-orders';
-        try {
-            $status = strtolower((string) ($order->booking_status ?? $order->status ?? ''));
-            if (in_array($status, ['approved','booked','pending'])) {
-                $segment = 'approved-orders';
-            }
-        } catch (\Throwable $e) {}
 
         return url("/admin/orders/{$segment}/{$order->id}/details");
     }
