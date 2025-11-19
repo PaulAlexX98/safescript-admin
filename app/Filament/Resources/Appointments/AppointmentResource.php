@@ -100,6 +100,7 @@ class AppointmentResource extends Resource
                     ->options([
                         'booked'    => 'Booked',
                         'approved'  => 'Approved',
+                        'completed' => 'Completed',
                         'pending'   => 'Pending',
                         'cancelled' => 'Cancelled',
                         'rejected'  => 'Rejected',
@@ -451,7 +452,7 @@ class AppointmentResource extends Resource
                 TextColumn::make('status')
                     ->badge()
                     ->color(fn (string $state): string => match (strtolower($state)) {
-                        'booked', 'approved' => 'success',
+                        'booked', 'approved', 'completed' => 'success',
                         'pending'            => 'warning',
                         'cancelled', 'canceled' => 'gray',
                         'rejected'           => 'danger',
@@ -493,11 +494,12 @@ class AppointmentResource extends Resource
                     ->options([
                         'booked'    => 'Booked',
                         'approved'  => 'Approved',
+                        'completed' => 'Completed',
                         'pending'   => 'Pending',
                         'cancelled' => 'Cancelled',
                         'rejected'  => 'Rejected',
                     ])
-                    ->default(['booked', 'approved'])
+                    ->default(['completed'])
                     ->query(function (Builder $query, array $data): Builder {
                         // $data may be ['values' => [...]] for multiple select
                         $values = $data['values'] ?? [];
@@ -593,6 +595,11 @@ class AppointmentResource extends Resource
             'index' => ListAppointments::route('/'),
             'edit'  => EditAppointment::route('/{record}/edit'),
         ];
+
+        // Add the Create page if it exists
+        if (class_exists(Pages\CreateAppointment::class)) {
+            $pages['create'] = Pages\CreateAppointment::route('/create');
+        }
 
         // Add the View page only if it exists (prevents class-not-found issues)
         if (class_exists(ViewAppointment::class)) {

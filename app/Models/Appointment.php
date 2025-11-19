@@ -52,7 +52,7 @@ class Appointment extends Model
         // Try by foreign key
         if ($this->order_id) {
             $o = \App\Models\Order::find($this->order_id);
-            if ($o && ($o->status === 'completed' || ($this->order->state ?? null) === 'completed')) {
+            if ($o && ($o->status === 'completed' || ($o->state ?? null) === 'completed')) {
                 return $o;
             }
         }
