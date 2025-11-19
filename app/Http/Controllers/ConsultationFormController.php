@@ -211,14 +211,18 @@ class ConsultationFormController extends Controller
             // Resolve the posted field name. Different renderers may derive the name
             // from schema->name, from a slugged label, or fall back to field_{idx}.
             $labelRaw   = $cfg['label'] ?? ($fld['label'] ?? null);
-            $slugLabel  = $labelRaw ? Str::slug($labelRaw, '_') : null;
+            $slugLabelUnderscore  = $labelRaw ? Str::slug($labelRaw, '_') : null;
+            $slugLabelDash        = $labelRaw ? Str::slug($labelRaw, '-') : null;
             // honour explicit keys from builder or importer
-            $schemaKey  = $cfg['key'] ?? ($fld['key'] ?? null);
+            $schemaKey            = $cfg['key'] ?? ($fld['key'] ?? null);
+            $schemaKeyDash        = $schemaKey ? str_replace('_', '-', $schemaKey) : null;
 
             $candidates = array_values(array_filter([
                 $fld['name'] ?? null,
                 $schemaKey,
-                $slugLabel,
+                $schemaKeyDash,
+                $slugLabelUnderscore,
+                $slugLabelDash,
                 ($type === 'text_block' ? ('block_'.$idx) : ('field_'.$idx)),
             ]));
 
@@ -325,14 +329,18 @@ class ConsultationFormController extends Controller
             }
 
             $labelRaw   = $cfg['label'] ?? ($fld['label'] ?? null);
-            $slugLabel  = $labelRaw ? Str::slug($labelRaw, '_') : null;
-            $schemaKey  = $cfg['key'] ?? ($fld['key'] ?? null);
+            $slugLabelUnderscore  = $labelRaw ? Str::slug($labelRaw, '_') : null;
+            $slugLabelDash        = $labelRaw ? Str::slug($labelRaw, '-') : null;
+            $schemaKey            = $cfg['key'] ?? ($fld['key'] ?? null);
+            $schemaKeyDash        = $schemaKey ? str_replace('_', '-', $schemaKey) : null;
 
             // Posted name candidates as they may differ between renderers
             $candidates = array_values(array_filter([
                 $fld['name'] ?? null,
                 $schemaKey,
-                $slugLabel,
+                $schemaKeyDash,
+                $slugLabelUnderscore,
+                $slugLabelDash,
                 ($type === 'text_block' ? ('block_'.$idx) : ('field_'.$idx)),
             ]));
 
