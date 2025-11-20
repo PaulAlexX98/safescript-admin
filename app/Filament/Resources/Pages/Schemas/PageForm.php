@@ -70,7 +70,39 @@ class PageForm
                                     }
                                 })
                                 ->afterStateUpdated(function (Set $set, Get $get, $state) {
-                                    $html = is_string($state) ? $state : (is_array($state) ? ($state['html'] ?? $state['content'] ?? '') : (string) $state);
+                                    // Normalise editor state to HTML string
+                                    $html = is_string($state)
+                                        ? $state
+                                        : (is_array($state)
+                                            ? ($state['html'] ?? $state['content'] ?? '')
+                                            : (string) $state);
+
+                                    // If the editor provided attachment metadata, replace preview-file URLs
+                                    if (is_array($state) && ! empty($state['attachments']) && is_array($state['attachments'])) {
+                                        foreach ($state['attachments'] as $attachment) {
+                                            $id = $attachment['id'] ?? null;
+                                            $url = $attachment['url'] ?? ($attachment['path'] ?? null);
+
+                                            if (! $id || ! $url) {
+                                                continue;
+                                            }
+
+                                            // Normalise URL – ensure it is a web path
+                                            if (str_starts_with($url, 'storage/')) {
+                                                $url = '/' . $url;
+                                            } elseif (! str_starts_with($url, 'http') && ! str_starts_with($url, '/')) {
+                                                $url = '/' . ltrim($url, '/');
+                                            }
+
+                                            // Replace src on any &lt;img&gt; with matching data-id
+                                            $pattern = '/(&lt;img[^&gt;]*data-id=&quot;'
+                                                . preg_quote($id, '/')
+                                                . '&quot;[^&gt;]*src=&quot;)[^&quot;]*(&quot;)/';
+
+                                            $html = preg_replace($pattern, '$1' . addcslashes($url, '&amp;') . '$2', $html) ?? $html;
+                                        }
+                                    }
+
                                     $set('content', $html);
                                 })
                                 ->fileAttachmentsDisk('public')
