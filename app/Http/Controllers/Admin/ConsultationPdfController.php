@@ -11,6 +11,7 @@ use App\Models\Order;
 use App\Models\Patient;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Storage;
 
 class ConsultationPdfController extends Controller
 {
@@ -170,6 +171,74 @@ class ConsultationPdfController extends Controller
             ],
             'items'   => $items,
         ];
+    }
+
+    public function generateAndStorePdfs(ConsultationSession $session): array
+    {
+        $data = $this->baseData($session);
+
+        /** @var \App\Models\Order|null $order */
+        $order = $data['order'] ?? null;
+        if (! $order) {
+            return [];
+        }
+
+        $meta = is_array($data['meta'] ?? null) ? $data['meta'] : [];
+
+        $ref = $data['ref'] ?? ('PWLN' . $session->id);
+
+        // Store under storage/app/public/consultations/{session_id}
+        $disk = Storage::disk('public');
+        $dir  = 'consultations/' . $session->id;
+
+        if (! $disk->exists($dir)) {
+            $disk->makeDirectory($dir);
+        }
+
+        $pdfConfigs = [
+            [
+                'key'      => 'record_of_supply',
+                'view'     => 'pdf.record-of-supply',
+                'filename' => $ref . '_supply.pdf',
+            ],
+            [
+                'key'      => 'invoice',
+                'view'     => 'pdf.invoice',
+                'filename' => $ref . '_invoice.pdf',
+            ],
+        ];
+
+        $meta['pdfs'] = is_array($meta['pdfs'] ?? null) ? $meta['pdfs'] : [];
+
+        $results = [];
+
+        foreach ($pdfConfigs as $cfg) {
+            try {
+                $pdf = Pdf::loadView($cfg['view'], $data)->setPaper('a4');
+
+                $relativePath = $dir . '/' . $cfg['filename'];
+
+                // Write the PDF bytes to the public disk
+                $disk->put($relativePath, $pdf->output());
+
+                $publicPath = '/storage/' . $relativePath;
+
+                $meta['pdfs'][$cfg['key']] = $publicPath;
+                $results[$cfg['key']]      = $publicPath;
+            } catch (Throwable $e) {
+                Log::warning('Failed to generate consultation PDF', [
+                    'session_id' => $session->id,
+                    'order_id'   => $order->id ?? null,
+                    'view'       => $cfg['view'] ?? null,
+                    'error'      => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $order->meta = $meta;
+        $order->save();
+
+        return $results;
     }
 
     public function full(ConsultationSession $session)

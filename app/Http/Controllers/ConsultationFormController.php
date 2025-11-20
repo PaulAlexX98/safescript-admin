@@ -900,14 +900,38 @@ class ConsultationFormController extends Controller
             }
         });
 
+        // Ensure Record of Supply and Invoice PDFs are generated and stored on the order before emailing
+        try {
+            $order = $session->order ?? null;
+            if ($order) {
+                // Maintain a back-reference to the consultation session on the order meta
+                $orderMeta = is_array($order->meta)
+                    ? $order->meta
+                    : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                if (! isset($orderMeta['consultation_session_id'])) {
+                    $orderMeta['consultation_session_id'] = $session->id;
+                    $order->meta = $orderMeta;
+                    $order->save();
+                }
+
+                // Generate Record of Supply and Invoice PDFs and update order->meta['pdfs'] paths
+                app(\App\Http\Controllers\Admin\ConsultationPdfController::class)
+                    ->generateAndStorePdfs($session);
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('consultation.complete.pdf_generate_failed', [
+                'session' => $session->id,
+                'error'   => $e->getMessage(),
+            ]);
+        }
+
         $this->sendApprovedEmail($session);
 
         // After successfully completing, attempt to create a Royal Mail Click & Drop order
         try {
             $order = $session->order ?? null;
             if ($order) {
-                // <--- nothing here, see instructions
-
                 \Log::info('clickanddrop.complete.start', [
                     'session'   => $session->id,
                     'order'     => $order->getKey(),
@@ -916,6 +940,10 @@ class ConsultationFormController extends Controller
 
                 // Hydrate missing patient identity and address fields from order->shipping_address and meta
                 try {
+                    $metaArr = is_array($session->meta)
+                        ? $session->meta
+                        : (json_decode($session->meta ?? '[]', true) ?: []);
+
                     $addr = [];
 
                     if ($order) {
@@ -1262,6 +1290,116 @@ class ConsultationFormController extends Controller
         $name = is_string($first) ? trim($first) : 'there';
         $ref = $order->reference ?? $order->getKey();
 
+        // Optional PDF attachments (Record of Supply and Invoice)
+        // Expecting file paths or public URLs to be stored in order meta under pdfs.record_of_supply and pdfs.invoice
+        $attachments = [];
+
+        // Also look directly in storage/app/public/consultations/{session_id} for generated PDFs
+        $sessionId = $session->id ?? null;
+        if ($sessionId && $ref) {
+            $baseDir = storage_path('app/public/consultations/' . $sessionId);
+
+            $rosPath = $baseDir . '/' . $ref . '_supply.pdf';
+            if (is_file($rosPath)) {
+                $attachments[] = [
+                    'path' => $rosPath,
+                    'name' => 'Record-of-supply.pdf',
+                ];
+            }
+
+            $invPath = $baseDir . '/' . $ref . '_invoice.pdf';
+            if (is_file($invPath)) {
+                $attachments[] = [
+                    'path' => $invPath,
+                    'name' => 'Invoice.pdf',
+                ];
+            }
+        }
+
+        // Helper to resolve a relative or public storage path into an absolute filesystem path
+        $resolvePath = function ($path) {
+            $path = (string) $path;
+            if ($path === '') {
+                return null;
+            }
+
+            // Skip remote URLs here; you can extend this to download and attach via attachData if required
+            if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+                return null;
+            }
+
+            // Common "public storage" style path like /storage/consultations/...
+            if (str_starts_with($path, '/storage/')) {
+                $relative = ltrim(substr($path, strlen('/storage/')), '/');
+
+                // 1) Try the public/storage symlink if it exists
+                $candidate = public_path('storage/' . $relative);
+                if (is_file($candidate)) {
+                    return $candidate;
+                }
+
+                // 2) Fallback directly to storage/app/public
+                $candidate = storage_path('app/public/' . $relative);
+                if (is_file($candidate)) {
+                    return $candidate;
+                }
+
+                return null;
+            }
+
+            // Absolute path
+            if (str_starts_with($path, '/')) {
+                return is_file($path) ? $path : null;
+            }
+
+            // Try storage/app/public first (handles paths like consultations/foo.pdf stored on the public disk)
+            $candidate = storage_path('app/public/' . ltrim($path, '/'));
+            if (is_file($candidate)) {
+                return $candidate;
+            }
+
+            // Fallback to generic storage/app
+            $candidate = storage_path('app/' . ltrim($path, '/'));
+            if (is_file($candidate)) {
+                return $candidate;
+            }
+
+            // Final fallback to public
+            $candidate = public_path(ltrim($path, '/'));
+            if (is_file($candidate)) {
+                return $candidate;
+            }
+
+            return null;
+        };
+
+        $pdfMeta = is_array($meta['pdfs'] ?? null) ? $meta['pdfs'] : [];
+
+        \Log::info('consultation.email.pdf_meta', [
+            'order_id' => $order->getKey(),
+            'pdf_meta' => $pdfMeta,
+        ]);
+
+        if (!empty($pdfMeta['record_of_supply'])) {
+            $abs = $resolvePath($pdfMeta['record_of_supply']);
+            if ($abs) {
+                $attachments[] = [
+                    'path' => $abs,
+                    'name' => 'Record-of-supply.pdf',
+                ];
+            }
+        }
+
+        if (!empty($pdfMeta['invoice'])) {
+            $abs = $resolvePath($pdfMeta['invoice']);
+            if ($abs) {
+                $attachments[] = [
+                    'path' => $abs,
+                    'name' => 'Invoice.pdf',
+                ];
+            }
+        }
+
         $subject = 'Your order has been approved';
         $body = "Hi {$name}\n\nYour order {$ref} has been approved and confirmed by the pharmacist\nIf you did not request this order please contact the pharmacy immediately";
 
@@ -1269,8 +1407,34 @@ class ConsultationFormController extends Controller
             $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
             $fromName    = config('mail.from.name') ?: 'Safescript Pharmacy';
 
-            Mail::raw($body, function ($m) use ($email, $subject, $fromAddress, $fromName) {
+            Mail::raw($body, function ($m) use ($email, $subject, $fromAddress, $fromName, $attachments, $order) {
                 $m->from($fromAddress, $fromName)->to($email)->subject($subject);
+
+                // Attach any resolved PDFs (record of supply, invoice)
+                \Log::info('consultation.email.attachments_start', [
+                    'email'       => $email,
+                    'order_id'    => $order->getKey(),
+                    'count'       => count($attachments),
+                    'attachments' => $attachments,
+                ]);
+
+                foreach ($attachments as $att) {
+                    $exists = !empty($att['path']) && is_file($att['path']);
+
+                    \Log::info('consultation.email.attach_try', [
+                        'email'    => $email,
+                        'order_id' => $order->getKey(),
+                        'path'     => $att['path'] ?? null,
+                        'exists'   => $exists,
+                    ]);
+
+                    if ($exists) {
+                        $m->attach($att['path'], [
+                            'as'   => $att['name'] ?? basename($att['path']),
+                            'mime' => 'application/pdf',
+                        ]);
+                    }
+                }
             });
 
             Notification::make()->success()->title('Approval email sent to ' . $email)->send();
