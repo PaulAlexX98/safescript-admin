@@ -345,7 +345,7 @@ class ConsultationFormController extends Controller
             ]));
 
             // Stable storage key prioritises explicit key, then name, then slug(label), then field_{n}
-            $storeKey = $schemaKey ?: ($fld['name'] ?? ($slugLabel ?: ('field_'.$idx)));
+            $storeKey = $schemaKey ?: ($fld['name'] ?? ($slugLabelUnderscore ?? ('field_'.$idx)));
 
             $fields[] = [
                 'type'       => $type,
