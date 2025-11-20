@@ -13,6 +13,7 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\HtmlString;
 use App\Models\ConsultationSession;
 
@@ -882,6 +883,48 @@ class ConsultationFormController extends Controller
                             if (in_array($st, ['booked', 'approved', 'pending', ''], true)) {
                                 $appointment->status = 'completed';
                                 $appointment->save();
+                                // If this is a weight management service create a Zoom meeting
+                                try {
+                                    $serviceSlug = $session->service_slug
+                                        ?: \Illuminate\Support\Str::slug((string) $session->service);
+
+                                    $weightSlugs = ['weight-management', 'weight-loss', 'mounjaro', 'wegovy'];
+
+                                    if ($serviceSlug && in_array($serviceSlug, $weightSlugs, true)) {
+                                        $zoom = app(\App\Services\ZoomMeetingService::class);
+                                        $zoomInfo = $zoom->createForAppointment($appointment, null);
+
+                                        if ($zoomInfo && !empty($zoomInfo['join_url'])) {
+                                            $meta = is_array($order->meta)
+                                                ? $order->meta
+                                                : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                                            $meta['zoom'] = array_replace(
+                                                $meta['zoom'] ?? [],
+                                                [
+                                                    'meeting_id' => $zoomInfo['id'] ?? null,
+                                                    'join_url'   => $zoomInfo['join_url'] ?? null,
+                                                    'start_url'  => $zoomInfo['start_url'] ?? null,
+                                                ]
+                                            );
+
+                                            $order->meta = $meta;
+                                            $order->save();
+
+                                            \Log::info('consultation.zoom.link_saved', [
+                                                'session'   => $session->id,
+                                                'order'     => $order->getKey(),
+                                                'join_url'  => $zoomInfo['join_url'] ?? null,
+                                            ]);
+                                        }
+                                    }
+                                } catch (\Throwable $ze) {
+                                    \Log::warning('consultation.zoom.create_failed', [
+                                        'session' => $session->id,
+                                        'order'   => $order->getKey(),
+                                        'error'   => $ze->getMessage(),
+                                    ]);
+                                }
                             }
                         }
                     } catch (\Throwable $ae) {
@@ -925,6 +968,8 @@ class ConsultationFormController extends Controller
                 'error'   => $e->getMessage(),
             ]);
         }
+
+
 
         $this->sendApprovedEmail($session);
 
@@ -1288,7 +1333,11 @@ class ConsultationFormController extends Controller
             ?? '';
 
         $name = is_string($first) ? trim($first) : 'there';
-        $ref = $order->reference ?? $order->getKey();
+        $ref  = $order->reference ?? $order->getKey();
+
+        // Optional Zoom link for weight management consultations
+        $zoomUrl = data_get($meta, 'zoom.weight_management_join_url')
+            ?? data_get($meta, 'zoom.join_url');
 
         // Optional PDF attachments (Record of Supply and Invoice)
         // Expecting file paths or public URLs to be stored in order meta under pdfs.record_of_supply and pdfs.invoice
@@ -1402,6 +1451,10 @@ class ConsultationFormController extends Controller
 
         $subject = 'Your order has been approved';
         $body = "Hi {$name}\n\nYour order {$ref} has been approved and confirmed by the pharmacist\nIf you did not request this order please contact the pharmacy immediately";
+
+        if ($zoomUrl) {
+            $body .= "\n\nYour video consultation link\n{$zoomUrl}\n";
+        }
 
         try {
             $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
