@@ -7,6 +7,7 @@ use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\Relation;
+use Filament\Actions;
 
 class ListPendingOrders extends ListRecords
 {
@@ -14,7 +15,14 @@ class ListPendingOrders extends ListRecords
 
     protected function getHeaderActions(): array
     {
-        return [];
+        return [
+            Actions\Action::make('ncrs')
+                ->label('NCRS portal')
+                ->url('https://digital.nhs.uk/services/national-care-records-service')
+                ->openUrlInNewTab()
+                ->button()
+                 // or primary/gray etc
+        ];
     }
 
     protected function getTableQuery(): Builder|Relation|null
