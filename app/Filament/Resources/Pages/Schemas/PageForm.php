@@ -55,7 +55,7 @@ class PageForm
 
                         // Optional visual editor (non-persistent) that live-updates the HTML textarea below
                         (function () {
-                            return RichEditor::make('content_rich_ui')
+                            return RichEditor::make('content')
                                 ->label('Visual editor')
                                 ->columnSpanFull()
                                 ->extraAlpineAttributes([
@@ -94,12 +94,21 @@ class PageForm
                                                 $url = '/' . ltrim($url, '/');
                                             }
 
-                                            // Replace src on any &lt;img&gt; with matching data-id
-                                            $pattern = '/(&lt;img[^&gt;]*data-id=&quot;'
-                                                . preg_quote($id, '/')
-                                                . '&quot;[^&gt;]*src=&quot;)[^&quot;]*(&quot;)/';
+                                            // Replace src on any <img> with matching data-id in either raw or entity-encoded HTML, in any attribute order
+                                            $patterns = [
+                                                // Normal HTML data-id then src
+                                                '/(<img[^>]*data-id="' . preg_quote($id, '/') . '"[^>]*src=")[^"]*("[^>]*>)/i',
+                                                // Normal HTML src then data-id
+                                                '/(<img[^>]*src=")[^"]*("(?=[^>]*data-id="' . preg_quote($id, '/') . '")[^>]*>)/i',
+                                                // Entity-encoded HTML data-id then src
+                                                '/(&lt;img[^&gt;]*data-id=&quot;' . preg_quote($id, '/') . '&quot;[^&gt;]*src=&quot;)[^&quot;]*(&quot;[^&gt;]*&gt;)/i',
+                                                // Entity-encoded HTML src then data-id
+                                                '/(&lt;img[^&gt;]*src=&quot;)[^&quot;]*(&quot;(?=[^&gt;]*data-id=&quot;' . preg_quote($id, '/') . '&quot;)[^&gt;]*&gt;)/i',
+                                            ];
 
-                                            $html = preg_replace($pattern, '$1' . addcslashes($url, '&amp;') . '$2', $html) ?? $html;
+                                            foreach ($patterns as $pattern) {
+                                                $html = preg_replace($pattern, '$1' . $url . '$2', $html) ?? $html;
+                                            }
                                         }
                                     }
 
@@ -109,7 +118,7 @@ class PageForm
                                 ->fileAttachmentsDirectory('clinic-forms/content')
                                 ->fileAttachmentsVisibility('public')
                                 ->fileAttachmentsAcceptedFileTypes(['image/png','image/jpeg','image/gif','image/webp'])
-                                ->fileAttachmentsMaxSize(12 * 1024)
+                                ->fileAttachmentsMaxSize(5120)
                                 ->toolbarButtons([
                                     ['bold', 'italic', 'underline', 'strike', 'subscript', 'superscript'],
                                     ['h2', 'h3', 'alignStart', 'alignCenter', 'alignEnd'],
@@ -119,14 +128,6 @@ class PageForm
                                 ])
                                 ->placeholder('Edit visually — this will live-update the HTML field below.');
                         })(),
-
-                        Textarea::make('content')
-                            ->label('Page HTML')
-                            ->rows(24)
-                            ->default(fn (?Page $record) => is_string($record?->content) ? $record->content : '')
-                            ->dehydrated(true)
-                            ->columnSpanFull()
-                            ->helperText('This saves directly to pages.content. Paste your full HTML here.'),
 
                         FileUpload::make('gallery')
                             ->label('Gallery images')
