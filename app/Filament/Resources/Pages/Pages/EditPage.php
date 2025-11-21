@@ -36,7 +36,24 @@ class EditPage extends EditRecord
 
     protected function mutateFormDataBeforeSave(array $data): array
     {
-        // Let the form (including the RichEditor bound to `content`) control what is saved
+        // Read full Livewire form state (includes non-dehydrated fields like edit_mode, content_rich)
+        $state = method_exists($this, 'getForm') && $this->getForm()
+            ? $this->getForm()->getState()
+            : (property_exists($this, 'form') && $this->form ? $this->form->getState() : []);
+
+        // Normalise rich editor value into a string
+        $rich = $state['content_rich'] ?? '';
+        if (is_array($rich)) {
+            $rich = $rich['html'] ?? $rich['content'] ?? '';
+        }
+        $rich = is_string($rich) ? $rich : (string) $rich;
+
+        // If the rich editor has meaningful HTML, prefer it for `content`
+        $trimmed = trim($rich);
+        if ($trimmed !== '' && $trimmed !== '<p></p>' && strlen($trimmed) > 5) {
+            $data['content'] = $rich;
+        }
+
         return $data;
     }
 }
