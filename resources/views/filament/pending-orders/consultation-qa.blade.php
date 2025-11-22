@@ -23,24 +23,10 @@
     // Normalise stdClass | array | JSON string into a plain array so data_get works
     $meta    = $arr($recMeta);
 
-    // Hard lock to meta.assessment.answers if present
+    // Initialise QA holders without assuming assessment
     $qa = [];
     $qaSource = '';
-    $qaKeyUsed = 'assessment';
-    $aa = data_get($meta, 'assessment.answers');
-
-    if ($aa instanceof \stdClass) { $aa = json_decode(json_encode($aa), true) ?: []; }
-    if (is_string($aa)) {
-        $tmp = json_decode($aa, true);
-        if (json_last_error() === JSON_ERROR_NONE) $aa = $tmp;
-    }
-
-    if (is_array($aa) && !empty($aa)) {
-        foreach ($aa as $k => $v) {
-            $qa[] = ['key' => (string) $k, 'question' => \Illuminate\Support\Str::headline((string) $k), 'answer' => $v];
-        }
-        $qaSource = 'meta.assessment.answers';
-    }
+    $qaKeyUsed = '';
 
     // Keep these for the probe and later pretty printing only
     $stateArr = $arr($state ?? []);
@@ -141,11 +127,25 @@
         }
     }
 
-    // 2) meta assessment.answers or answers
+    // 2) meta assessment.answers or answers (now also supports reorder.*)
     if (empty($qa)) {
-        $aa = data_get($meta, 'assessment.answers')
-            ?? data_get($meta, 'assessment_answers')
-            ?? data_get($meta, 'answers');
+        $aa = null;
+        $aaPath = null;
+
+        foreach ([
+            // prefer reorder first
+            'reorder.answers',
+            'reorder_answers',
+            'reorder.qa',
+            // then assessment
+            'assessment.answers',
+            'assessment_answers',
+            // finally any generic answers map
+            'answers',
+        ] as $p) {
+            $v = data_get($meta, $p);
+            if (!empty($v)) { $aa = $v; $aaPath = $p; break; }
+        }
 
         // Coerce stdClass or JSON string into array
         if ($aa instanceof \stdClass) {
@@ -158,11 +158,25 @@
         }
 
         if (is_array($aa) && !empty($aa)) {
-            foreach ($aa as $k => $v) {
-                $lbl = \Illuminate\Support\Str::headline((string) $k);
-                $qa[] = ['key' => (string) $k, 'question' => $lbl, 'answer' => $v];
+            // Flat map  key => value
+            if (Arr::isAssoc($aa) && !isset($aa[0])) {
+                foreach ($aa as $k => $v) {
+                    $lbl = \Illuminate\Support\Str::headline((string) $k);
+                    $qa[] = ['key' => (string) $k, 'question' => $lbl, 'answer' => $v];
+                }
+            } else {
+                // Already rows
+                $qa = array_values($aa);
             }
-            $qaSource = 'meta.assessment.answers|answers';
+
+            $qaSource = 'meta.' . ($aaPath ?: 'answers');
+
+            // Mark source so we pick the right schema later
+            if ($aaPath && str_starts_with($aaPath, 'reorder')) {
+                $qaKeyUsed = 'reorder';
+            } else {
+                $qaKeyUsed = 'assessment';
+            }
         }
     }
 
@@ -307,7 +321,12 @@
         if (!empty($foundRows)) {
             $qa = $foundRows;
             $qaSource = 'meta.deep';
-            $qaKeyUsed = 'assessment';
+            // Prefer reorder schema if meta contains a reorder node
+            if (isset($meta['reorder']) || data_get($meta, 'reorder')) {
+                $qaKeyUsed = 'reorder';
+            } else {
+                $qaKeyUsed = 'assessment';
+            }
         }
     }
 
@@ -331,12 +350,23 @@
         $assessmentAnswers = [];
     }
 
-    // 2) Fetch the exact RAF schema from API using service slug
-    $serviceSlug = data_get($meta, 'service_slug') ?: data_get($meta, 'consultation.service_slug');
-    $apiBase = config('services.pharmacy_api.base')
+    // Try multiple places for the service slug so we can fetch the correct schema in production too
+    $serviceSlug = data_get($meta, 'service_slug')
+        ?: data_get($meta, 'consultation.service_slug')
+        ?: (isset($record) ? ($record->service_slug ?? null) : null)
+        ?: (isset($record) ? data_get($record, 'service.slug') : null)
+        ?: (isset($record) ? data_get($record, 'order.service_slug') : null)
+        ?: (isset($record) ? data_get($record, 'meta.consultation.slug') : null);
+
+    // Normalise API base so we call .../api/services/{slug}/forms exactly once
+    $rawApi = config('services.pharmacy_api.base')
         ?? env('API_BASE')
         ?? env('NEXT_PUBLIC_API_BASE')
         ?? config('app.url');
+
+    $rawApi = rtrim((string) $rawApi, '/');
+    // If someone already gave us .../api, keep it, otherwise append it
+    $apiBase = (str_ends_with($rawApi, '/api')) ? $rawApi : ($rawApi . '/api');
 
     $rafSchema = [];
     $assessmentSchema = [];
@@ -344,25 +374,34 @@
     $activeSchema = [];
     if ($serviceSlug) {
         try {
-            $resp = Http::timeout(3)
+            $resp = Http::timeout(8)
                 ->acceptJson()
-                ->get(rtrim($apiBase, '/')."/api/services/{$serviceSlug}/forms");
+                ->get($apiBase . "/services/{$serviceSlug}/forms");
 
             if ($resp->ok()) {
                 $json = $resp->json();
 
-                $rafSchema = $arr(data_get($json, 'raf_form.schema') ?? data_get($json, 'raf.schema') ?? []);
+                $rafSchema = $arr(
+                    data_get($json, 'raf_form.schema')
+                    ?? data_get($json, 'raf.schema')
+                    ?? []
+                );
+
                 $reorderSchema = $arr(
                     data_get($json, 'reorder_form.schema')
                     ?? data_get($json, 'reorder.schema')
+                    // common typo safeguard
+                    ?? data_get($json, 'rerorder.schema')
                     ?? []
                 );
 
                 $assessmentSchema = $arr(
                     // primary ClinicFormForm assessment schema
                     data_get($json, 'assessment_form.schema')
-                    // legacy secondary copy stored as schema3
+                    // legacy copy stored as schema3
                     ?? data_get($json, 'assessment_form.schema3')
+                    // sometimes exposed under nested consultation key
+                    ?? data_get($json, 'consultation.assessment_form.schema')
                     // legacy flat assessment schema
                     ?? data_get($json, 'assessment.schema')
                     // risk assessment variants
@@ -379,31 +418,129 @@
 
     // Fallbacks from stored meta if API returned none
     if (empty($assessmentSchema)) {
-        $tmp = $arr(data_get($formsQA, 'assessment.schema') ?? data_get($formsQA, 'risk_assessment.schema') ?? null);
+        $tmp = $arr(
+            data_get($formsQA, 'assessment.schema')
+            ?? data_get($formsQA, 'assessment_form.schema')
+            ?? data_get($formsQA, 'consultation.assessment_form.schema')
+            ?? data_get($formsQA, 'risk_assessment.schema')
+        );
         if (!empty($tmp)) {
             $assessmentSchema = $tmp;
         }
     }
 
     if (empty($rafSchema)) {
-        $tmp = $arr(data_get($formsQA, 'raf.schema') ?? null);
+        $tmp = $arr(
+            data_get($formsQA, 'raf.schema')
+            ?? data_get($formsQA, 'raf_form.schema')
+        );
         if (!empty($tmp)) {
             $rafSchema = $tmp;
         }
     }
+
     if (empty($reorderSchema)) {
-        $tmp = $arr(data_get($formsQA, 'rerorder.schema') ?? null);
+        $tmp = $arr(
+            data_get($formsQA, 'reorder.schema')
+            ?? data_get($formsQA, 'reorder_form.schema')
+            // tolerate the historical misspelling
+            ?? data_get($formsQA, 'rerorder.schema')
+        );
         if (!empty($tmp)) {
             $reorderSchema = $tmp;
         }
     }
 
+    // Default pick based on detected qaKeyUsed
     if (in_array($qaKeyUsed, ['assessment','risk_assessment'], true)) {
         $activeSchema = $assessmentSchema ?: $rafSchema;
     } elseif ($qaKeyUsed === 'reorder') {
         $activeSchema = $reorderSchema ?: $rafSchema;
     } else {
-        $activeSchema = $rafSchema;
+        $activeSchema = $rafSchema ?: $assessmentSchema ?: $reorderSchema;
+    }
+
+    // Heuristic override: score schemas by overlap with QA keys/labels and pick the best match.
+    // This fixes cases where Reorder answers were stored under assessment.answers.
+    $slug = function ($s) {
+        if ($s === true) return 'true';
+        if ($s === false) return 'false';
+        $s = is_scalar($s) ? (string) $s : '';
+        $s = strtolower(trim($s));
+        $s = preg_replace('/[^a-z0-9]+/', '-', $s);
+        return trim($s, '-');
+    };
+
+    $schemaTokenSet = function ($schema) use ($slug) {
+        if (!is_array($schema) || empty($schema)) return [];
+        $tokens = [];
+        $containerTypes = ['section','group','row','column','columns','grid','card','fieldset','legend','container','heading','title','subtitle','paragraph','description','html','info','note','div'];
+        $walk = function ($node) use (&$walk, &$tokens, $slug, $containerTypes) {
+            if ($node instanceof \stdClass) $node = (array) $node;
+            if (!is_array($node)) return;
+            $type = strtolower((string) (\Illuminate\Support\Arr::get($node, 'type', '') ?? ''));
+            $key   = \Illuminate\Support\Arr::get($node, 'name')
+                    ?? \Illuminate\Support\Arr::get($node, 'key')
+                    ?? \Illuminate\Support\Arr::get($node, 'data.key');
+            $label = \Illuminate\Support\Arr::get($node, 'data.label') ?? \Illuminate\Support\Arr::get($node, 'label');
+
+            if (!in_array($type, $containerTypes, true)) {
+                if ($key)   $tokens[$slug($key)] = true;
+                if ($label) $tokens[$slug(strip_tags((string) $label))] = true;
+            }
+
+            foreach ($node as $child) {
+                if (is_array($child) || $child instanceof \stdClass) $walk($child);
+            }
+        };
+        foreach ((array) $schema as $n) { $walk($n); }
+        return array_keys($tokens);
+    };
+
+    $qaTokenSet = function ($qaRows) use ($slug) {
+        $tokens = [];
+        foreach ((array) $qaRows as $idx => $row) {
+            if (!is_array($row)) continue;
+            $k = $row['key'] ?? ($row['question'] ?? 'q_'.$idx);
+            $q = $row['question'] ?? null;
+            if ($k) $tokens[$slug($k)] = true;
+            if ($q) $tokens[$slug($q)] = true;
+        }
+        return array_keys($tokens);
+    };
+
+    $scoreOverlap = function ($a, $b) {
+        if (empty($a) || empty($b)) return 0;
+        $setB = array_flip($b);
+        $hits = 0;
+        foreach ($a as $t) { if (isset($setB[$t])) $hits++; }
+        return $hits;
+    };
+
+    $qaTokens   = $qaTokenSet($qa);
+    $scReorder  = $scoreOverlap($schemaTokenSet($reorderSchema), $qaTokens);
+    $scAssess   = $scoreOverlap($schemaTokenSet($assessmentSchema), $qaTokens);
+    $scRaf      = $scoreOverlap($schemaTokenSet($rafSchema), $qaTokens);
+
+    // Choose the schema with highest score when it clearly matches better
+    $best = 'current';
+    $bestScore = -1;
+    $scores = ['reorder' => $scReorder, 'assessment' => $scAssess, 'raf' => $scRaf];
+    foreach ($scores as $kind => $sc) {
+        if ($sc > $bestScore) { $bestScore = $sc; $best = $kind; }
+    }
+
+    if ($bestScore > 0) {
+        if ($best === 'reorder' && !empty($reorderSchema)) {
+            $activeSchema = $reorderSchema;
+            $qaKeyUsed = 'reorder';
+        } elseif ($best === 'assessment' && !empty($assessmentSchema)) {
+            $activeSchema = $assessmentSchema;
+            $qaKeyUsed = 'assessment';
+        } elseif ($best === 'raf' && !empty($rafSchema)) {
+            $activeSchema = $rafSchema;
+            // keep qaKeyUsed as-is for RAF style
+        }
     }
 
     // 3) Flatten ONLY real input fields (skip containers) and preserve order
@@ -415,7 +552,9 @@
     ];
     $inputTypes = [
         'select','text','textarea','date','datepicker','radio','checkbox','switch','toggle',
-        'file','image','upload','multi-select','multiselect','email','number','tel','url','country','time','datetime','yesno'
+        'file','image','upload','multi-select','multiselect','email','number','tel','url','country','time','datetime','yesno',
+        // extra aliases seen in some exported schemas
+        'richtext','rich_text','editor','signature'
     ];
 
     $currentHeading = null;
@@ -555,6 +694,16 @@
         }
     }
 
+    // Also map sequential q_N keys to headlines so production never shows raw keys
+    if (!empty($qa)) {
+        foreach ($qa as $idx => $__row) {
+            $k = (string) (\Illuminate\Support\Arr::get($__row, 'key') ?? 'q_'.$idx);
+            if (preg_match('/^q_\\d+$/', $k) && !isset($labels[$k])) {
+                $labels[$k] = \Illuminate\Support\Str::headline($k);
+            }
+        }
+    }
+
     // Build a fallback lookup from field label -> section, in case QA rows don't carry keys
     $sectionsByLabel = [];
     foreach ($inputNodes as $field) {
@@ -591,7 +740,7 @@
     }
 
     // Precompute groups for assessment-style rendering to avoid Tailwind dependence
-    $isAssessment = in_array($qaKeyUsed, ['assessment', 'risk_assessment'], true);
+    $isAssessment = false;
 
     $grouped = [];
     $sectionOrder = [];
