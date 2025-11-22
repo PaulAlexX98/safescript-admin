@@ -1060,113 +1060,84 @@
     @if (empty($qa))
         <div class="text-gray-400">No answers captured</div>
     @else
-        @if ($isAssessment)
-            <style>
-              .pe-assess { border:1px solid #e5e7eb; border-radius:10px; background:#fff; }
-              .pe-assess__sec { padding:14px 18px; border-bottom:1px solid #f1f5f9; }
-              .pe-assess__sec:last-child { border-bottom:0; }
-              .pe-assess__title { margin:0 0 10px; font:600 14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; color:#0f172a; }
-              .pe-assess dl { display:grid; grid-template-columns: 1fr 1.5fr; gap:6px 16px; font-size:14px; }
-              .pe-assess dt { color:#6b7280; }
-              .pe-assess dd { color:#111827; margin:0; }
-            </style>
-            <div class="pe-assess">
-                @foreach ($sectionOrder as $__secTitle)
-                    @php $items = $grouped[$__secTitle] ?? []; @endphp
-                    @if (!empty($items))
-                        <div class="pe-assess__sec">
-                            @if ($__secTitle !== 'General')
-                                <h3 class="pe-assess__title">{{ $__secTitle }}</h3>
-                                <div style="height:1px;background:#f1f5f9;margin:8px 0 6px;"></div>
-                            @endif
-                            <dl>
-                                @foreach ($items as $__row)
-                                    <dt>{{ $__row['label'] }}</dt>
-                                    <dd>{!! $pretty($__row['key'], $__row['answer']) !!}</dd>
-                                @endforeach
-                            </dl>
-                        </div>
-                    @endif
-                @endforeach
-            </div>
-        @else
-            <style>
-              .pe-qa { border:1px solid #2d2d31; border-radius:10px; background:transparent; }
-              .pe-qa__sep { height:1px; background:#2d2d31; }
-              .pe-qa__title { padding:8px 14px; font-weight:600; color:#e5e7eb; }
-              .pe-qa__row { display:grid; grid-template-columns: minmax(160px, 280px) 1fr; gap:8px 18px; padding:12px 16px; }
-              .pe-qa dt { color:#9ca3af; margin:0; }
-              .pe-qa dd { color:#e5e7eb; margin:0; word-break:break-word; }
-            </style>
+        <style>
+          .pe-qa { border:1px solid #2d2d31; border-radius:10px; background:transparent; }
+          .pe-qa__sep { height:1px; background:#2d2d31; }
+          .pe-qa__title { padding:8px 14px; font-weight:600; color:#e5e7eb; }
+          .pe-qa__row { display:grid; grid-template-columns: minmax(160px, 280px) 1fr; gap:8px 18px; padding:12px 16px; }
+          .pe-qa dt { color:#9ca3af; margin:0; }
+          .pe-qa dd { color:#e5e7eb; margin:0; word-break:break-word; }
+        </style>
 
-            <div class="pe-qa">
-                @php $__prevSection = null; @endphp
-                @foreach ($qa as $row)
-                    @php
-                        $key = $row['key'] ?? ($row['question'] ?? 'q_'.$loop->index);
-                        $placeholder = function ($s) {
-                            return is_string($s) && preg_match('/^\s*Question\s+\d+\s*$/i', $s);
-                        };
-                        if (isset($row['label']) && is_string($row['label']) && trim($row['label']) !== '' && ! $placeholder($row['label'])) {
-                            $label = (string) $row['label'];
-                        } elseif (isset($labels[$key])) {
-                            $label = $labels[$key];
-                        } elseif (preg_match('/^q_(\\d+)$/', (string) $key, $m) && isset($labels['q_'.$m[1]])) {
-                            $label = $labels['q_'.$m[1]];
-                        } elseif (isset($row['question']) && is_string($row['question']) && trim($row['question']) !== '' && ! $placeholder($row['question'])) {
-                            $label = (string) $row['question'];
-                        } else {
-                            $savedQ = (string) ($row['question'] ?? '');
-                            $label = preg_match('/^Question\s+\d+$/i', $savedQ)
-                                ? ucwords(str_replace(['_', '-'], ' ', (string) $key))
-                                : ($savedQ ?: ucwords(str_replace(['_', '-'], ' ', (string) $key)));
+        <div class="pe-qa">
+            @php $__prevSection = null; @endphp
+            @foreach ($qa as $row)
+                @php
+                    $key = $row['key'] ?? ($row['question'] ?? 'q_'.$loop->index);
+                    $placeholder = function ($s) {
+                        return is_string($s) && preg_match('/^\s*Question\s+\d+\s*$/i', $s);
+                    };
+                    if (isset($row['label']) && is_string($row['label']) && trim($row['label']) !== '' && ! $placeholder($row['label'])) {
+                        $label = (string) $row['label'];
+                    } elseif (isset($labels[$key])) {
+                        $label = $labels[$key];
+                    } elseif (preg_match('/^q_(\\d+)$/', (string) $key, $m) && isset($labels['q_'.$m[1]])) {
+                        $label = $labels['q_'.$m[1]];
+                    } elseif (isset($row['question']) && is_string($row['question']) && trim($row['question']) !== '' && ! $placeholder($row['question'])) {
+                        $label = (string) $row['question'];
+                    } else {
+                        $savedQ = (string) ($row['question'] ?? '');
+                        $label = preg_match('/^Question\s+\d+$/i', $savedQ)
+                            ? ucwords(str_replace(['_', '-'], ' ', (string) $key))
+                            : ($savedQ ?: ucwords(str_replace(['_', '-'], ' ', (string) $key)));
+                    }
+
+                    // Slug based override to handle underscore vs hyphen and similar key differences
+                    if (!empty($labelsBySlug ?? [])) {
+                        $keySlug = \Illuminate\Support\Str::slug((string) $key);
+                        $qSlug   = isset($row['question']) ? \Illuminate\Support\Str::slug((string) $row['question']) : null;
+
+                        if ($keySlug !== '' && isset($labelsBySlug[$keySlug])) {
+                            $label = $labelsBySlug[$keySlug];
+                        } elseif ($qSlug !== null && $qSlug !== '' && isset($labelsBySlug[$qSlug])) {
+                            $label = $labelsBySlug[$qSlug];
                         }
+                    }
 
-                        // Slug based override to handle underscore vs hyphen and similar key differences
-                        if (!empty($labelsBySlug ?? [])) {
-                            $keySlug = \Illuminate\Support\Str::slug((string) $key);
-                            $qSlug   = isset($row['question']) ? \Illuminate\Support\Str::slug((string) $row['question']) : null;
+                    $answer = array_key_exists('raw', $row) && $row['raw'] !== null && $row['raw'] !== ''
+                        ? $row['raw']
+                        : ($row['answer'] ?? null);
+                @endphp
 
-                            if ($keySlug !== '' && isset($labelsBySlug[$keySlug])) {
-                                $label = $labelsBySlug[$keySlug];
-                            } elseif ($qSlug !== null && $qSlug !== '' && isset($labelsBySlug[$qSlug])) {
-                                $label = $labelsBySlug[$qSlug];
-                            }
+                @php
+                    $sectionName = null;
+                    if (isset($sections[$key])) {
+                        $sectionName = $sections[$key];
+                    } elseif (preg_match('/^q_(\\d+)$/', (string) $key, $m) && isset($sections['q_'.$m[1]])) {
+                        $sectionName = $sections['q_'.$m[1]];
+                    }
+                    if (!$sectionName && is_string($label) && $label !== '') {
+                        $norm = strtolower(trim(preg_replace('/\\s+/', ' ', strip_tags($label))));
+                        if ($norm !== '' && isset($sectionsByLabel[$norm])) {
+                            $sectionName = $sectionsByLabel[$norm];
                         }
+                    }
+                    // Pretty section title always  convert slugs like about-you to About You
+                    $sectionTitlePretty = $sectionName ? ucwords(str_replace(['_', '-'], ' ', strip_tags($sectionName))) : null;
+                @endphp
 
-                        $answer = array_key_exists('raw', $row) && $row['raw'] !== null && $row['raw'] !== ''
-                            ? $row['raw']
-                            : ($row['answer'] ?? null);
-                    @endphp
+                @if ($sectionTitlePretty && $sectionTitlePretty !== $__prevSection)
+                    <div class="pe-qa__sep"></div>
+                    <div class="pe-qa__title">{{ $sectionTitlePretty }}</div>
+                    <div class="pe-qa__sep"></div>
+                    @php $__prevSection = $sectionTitlePretty; @endphp
+                @endif
 
-                    @php
-                        $sectionName = null;
-                        if (isset($sections[$key])) {
-                            $sectionName = $sections[$key];
-                        } elseif (preg_match('/^q_(\\d+)$/', (string) $key, $m) && isset($sections['q_'.$m[1]])) {
-                            $sectionName = $sections['q_'.$m[1]];
-                        }
-                        if (!$sectionName && is_string($label) && $label !== '') {
-                            $norm = strtolower(trim(preg_replace('/\\s+/', ' ', strip_tags($label))));
-                            if ($norm !== '' && isset($sectionsByLabel[$norm])) {
-                                $sectionName = $sectionsByLabel[$norm];
-                            }
-                        }
-                    @endphp
-
-                    @if ($sectionName && $sectionName !== $__prevSection)
-                        <div class="pe-qa__sep"></div>
-                        <div class="pe-qa__title">{{ $sectionName }}</div>
-                        <div class="pe-qa__sep"></div>
-                        @php $__prevSection = $sectionName; @endphp
-                    @endif
-
-                    <dl class="pe-qa__row">
-                        <dt>{{ $label }}</dt>
-                        <dd>{!! $pretty($key, $answer) !!}</dd>
-                    </dl>
-                @endforeach
-            </div>
-        @endif
+                <dl class="pe-qa__row">
+                    <dt>{{ $label }}</dt>
+                    <dd>{!! $pretty($key, $answer) !!}</dd>
+                </dl>
+            @endforeach
+        </div>
     @endif
 </div>
