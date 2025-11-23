@@ -1,19 +1,93 @@
-
-
-{{-- resources/views/consultations/pharmacist-advice.blade.php --}}
-{{-- Fresh service-first Pharmacist Advice page that renders the ClinicForm schema assigned to the service --}}
+{{-- resources/views/consultations/pharmacist-advoce.blade.php --}}
+{{-- Pharmacist Advice page that picks the correct Advice ClinicForm per service and treatment slug, like Record of Supply item prefill --}}
 
 @php
     $sessionLike = $session ?? null;
 
-    // Slug helpers
+    // Safe slug
     $slugify = function ($v) {
-        return $v ? \Illuminate\Support\Str::slug((string) $v) : null;
+        if ($v === true) return 'true';
+        if ($v === false) return 'false';
+        $s = is_scalar($v) ? (string) $v : '';
+        $s = strtolower(trim($s));
+        $s = preg_replace('/[^a-z0-9]+/', '-', $s);
+        return trim($s, '-');
+    };
+
+    // Try to infer treatment slug from many places and capture candidates for debug
+    $treatDebug = [];
+    $inferTreatment = function ($sessionLike) use ($slugify, &$treatDebug) {
+        $treatDebug = [];
+        try {
+            $toArr = function ($v) { if (is_array($v)) return $v; if (is_string($v)) { $d = json_decode($v, true); return is_array($d)?$d:[]; } if ($v instanceof \stdClass) return json_decode(json_encode($v), true) ?: []; return (array) $v; };
+
+            // 1. Direct on session
+            $cands = [
+                $sessionLike->treatment_slug ?? null,
+                $sessionLike->treatment ?? null,
+            ];
+
+            // 2. Attached order models
+            $order = null;
+            try {
+                if (isset($sessionLike->order)) $order = $sessionLike->order;
+                if (!$order && isset($sessionLike->order_id) && class_exists('App\\Models\\ApprovedOrder')) {
+                    $order = \App\Models\ApprovedOrder::find($sessionLike->order_id);
+                }
+                if (!$order && isset($sessionLike->order_id) && class_exists('App\\Models\\Order')) {
+                    $order = \App\Models\Order::find($sessionLike->order_id);
+                }
+            } catch (\Throwable $e) {}
+
+            // 3. Order meta hints
+            $meta = $toArr($order?->meta ?? []);
+            $cands[] = data_get($meta, 'treatment_slug');
+            $cands[] = data_get($meta, 'consultation.treatment_slug');
+            $cands[] = data_get($meta, 'service.treatment_slug');
+
+            // 4. Common product line shapes
+            $lines = $toArr(data_get($meta, 'lines') ?? data_get($meta, 'items') ?? data_get($meta, 'order.items') ?? []);
+            if (empty($lines) && $order && method_exists($order, 'items')) {
+                try { $lines = $toArr($order->items ?? []); } catch (\Throwable $e) {}
+            }
+            if (is_array($lines)) {
+                foreach ($lines as $ln) {
+                    $cands[] = data_get($ln, 'treatment_slug');
+                    $cands[] = data_get($ln, 'slug');
+                    $cands[] = data_get($ln, 'product.slug');
+                    $cands[] = data_get($ln, 'product_slug');
+                    $sku = data_get($ln, 'sku');
+                    if (is_string($sku) && $sku !== '') {
+                        $parts = preg_split('/[^a-z0-9]+/i', strtolower($sku));
+                        $cands[] = $parts[0] ?? null;
+                    }
+                }
+            }
+
+            // 5. Consultation forms hydration
+            $forms = $toArr(data_get($meta, 'forms') ?? data_get($sessionLike, 'meta.forms') ?? []);
+            foreach (['reorder','assessment','raf','advice','pharmacist-advice'] as $k) {
+                $cands[] = data_get($forms, "$k.treatment_slug");
+            }
+
+            // Normalise and save for debug
+            $cands = array_values(array_filter(array_map(function($v){ return is_string($v) ? trim($v) : $v; }, $cands)));
+            $treatDebug = array_values(array_unique(array_filter(array_map($slugify, $cands))));
+
+            foreach ($treatDebug as $slug) {
+                if ($slug !== '') return $slug;
+            }
+        } catch (\Throwable $e) {}
+        return null;
     };
 
     // Resolve service and treatment for matching
     $serviceFor = $slugify($serviceSlugForForm ?? ($sessionLike->service_slug ?? ($sessionLike->service ?? null)));
     $treatFor   = $slugify($treatmentSlugForForm ?? ($sessionLike->treatment_slug ?? ($sessionLike->treatment ?? null)));
+    if (! $treatFor) {
+        $treatFor = $inferTreatment($sessionLike);
+    }
+    $__adviceLookupTried = [];
 
     // Prefer template that StartConsultation placed on the session
     $form = $form ?? null;
@@ -23,16 +97,54 @@
         if ($tpl) {
             if (is_array($tpl)) {
                 $fid = $tpl['id'] ?? $tpl['form_id'] ?? null;
-                if ($fid) { $form = \App\Models\ClinicForm::find($fid); }
+                if ($fid) { $form = \App\Models\ClinicForm::find($fid); if ($form) $__adviceLookupTried[] = 'templates.advice id=' . $form->id; }
             } elseif (is_object($tpl) && ($tpl instanceof \App\Models\ClinicForm)) {
-                $form = $tpl;
+                $form = $tpl; if ($form) $__adviceLookupTried[] = 'templates.advice model id=' . $form->id;
             } elseif (is_numeric($tpl)) {
-                $form = \App\Models\ClinicForm::find((int) $tpl);
+                $form = \App\Models\ClinicForm::find((int) $tpl); if ($form) $__adviceLookupTried[] = 'templates.advice numeric id=' . $form->id;
             }
         }
     }
 
-    // Fallbacks by service and treatment
+    // If a more specific Advice form exists for this service+treatment, prefer it over a generic template
+    try {
+        $base = fn() => \App\Models\ClinicForm::query()
+            ->where('form_type', 'advice')
+            ->where('is_active', 1)
+            ->orderByDesc('version')->orderByDesc('id');
+
+        $candidate = null;
+        if ($serviceFor && $treatFor) {
+            $candidate = $base()->where('service_slug', $serviceFor)
+                                ->where('treatment_slug', $treatFor)
+                                ->first();
+            if ($candidate) { $__adviceLookupTried[] = 'override match service+treatment id=' . $candidate->id; }
+        }
+
+        if (! $candidate && $serviceFor) {
+            $candidate = $base()->where('service_slug', $serviceFor)
+                                ->where(function ($q) { $q->whereNull('treatment_slug')->orWhere('treatment_slug', ''); })
+                                ->first();
+            if ($candidate) { $__adviceLookupTried[] = 'override match service only id=' . $candidate->id; }
+        }
+
+        if (! $candidate) {
+            $svc = \App\Models\Service::query()->where('slug', $serviceFor)->first();
+            if ($svc && $svc->adviceForm) {
+                $candidate = $svc->adviceForm;
+                if ($candidate) { $__adviceLookupTried[] = 'override service.adviceForm id=' . $candidate->id; }
+            }
+        }
+
+        if ($candidate && (!isset($form) || ($candidate->id !== ($form->id ?? null)))) {
+            $form = $candidate;
+            $__adviceLookupTried[] = 'using candidate override';
+        }
+    } catch (\Throwable $e) {
+        // no-op
+    }
+
+    // Fallbacks by service and treatment using form_type advice
     if (! $form) {
         $base = fn() => \App\Models\ClinicForm::query()
             ->where('form_type', 'advice')
@@ -41,21 +153,24 @@
 
         if ($serviceFor && $treatFor) {
             $form = $base()->where('service_slug', $serviceFor)
-                          ->where('treatment_slug', $treatFor)->first();
+                           ->where('treatment_slug', $treatFor)->first();
+            if ($form) $__adviceLookupTried[] = "match service+treatment";
         }
         if (! $form && $serviceFor) {
             $form = $base()->where('service_slug', $serviceFor)
                            ->where(function ($q) { $q->whereNull('treatment_slug')->orWhere('treatment_slug', ''); })
                            ->first();
+            if ($form) $__adviceLookupTried[] = "match service only";
         }
         if (! $form && $serviceFor) {
             $svc = \App\Models\Service::query()->where('slug', $serviceFor)->first();
-            if ($svc && $svc->adviceForm) $form = $svc->adviceForm;
+            if ($svc && $svc->adviceForm) { $form = $svc->adviceForm; if ($form) $__adviceLookupTried[] = "service.adviceForm"; }
         }
         if (! $form) {
             $form = $base()->where(function ($q) { $q->whereNull('service_slug')->orWhere('service_slug', ''); })
                            ->where(function ($q) { $q->whereNull('treatment_slug')->orWhere('treatment_slug', ''); })
                            ->first();
+            if ($form) $__adviceLookupTried[] = "global fallback";
         }
     }
 
@@ -70,10 +185,8 @@
     $sections = [];
     if (is_array($schema) && !empty($schema)) {
         if (array_key_exists('fields', $schema[0] ?? [])) {
-            // Already section format
             $sections = $schema;
         } else {
-            // Builder blocks format: turn into sections
             $current = ['title' => null, 'summary' => null, 'fields' => []];
             foreach ($schema as $blk) {
                 $type = $blk['type'] ?? null;
@@ -97,12 +210,10 @@
         }
     }
 
-    // Step slug for THIS page (used for hydration fallbacks)
+    // Answers loader to prefill
     $stepSlug = 'pharmacist-advice';
-
-    // Generic loader: resolves answers by clinic_form_id -> form_type/step_slug -> session.meta
     $loadAnswers = function ($sessionLike, $form, $stepSlug) {
-        $toArr = function ($v) { if (is_array($v)) return $v; if (is_string($v)) { $d = json_decode($v, true); return is_array($d) ? $d : []; } return (array) $v; };
+        $toArr = function ($v) { if (is_array($v)) return $v; if (is_string($v)) { $d = json_decode($v, true); return is_array($d) ? $d : []; } if ($v instanceof \stdClass) return json_decode(json_encode($v), true) ?: []; return (array) $v; };
         $slug  = fn($s) => \Illuminate\Support\Str::slug((string)$s);
         $aliases = array_values(array_unique([
             (string)$stepSlug,
@@ -110,13 +221,10 @@
             str_replace('-','_',(string)$stepSlug),
             $form->form_type ?? null,
             $slug($form->form_type ?? ''),
-            'advice', // primary type for this blade
+            'advice',
             'pharmacist-advice',
-            // common fallbacks used elsewhere
-            'raf','risk','assessment','reorder','pharmacist-declaration','record-of-supply'
         ]));
 
-        // 1) DB: by clinic_form_id, then by aliases (form_type/step_slug/title)
         $answers = [];
         try {
             $q = \App\Models\ConsultationFormResponse::query()
@@ -153,7 +261,7 @@
             }
         } catch (\Throwable $e) {}
 
-        // 2) Session meta fallbacks
+        // Session meta fallbacks
         if (empty($answers) && isset($sessionLike->meta)) {
             $meta = $toArr($sessionLike->meta ?? []);
             foreach ($aliases as $a) {
@@ -165,7 +273,7 @@
             if (isset($answers['answers']) && is_array($answers['answers'])) $answers = $answers['answers'];
         }
 
-        // 3) Normalise list-of-rows -> map
+        // Normalise list-of-rows -> map
         if (is_array($answers) && array_keys($answers) === range(0, count($answers)-1)) {
             $map = [];
             foreach ($answers as $row) {
@@ -177,7 +285,7 @@
             if (!empty($map)) $answers = $map;
         }
 
-        // 4) Flatten nested transport shapes like { raw, value, answer }
+        // Flatten nested
         $flat = [];
         foreach ((array)$answers as $k => $v) {
             if (is_array($v) && \Illuminate\Support\Arr::isAssoc($v)) {
@@ -190,10 +298,9 @@
         return $flat;
     };
 
-    // Final: old data for this blade
     $oldData = $loadAnswers($sessionLike ?? $session, $form ?? null, $stepSlug);
 
-    // Helper to normalise options
+    // Options helper
     $normaliseOptions = function ($raw) {
         $out = [];
         foreach ((array) $raw as $idx => $opt) {
@@ -209,6 +316,23 @@
         return $out;
     };
 @endphp
+
+@if (request()->boolean('debug'))
+    <div style="margin:16px 0;padding:10px 12px;border:1px dashed rgba(255,255,255,.35);border-radius:10px;font-size:12px">
+        <div>debug step pharmacist-advice</div>
+        <div>service {{ $serviceFor ?? 'n/a' }} treatment {{ $treatFor ?? 'n/a' }}</div>
+        <div>treatment candidates {{ implode(', ', $treatDebug ?? []) }}</div>
+        @if ($form)
+            <div>form id {{ $form->id }} type {{ $form->form_type ?? 'n/a' }} name {{ $form->name ?? 'n/a' }}</div>
+            <div>form service {{ $form->service_slug ?? 'n/a' }} treatment {{ $form->treatment_slug ?? 'n/a' }} version {{ $form->version ?? 'n/a' }}</div>
+            <div>schema sections {{ count($sections ?? []) }}</div>
+            <div>lookup path {{ implode(' -> ', $__adviceLookupTried ?? []) }}</div>
+        @else
+            <div>form not found</div>
+            <div>lookup path {{ implode(' -> ', $__adviceLookupTried ?? []) }}</div>
+        @endif
+    </div>
+@endif
 
 @once
     <style>
@@ -278,17 +402,14 @@
                             $ph    = $field['placeholder'] ?? null;
                             $isMultiple = (bool) ($field['multiple'] ?? false);
 
-                            // Prefill value with array support for multi-select
                             if ($type === 'select' && $isMultiple) {
                                 $val = old($name, (array) ($oldData[$name] ?? []));
                             } elseif ($type === 'checkbox') {
-                                // Default checkboxes to checked unless a previous value exists (preserves saved "0"/unchecked)
                                 $val = old($name, array_key_exists($name, (array) $oldData) ? $oldData[$name] : 1);
                             } else {
                                 $val = old($name, $oldData[$name] ?? '');
                             }
 
-                            // Conditional visibility support from schema
                             $showIf = $field['showIf'] ?? ($field['show_if'] ?? null);
                             $isHidden = (bool) ($field['hidden'] ?? false);
                             $isDisabled = (bool) ($field['disabled'] ?? false);
@@ -302,7 +423,6 @@
                                     'not'    => $showIf['notEquals'] ?? ($showIf['not'] ?? null),
                                     'truthy' => !empty($showIf['truthy']) ? true : null,
                                 ];
-                                // prune nulls
                                 $cond = array_filter($cond, fn($v) => !is_null($v) && $v !== '');
                                 if (empty($cond['field'] ?? null)) { $cond = null; }
                             }
@@ -322,7 +442,6 @@
                             @php
                                 $html  = (string) ($field['content'] ?? '');
                                 $align = (string) ($field['align'] ?? 'left');
-                                $alignClass = $align === 'center' ? 'text-center' : ($align === 'right' ? 'text-right' : 'text-left');
                                 $hasHtml = (bool) preg_match('/<\w+[^>]*>/', $html ?? '');
                             @endphp
                             @if (trim(strip_tags($html)) !== '')
@@ -369,7 +488,7 @@
                                     @foreach($normaliseOptions($field['options'] ?? []) as $idx => $op)
                                         @php $rid = $name.'_'.$idx; @endphp
                                         <label for="{{ $rid }}" class="p-2 inline-flex items-center gap-2 text-sm text-gray-200">
-                                            <input type="radio" id="{{ $rid }}" name="{{ $name }}" value="{{ $op['value'] }}" class="rounded-full bg-gray-800/70 border-gray-700 focus:ring-amber-500 focus:ring-2" {{ (string)$val === (string)$op['value'] ? 'checked' : '' }} {!! $disabledAttr !!}>
+                                            <input type="radio" id="{{ $rid }}" name="{{ $name }}" value="{{ $op['value'] }}" class="rounded-full bg-gray-800/70 border-gray-700 focus:ring-2" {{ (string)$val === (string)$op['value'] ? 'checked' : '' }} {!! $disabledAttr !!}>
                                             <span>{{ $op['label'] }}</span>
                                         </label>
                                     @endforeach
@@ -389,14 +508,21 @@
                                 @endif
                             </div>
                         @elseif ($type === 'select')
+                            @php $isMultiple = (bool) ($field['multiple'] ?? false); @endphp
                             <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
+                                @php
+                                    $vals = $val;
+                                    if ($isMultiple) {
+                                        $vals = is_array($vals) ? $vals : ($vals!=='' ? array_map('trim', explode(',', (string)$vals)) : []);
+                                    }
+                                @endphp
                                 <select id="{{ $name }}" name="{{ $name }}{{ $isMultiple ? '[]' : '' }}" @if($isMultiple) multiple @endif @if($req) required @endif class="cf-input" {!! $disabledAttr !!}>
                                     @foreach($normaliseOptions($field['options'] ?? []) as $op)
                                         @if($isMultiple)
-                                            <option value="{{ $op['value'] }}" {{ in_array((string)$op['value'], array_map('strval', (array) $val), true) ? 'selected' : '' }}>{{ $op['label'] }}</option>
+                                            <option value="{{ $op['value'] }}" {{ in_array((string)$op['value'], array_map('strval', (array) $vals), true) ? 'selected' : '' }}>{{ $op['label'] }}</option>
                                         @else
                                             <option value="{{ $op['value'] }}" {{ (string)$val === (string)$op['value'] ? 'selected' : '' }}>{{ $op['label'] }}</option>
                                         @endif
@@ -410,7 +536,7 @@
                             <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
                                 <div class="cf-checkbox-row">
                                     <input type="hidden" name="{{ $name }}" value="0">
-                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" value="1" class="rounded-md bg-gray-800/70 border-gray-700 focus:ring-amber-500 focus:ring-2 mt-0.5" {{ ($val === 1 || $val === true || (is_string($val) && in_array(strtolower($val), ['1','on','yes','true','checked','done'], true))) ? 'checked' : '' }} {!! $disabledAttr !!}>
+                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" value="1" class="rounded-md bg-gray-800/70 border-gray-700 focus:ring-2 mt-0.5" {{ ($val === 1 || $val === true || (is_string($val) && in_array(strtolower($val), ['1','on','yes','true','checked','done'], true))) ? 'checked' : '' }} {!! $disabledAttr !!}>
                                     <label for="{{ $name }}" class="text-sm text-gray-200 cursor-pointer select-none leading-6">{{ $label }}</label>
                                 </div>
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
@@ -487,7 +613,6 @@
             if (t && t.type === 'checkbox' && t.id !== '__cf_check_all') syncMaster();
           });
 
-          // initial state
           syncMaster();
         });
         </script>
