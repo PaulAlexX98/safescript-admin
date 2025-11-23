@@ -7,6 +7,7 @@ use Filament\Tables;
 use Filament\Widgets\TableWidget as Base;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\DB;
 
 class DailyRevenueTable extends Base
 {
@@ -52,12 +53,16 @@ class DailyRevenueTable extends Base
                 $q->whereIn('payments.status', ['paid','captured','succeeded','success','completed']);
             }
 
-            return $q
+            $inner = $q
                 ->selectRaw('DATE(payments.created_at) as day')
                 ->selectRaw("$paymentAmountExpr as revenue")
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
                 ->selectRaw('MIN(orders.id) as id')
-                ->groupBy('day')
+                ->groupBy('day');
+
+            return Order::query()->withoutGlobalScopes()
+                ->fromSub($inner, 'orders')
+                ->select('day', 'revenue', 'bookings', 'id')
                 ->reorder()
                 ->orderByDesc('day')
                 ->orderBy('id')
@@ -83,13 +88,17 @@ class DailyRevenueTable extends Base
                 $itemExpr = 'SUM(order_items.price * order_items.quantity)';
             }
 
-            return Order::query()->withoutGlobalScopes()
+            $inner = Order::query()->withoutGlobalScopes()
                 ->leftJoin('order_items', 'order_items.order_id', '=', 'orders.id')
                 ->selectRaw('DATE(orders.created_at) as day')
                 ->selectRaw("$itemExpr as revenue")
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
                 ->selectRaw('MIN(orders.id) as id')
-                ->groupBy('day')
+                ->groupBy('day');
+
+            return Order::query()->withoutGlobalScopes()
+                ->fromSub($inner, 'orders')
+                ->select('day', 'revenue', 'bookings', 'id')
                 ->reorder()
                 ->orderByDesc('day')
                 ->orderBy('id')
@@ -97,12 +106,16 @@ class DailyRevenueTable extends Base
         }
 
         // Default path: sum from orders table
-        return Order::query()->withoutGlobalScopes()
+        $inner = Order::query()->withoutGlobalScopes()
             ->selectRaw('DATE(orders.created_at) as day')
             ->selectRaw("$sumExpr as revenue")
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw('MIN(orders.id) as id')
-            ->groupBy('day')
+            ->groupBy('day');
+
+        return Order::query()->withoutGlobalScopes()
+            ->fromSub($inner, 'orders')
+            ->select('day', 'revenue', 'bookings', 'id')
             ->reorder()
             ->orderByDesc('day')
             ->orderBy('id')
@@ -186,7 +199,7 @@ class DailyRevenueTable extends Base
 
     public function getTableRecordKey(mixed $record): string
     {
-        // use the grouped date as the unique key for the row
+        // use the surrogate id as the unique key for the row if available, else fallback
         return (string) ($record->id ?? $record->day ?? $record->date ?? spl_object_hash($record));
     }
 }
