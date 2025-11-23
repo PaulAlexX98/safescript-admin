@@ -56,8 +56,10 @@ class DailyRevenueTable extends Base
                 ->selectRaw('DATE(payments.created_at) as day')
                 ->selectRaw("$paymentAmountExpr as revenue")
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
+                ->selectRaw('MIN(orders.id) as oid')
                 ->groupBy('day')
                 ->orderByDesc('day')
+                ->orderBy('oid')
                 ->limit(7);
         }
 
@@ -85,8 +87,10 @@ class DailyRevenueTable extends Base
                 ->selectRaw('DATE(orders.created_at) as day')
                 ->selectRaw("$itemExpr as revenue")
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
+                ->selectRaw('MIN(orders.id) as oid')
                 ->groupBy('day')
                 ->orderByDesc('day')
+                ->orderBy('oid')
                 ->limit(7);
         }
 
@@ -95,8 +99,10 @@ class DailyRevenueTable extends Base
             ->selectRaw('DATE(created_at) as day')
             ->selectRaw("$sumExpr as revenue")
             ->selectRaw('COUNT(*) as bookings')
+            ->selectRaw('MIN(orders.id) as oid')
             ->groupBy('day')
             ->orderByDesc('day')
+            ->orderBy('oid')
             ->limit(7);
     }
 
@@ -143,6 +149,11 @@ class DailyRevenueTable extends Base
         // Build SUM(COALESCE(part1, part2, ..., 0))
         $coalesce = 'COALESCE(' . implode(', ', $parts) . ', 0)';
         return 'SUM(' . $coalesce . ')';
+    }
+
+    protected function isTablePaginationEnabled(): bool
+    {
+        return false;
     }
 
     protected function getTableColumns(): array
