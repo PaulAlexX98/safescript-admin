@@ -58,7 +58,6 @@ class DailyRevenueTable extends Base
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
                 ->selectRaw('MIN(orders.id) as oid')
                 ->groupBy('day')
-                ->reorder()
                 ->orderByDesc('day')
                 ->orderBy('oid')
                 ->limit(7);
@@ -90,7 +89,6 @@ class DailyRevenueTable extends Base
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
                 ->selectRaw('MIN(orders.id) as oid')
                 ->groupBy('day')
-                ->reorder()
                 ->orderByDesc('day')
                 ->orderBy('oid')
                 ->limit(7);
@@ -103,7 +101,6 @@ class DailyRevenueTable extends Base
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw('MIN(orders.id) as oid')
             ->groupBy('day')
-            ->reorder()
             ->orderByDesc('day')
             ->orderBy('oid')
             ->limit(7);
