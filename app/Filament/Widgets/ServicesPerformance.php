@@ -106,11 +106,11 @@ class ServicesPerformance extends Base
             ->selectRaw("$serviceExpr as service")
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw("$sumExpr as revenue")
-            ->selectRaw('MIN(orders.id) as id')
+            ->selectRaw('MIN(orders.id) as oid')
             ->groupBy('service')
             ->reorder()
             ->orderByDesc('revenue')
-            ->orderBy('id')
+            ->orderBy('oid')
             ->limit(10);
     }
 
@@ -178,6 +178,6 @@ class ServicesPerformance extends Base
 
     public function getTableRecordKey(mixed $record): string
     {
-        return (string) ($record->service ?? $record->id ?? spl_object_hash($record));
+        return (string) ($record->service ?? $record->oid ?? spl_object_hash($record));
     }
 }
