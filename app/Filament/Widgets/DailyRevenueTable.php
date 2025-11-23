@@ -109,6 +109,16 @@ class DailyRevenueTable extends Base
             ->limit(7);
     }
 
+    protected function getDefaultTableSortColumn(): ?string
+    {
+        return null;
+    }
+
+    protected function getDefaultTableSortDirection(): ?string
+    {
+        return null;
+    }
+
     // choose the right SUM expression based on available columns
     private function sumRevenueExpr(): string
     {
