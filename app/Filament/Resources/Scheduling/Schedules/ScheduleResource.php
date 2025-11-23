@@ -79,6 +79,10 @@ class ScheduleResource extends Resource
             Repeater::make('overrides')
                 ->label('Date overrides (holidays, short days, blackouts)')
                 ->schema([
+                    TextInput::make('service_slug')
+                        ->label('Service slug (optional)')
+                        ->placeholder('weight-management or travel-clinic')
+                        ->helperText('Leave empty to apply this override globally. Fill to restrict the override to one service.'),
                     TextInput::make('date')->placeholder('YYYY-MM-DD')->rule('date')->required(),
                     Toggle::make('open')->label('Open?')->default(true),
                     TextInput::make('start')->label('Start (HH:MM)')->placeholder('10:00'),
