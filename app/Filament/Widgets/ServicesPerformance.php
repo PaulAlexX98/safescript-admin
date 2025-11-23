@@ -16,6 +16,15 @@ use Carbon\Carbon;
 
 class ServicesPerformance extends Base
 {
+    protected function getTableDefaultSortColumn(): ?string
+    {
+        return null;
+    }
+
+    protected function getTableDefaultSortDirection(): ?string
+    {
+        return null;
+    }
     protected static ?int $sort = 100;
     protected int|string|array $columnSpan = 1;
 
