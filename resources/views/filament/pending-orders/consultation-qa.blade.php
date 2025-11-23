@@ -903,7 +903,18 @@
     };
 
     // 5) Pretty printer: decode JSON, show filenames, map options
-    $pretty = function ($key, $val) use ($options, $makePublicUrl, $makePreviewDataUrl) {
+    $pretty = function ($key, $val) use ($options, $makePublicUrl, $makePreviewDataUrl, $slug) {
+        // Enforce required for scale photo style fields
+        $kSlug = is_string($key) ? $slug($key) : '';
+        $isScalePhotoKey = in_array($kSlug, ['scale-photo','scalephoto','scale-image','scale-photo-image'], true);
+        if ($isScalePhotoKey) {
+            $isEmpty = ($val === null) || ($val === '')
+                || (is_array($val) && empty($val))
+                || (is_string($val) && trim($val) === '');
+            if ($isEmpty) {
+                return '<span class="text-red-400">Required photo missing</span>';
+            }
+        }
         $map = $options[$key] ?? [];
 
         // Decode JSON string values
@@ -1104,9 +1115,15 @@
                         }
                     }
 
-                    $answer = array_key_exists('raw', $row) && $row['raw'] !== null && $row['raw'] !== ''
-                        ? $row['raw']
-                        : ($row['answer'] ?? null);
+            $answer = array_key_exists('raw', $row) && $row['raw'] !== null && $row['raw'] !== ''
+                ? $row['raw']
+                : ($row['answer'] ?? null);
+
+            // Detect scale photo field for required marker
+            $keySlugForReq = \Illuminate\Support\Str::slug((string) $key);
+            $labelSlugForReq = is_string($label) ? \Illuminate\Support\Str::slug(strip_tags($label)) : '';
+            $__isScalePhoto = in_array($keySlugForReq, ['scale-photo','scalephoto','scale-image','scale-photo-image'], true)
+                || in_array($labelSlugForReq, ['scale-photo','scalephoto','scale-image','scale-photo-image'], true);
                 @endphp
 
                 @php
@@ -1134,7 +1151,9 @@
                 @endif
 
                 <dl class="pe-qa__row">
-                    <dt>{{ $label }}</dt>
+                    <dt>
+                        {{ $label }}@if($__isScalePhoto) <span class="text-red-400">*</span>@endif
+                    </dt>
                     <dd>{!! $pretty($key, $answer) !!}</dd>
                 </dl>
             @endforeach
