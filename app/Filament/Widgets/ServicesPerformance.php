@@ -95,7 +95,7 @@ class ServicesPerformance extends Base
 
         [$start, $end] = $this->getCurrentRange();
 
-        $query = Order::query();
+        $query = Order::query()->withoutGlobalScopes();
 
         if (Schema::hasColumn('orders', 'created_at') && $start && $end) {
             $query->whereBetween('created_at', [$start, $end]);
@@ -106,11 +106,11 @@ class ServicesPerformance extends Base
             ->selectRaw("$serviceExpr as service")
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw("$sumExpr as revenue")
-            ->selectRaw('MIN(orders.id) as oid')
+            ->selectRaw('MIN(orders.id) as id')
             ->groupBy('service')
             ->reorder()
             ->orderByDesc('revenue')
-            ->orderBy('oid')
+            ->orderBy('id')
             ->limit(10);
     }
 
