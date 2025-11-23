@@ -471,63 +471,6 @@
         return trim($s, '-');
     };
 
-    // Helper to flatten schema and find field meta by slug
-    $schemaFields = function ($schema) {
-        $fields = [];
-        $walk = function ($node) use (&$walk, &$fields) {
-            if ($node instanceof \stdClass) $node = (array) $node;
-            if (!is_array($node)) return;
-            $type = strtolower((string) (\Illuminate\Support\Arr::get($node, 'type', '') ?? ''));
-            // children containers
-            foreach (['schema','components','fields','children'] as $ck) {
-                $maybe = $node[$ck] ?? null;
-                if (is_array($maybe)) {
-                    foreach ($maybe as $child) { if (is_array($child) || $child instanceof \stdClass) $walk($child); }
-                }
-            }
-            // candidate input
-            $key = \Illuminate\Support\Arr::get($node, 'name')
-                ?? \Illuminate\Support\Arr::get($node, 'key')
-                ?? \Illuminate\Support\Arr::get($node, 'data.key');
-            $label = \Illuminate\Support\Arr::get($node, 'data.label') ?? \Illuminate\Support\Arr::get($node, 'label');
-            if ($key || $label) {
-                $fields[] = [
-                    'key' => $key,
-                    'label' => $label,
-                    'required' => (bool) (\Illuminate\Support\Arr::get($node, 'data.required') ?? \Illuminate\Support\Arr::get($node, 'required', false)),
-                ];
-            }
-        };
-        $walk($schema);
-        return $fields;
-    };
-
-    // Detect if a key or label refers to a scale photo field using slug fragments
-    $looksLikeScalePhoto = function ($keyOrLabel) use ($slug) {
-        $s = $slug((string) $keyOrLabel);
-        if ($s === '') return false;
-        // match scale-photo, scale_image, weight-scale, scaleproof, etc
-        return (str_contains($s, 'scale') && (str_contains($s, 'photo') || str_contains($s, 'image') || str_contains($s, 'picture')))
-            || $s === 'scale' || $s === 'weighingscale' || $s === 'scalephoto';
-    };
-
-    // Derive whether the scale-photo is required from schema or meta flags only
-    $scalePhotoIsRequired = false;
-    try {
-        $fields = $schemaFields($activeSchema);
-        foreach ($fields as $f) {
-            if ($looksLikeScalePhoto($f['key'] ?? '') || $looksLikeScalePhoto($f['label'] ?? '')) {
-                if (!empty($f['required'])) { $scalePhotoIsRequired = true; break; }
-            }
-        }
-        if (!$scalePhotoIsRequired) {
-            $flag = data_get($meta, 'require_scale_photo');
-            if ($flag !== null) { $scalePhotoIsRequired = (bool) $flag; }
-        }
-    } catch (\Throwable $e) {
-        // default false
-    }
-
     $schemaTokenSet = function ($schema) use ($slug) {
         if (!is_array($schema) || empty($schema)) return [];
         $tokens = [];
@@ -960,7 +903,7 @@
     };
 
     // 5) Pretty printer: decode JSON, show filenames, map options
-    $pretty = function ($key, $val) use ($options, $makePublicUrl, $makePreviewDataUrl, $looksLikeScalePhoto, $scalePhotoIsRequired) {
+    $pretty = function ($key, $val) use ($options, $makePublicUrl, $makePreviewDataUrl) {
         $map = $options[$key] ?? [];
 
         // Decode JSON string values
@@ -972,14 +915,9 @@
             }
         }
 
-        // Accept either a single file object or a list
+        // Normalise single assoc to list
         if (is_array($val) && \Illuminate\Support\Arr::isAssoc($val)) {
-            // If it looks like a single file object, do not wrap twice later
-            if (isset($val['name']) || isset($val['url']) || isset($val['path'])) {
-                $val = [$val];
-            } else {
-                $val = [$val];
-            }
+            $val = [$val];
         }
 
         if (is_array($val)) {
@@ -1085,12 +1023,6 @@
                 return e($name);
             }
 
-            // Render as a link if it looks like a URL but not a storage path
-            if (preg_match('/^https?:\\/\\//i', $s)) {
-                $name = basename(parse_url($s, PHP_URL_PATH) ?: 'file');
-                return '<a href="' . e($s) . '" class="text-blue-400 underline break-all" target="_blank" rel="noopener noreferrer">' . e($name) . '</a>';
-            }
-
             // Normal mapping logic
             if (isset($map[$s])) return $map[$s];
 
@@ -1102,12 +1034,6 @@
             }
 
             return ucwords(str_replace(['_', '-'], ' ', $s));
-        }
-
-        // Conditional required message for scale-photo like fields only when schema/meta requires it
-        $isEmpty = ($val === null) || ($val === '') || (is_array($val) && empty($val));
-        if ($scalePhotoIsRequired && $looksLikeScalePhoto($key) && $isEmpty) {
-            return '<span class="text-red-400">Missing required information</span>';
         }
 
         return json_encode($val);
@@ -1208,13 +1134,7 @@
                 @endif
 
                 <dl class="pe-qa__row">
-                    <dt>
-                        {{ $label }}
-                        @php $__isScaleLike = $looksLikeScalePhoto($key) || $looksLikeScalePhoto($label ?? ''); @endphp
-                        @if ($__isScaleLike && $scalePhotoIsRequired)
-                            <span class="text-red-400">*</span>
-                        @endif
-                    </dt>
+                    <dt>{{ $label }}</dt>
                     <dd>{!! $pretty($key, $answer) !!}</dd>
                 </dl>
             @endforeach
