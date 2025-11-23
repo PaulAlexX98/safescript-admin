@@ -39,6 +39,14 @@ class ServicesPerformance extends Base
                 ])
                 ->action(function (array $data): void {
                     $this->period = $data['period'] ?? 'daily';
+
+                    if (method_exists($this, 'resetTable')) {
+                        $this->resetTable();
+                    }
+
+                    if (method_exists($this, 'dispatch')) {
+                        $this->dispatch('$refresh');
+                    }
                 }),
         ];
     }
@@ -75,10 +83,8 @@ class ServicesPerformance extends Base
             return Order::query()->whereRaw('1 = 0');
         }
 
-        // revenue sum expression with fallbacks
         $sumExpr = $this->sumRevenueExpr();
 
-        // derive a service name from common JSON keys in orders.meta
         $serviceExpr = 'COALESCE(
             NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.service")), ""),
             NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.service_name")), ""),
@@ -90,16 +96,19 @@ class ServicesPerformance extends Base
         [$start, $end] = $this->getCurrentRange();
 
         $query = Order::query();
+
         if (Schema::hasColumn('orders', 'created_at') && $start && $end) {
             $query->whereBetween('created_at', [$start, $end]);
         }
 
+        // Avoid ONLY_FULL_GROUP_BY errors by not ordering by non-grouped columns.
         return $query
             ->selectRaw("$serviceExpr as service")
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw("$sumExpr as revenue")
             ->selectRaw('MIN(orders.id) as oid')
             ->groupBy('service')
+            ->reorder()
             ->orderByDesc('revenue')
             ->orderBy('oid')
             ->limit(10);
