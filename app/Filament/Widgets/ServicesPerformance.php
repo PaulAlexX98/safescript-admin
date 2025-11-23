@@ -104,30 +104,36 @@ class ServicesPerformance extends Base
 
         [$start, $end] = $this->getCurrentRange();
 
-        $query = Order::query()->withoutGlobalScopes();
+        // Build the aggregated base query on orders
+        $base = Order::query()->withoutGlobalScopes();
 
         if (Schema::hasColumn('orders', 'created_at') && $start && $end) {
-            $query->whereBetween('created_at', [$start, $end]);
+            $base->whereBetween('created_at', [$start, $end]);
         }
 
-        // Avoid ONLY_FULL_GROUP_BY errors by not ordering by non-grouped columns.
-        $query = $query
+        $base = $base
             ->selectRaw("$serviceExpr as service")
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw("$sumExpr as revenue")
             ->selectRaw('MIN(orders.id) as min_id')
-            ->groupBy('service')
-            ->reorder()
-            ->orderByDesc('revenue')
-            ->orderBy('min_id')
+            ->selectRaw('MIN(orders.id) as id')
+            ->groupBy('service');
+
+        // Wrap the aggregation in a subquery to prevent any framework-added ORDER BY orders.id
+        $outer = Order::query()
+            ->fromSub($base, 'sp')
+            ->select(['sp.service', 'sp.bookings', 'sp.revenue', 'sp.min_id', 'sp.id'])
+            ->reorder() // clear any implicit sorts
+            ->orderByDesc('sp.revenue')
+            ->orderBy('sp.id')
             ->limit(10);
 
         \Log::info('ServicesPerformance SQL', [
-            'sql'      => $query->toSql(),
-            'bindings' => $query->getBindings(),
+            'sql'      => $outer->toSql(),
+            'bindings' => $outer->getBindings(),
         ]);
 
-        return $query;
+        return $outer;
     }
 
     protected function isTablePaginationEnabled(): bool
