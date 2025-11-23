@@ -58,6 +58,7 @@ class DailyRevenueTable extends Base
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
                 ->selectRaw('MIN(orders.id) as oid')
                 ->groupBy('day')
+                ->reorder()
                 ->orderByDesc('day')
                 ->orderBy('oid')
                 ->limit(7);
@@ -89,6 +90,7 @@ class DailyRevenueTable extends Base
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
                 ->selectRaw('MIN(orders.id) as oid')
                 ->groupBy('day')
+                ->reorder()
                 ->orderByDesc('day')
                 ->orderBy('oid')
                 ->limit(7);
@@ -101,17 +103,18 @@ class DailyRevenueTable extends Base
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw('MIN(orders.id) as oid')
             ->groupBy('day')
+            ->reorder()
             ->orderByDesc('day')
             ->orderBy('oid')
             ->limit(7);
     }
 
-    protected function getDefaultTableSortColumn(): ?string
+    protected function getTableDefaultSortColumn(): ?string
     {
         return null;
     }
 
-    protected function getDefaultTableSortDirection(): ?string
+    protected function getTableDefaultSortDirection(): ?string
     {
         return null;
     }
@@ -169,14 +172,15 @@ class DailyRevenueTable extends Base
     protected function getTableColumns(): array
     {
         return [
-            Tables\Columns\TextColumn::make('day')->label('Date')->date('d M Y'),
-            Tables\Columns\TextColumn::make('revenue')->label('Revenue')->money('GBP', true)->alignRight(),
-            Tables\Columns\TextColumn::make('bookings')->label('Bookings')->numeric()->alignRight(),
+            Tables\Columns\TextColumn::make('day')->label('Date')->date('d M Y')->sortable(false),
+            Tables\Columns\TextColumn::make('revenue')->label('Revenue')->money('GBP', true)->alignRight()->sortable(false),
+            Tables\Columns\TextColumn::make('bookings')->label('Bookings')->numeric()->alignRight()->sortable(false),
             Tables\Columns\TextColumn::make('avg')->label('Avg per booking')
                 ->getStateUsing(fn ($record) => $record->revenue && $record->bookings
                     ? '£' . number_format($record->revenue / $record->bookings, 2)
                     : '£0.00')
-                ->alignRight(),
+                ->alignRight()
+                ->sortable(false),
         ];
     }
 
