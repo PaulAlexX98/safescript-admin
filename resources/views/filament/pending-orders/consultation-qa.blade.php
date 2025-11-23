@@ -1104,7 +1104,6 @@
                         }
                     }
 
-                    //sd
                     $answer = array_key_exists('raw', $row) && $row['raw'] !== null && $row['raw'] !== ''
                         ? $row['raw']
                         : ($row['answer'] ?? null);
