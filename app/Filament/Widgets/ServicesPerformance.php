@@ -111,7 +111,7 @@ class ServicesPerformance extends Base
         }
 
         // Avoid ONLY_FULL_GROUP_BY errors by not ordering by non-grouped columns.
-        return $query
+        $query = $query
             ->selectRaw("$serviceExpr as service")
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw("$sumExpr as revenue")
@@ -121,6 +121,13 @@ class ServicesPerformance extends Base
             ->orderByDesc('revenue')
             ->orderBy('min_id')
             ->limit(10);
+
+        \Log::info('ServicesPerformance SQL', [
+            'sql'      => $query->toSql(),
+            'bindings' => $query->getBindings(),
+        ]);
+
+        return $query;
     }
 
     protected function isTablePaginationEnabled(): bool
