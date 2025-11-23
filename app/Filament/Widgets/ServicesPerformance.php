@@ -128,7 +128,7 @@ class ServicesPerformance extends Base
             ->orderBy('sp.id')
             ->limit(10);
 
-        \Log::info('ServicesPerformance SQL', [
+        \Log::debug('ServicesPerformance SQL', [
             'sql'      => $outer->toSql(),
             'bindings' => $outer->getBindings(),
         ]);
