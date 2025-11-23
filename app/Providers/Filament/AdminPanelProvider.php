@@ -75,6 +75,11 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->widgets([
                 \App\Filament\Widgets\AppointmentsCalendarWidget::class,
+                \App\Filament\Widgets\KpiStats::class,
+                \App\Filament\Widgets\BookingStatusTable::class,
+                \App\Filament\Widgets\ServicesPerformance::class,
+                \App\Filament\Widgets\DailyRevenueTable::class,
+                \App\Filament\Widgets\RevenueBookingsChart::class,
             ])
             ->authGuard('web')
             ->authMiddleware([
