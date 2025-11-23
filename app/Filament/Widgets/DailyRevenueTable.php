@@ -1,4 +1,11 @@
 <?php
+/**
+ * DailyRevenueTable disabled on 23 Nov 2025
+ * Original implementation is commented out below so you can re-enable pieces one by one.
+ */
+
+/*
+<?php
 // app/Filament/Widgets/DailyRevenueTable.php
 namespace App\Filament\Widgets;
 
@@ -172,15 +179,16 @@ class DailyRevenueTable extends Base
     protected function getTableColumns(): array
     {
         return [
-            Tables\Columns\TextColumn::make('day')->label('Date')->date('d M Y')->sortable(false),
-            Tables\Columns\TextColumn::make('revenue')->label('Revenue')->money('GBP', true)->alignRight()->sortable(false),
-            Tables\Columns\TextColumn::make('bookings')->label('Bookings')->numeric()->alignRight()->sortable(false),
-            Tables\Columns\TextColumn::make('avg')->label('Avg per booking')
-                ->getStateUsing(fn ($record) => $record->revenue && $record->bookings
-                    ? '£' . number_format($record->revenue / $record->bookings, 2)
-                    : '£0.00')
-                ->alignRight()
-                ->sortable(false),
+            Tables\\Columns\\TextColumn::make('day')->label('Date')->date('d M Y')->sortable(false),
+            // Temporarily disabled revenue visibility from now
+            // Tables\\Columns\\TextColumn::make('revenue')->label('Revenue')->money('GBP', true)->alignRight()->sortable(false),
+            Tables\\Columns\\TextColumn::make('bookings')->label('Bookings')->numeric()->alignRight()->sortable(false),
+            // Tables\\Columns\\TextColumn::make('avg')->label('Avg per booking')
+            //     ->getStateUsing(fn ($record) => $record->revenue && $record->bookings
+            //         ? '£' . number_format($record->revenue / $record->bookings, 2)
+            //         : '£0.00')
+            //     ->alignRight()
+            //     ->sortable(false),
         ];
     }
 
@@ -188,5 +196,33 @@ class DailyRevenueTable extends Base
     {
         // use the grouped date as the unique key for the row
         return (string) ($record->day ?? $record->date ?? spl_object_hash($record));
+    }
+}
+*/
+
+namespace App\Filament\Widgets;
+
+use Filament\Widgets\TableWidget as Base;
+
+class DailyRevenueTable extends Base
+{
+    protected int|string|array $columnSpan = 1;
+    protected static ?int $sort = 100;
+
+    protected function getTableColumns(): array
+    {
+        // No columns while disabled
+        return [];
+    }
+
+    protected function getTableQuery(): \Illuminate\Database\Eloquent\Builder
+    {
+        // Return an empty query to avoid hitting the DB
+        return \App\Models\Order::query()->whereRaw('1 = 0');
+    }
+
+    protected function isTablePaginationEnabled(): bool
+    {
+        return false;
     }
 }
