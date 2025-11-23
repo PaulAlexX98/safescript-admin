@@ -976,6 +976,15 @@
 
                                 // Normalise to a simple indexed array for rendering
                                 $initialThumbs = array_values($initialThumbs);
+                                $hasInitial = !empty($initialThumbs);
+                                $existingKeys = [];
+                                if ($hasInitial) {
+                                    foreach ($initialThumbs as $it) {
+                                        $existingKeys[] = $extractRel($it['href'] ?? ($it['src'] ?? '')) ?: '';
+                                    }
+                                    // de-dup and drop empties
+                                    $existingKeys = array_values(array_filter(array_unique($existingKeys)));
+                                }
                                 // If single-file field but multiple previews slipped in, keep only the most recent
                                 if (!$multiple && count($initialThumbs) > 1) {
                                     $initialThumbs = array_slice($initialThumbs, -1);
@@ -985,7 +994,10 @@
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <input type="file" id="{{ $name }}" name="{{ $name }}{{ $multiple ? '[]' : '' }}" @if($accept) accept="{{ $accept }}" @endif @if($multiple) multiple @endif class="cf-file-input" />
+                                <input type="file" id="{{ $name }}" name="{{ $name }}{{ $multiple ? '[]' : '' }}" @if($accept) accept="{{ $accept }}" @endif @if($multiple) multiple @endif class="cf-file-input" data-has-initial="{{ $hasInitial ? '1' : '0' }}" />
+                                @if($hasInitial && !empty($existingKeys))
+                                    <input type="hidden" name="{{ $name }}__existing" value='@json($existingKeys, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)'>
+                                @endif
                                 <label for="{{ $name }}" class="cf-file cf-file-btn">Choose Files</label>
 
                                 {{-- Existing thumbnails from saved value --}}
@@ -1127,6 +1139,10 @@
     var inputs = node.querySelectorAll('input, select, textarea');
     inputs.forEach(function(el){
       var wantsReq = el.getAttribute('data-req') === '1';
+      if (el.type === 'file' && el.getAttribute('data-has-initial') === '1') {
+          // If we already have an existing file stored, do not force re-upload on this step
+          wantsReq = false;
+      }
       if (visible) {
         el.disabled = false;
         if (wantsReq) el.setAttribute('required','required'); else el.removeAttribute('required');
