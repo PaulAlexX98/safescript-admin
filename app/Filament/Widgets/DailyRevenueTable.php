@@ -43,7 +43,7 @@ class DailyRevenueTable extends Base
 
         if ($usePayments && $paymentAmountExpr) {
             // Use payments created_at and sum amounts; count distinct orders as bookings when available
-            $q = Order::query()
+            $q = Order::query()->withoutGlobalScopes()
                 ->leftJoin('payments', 'payments.order_id', '=', 'orders.id')
                 ->whereNotNull('payments.id');
 
@@ -58,6 +58,7 @@ class DailyRevenueTable extends Base
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
                 ->selectRaw('MIN(orders.id) as oid')
                 ->groupBy('day')
+                ->reorder()
                 ->orderByDesc('day')
                 ->orderBy('oid')
                 ->limit(7);
@@ -82,25 +83,27 @@ class DailyRevenueTable extends Base
                 $itemExpr = 'SUM(order_items.price * order_items.quantity)';
             }
 
-            return Order::query()
+            return Order::query()->withoutGlobalScopes()
                 ->leftJoin('order_items', 'order_items.order_id', '=', 'orders.id')
                 ->selectRaw('DATE(orders.created_at) as day')
                 ->selectRaw("$itemExpr as revenue")
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
                 ->selectRaw('MIN(orders.id) as oid')
                 ->groupBy('day')
+                ->reorder()
                 ->orderByDesc('day')
                 ->orderBy('oid')
                 ->limit(7);
         }
 
         // Default path: sum from orders table
-        return Order::query()
+        return Order::query()->withoutGlobalScopes()
             ->selectRaw('DATE(orders.created_at) as day')
             ->selectRaw("$sumExpr as revenue")
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw('MIN(orders.id) as oid')
             ->groupBy('day')
+            ->reorder()
             ->orderByDesc('day')
             ->orderBy('oid')
             ->limit(7);
