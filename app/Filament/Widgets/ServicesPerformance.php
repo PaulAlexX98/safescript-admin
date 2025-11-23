@@ -106,11 +106,11 @@ class ServicesPerformance extends Base
             ->selectRaw("$serviceExpr as service")
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw("$sumExpr as revenue")
-            ->selectRaw('MIN(orders.id) as oid')
+            ->selectRaw('MIN(orders.id) as id')
             ->groupBy('service')
             ->reorder()
             ->orderByDesc('revenue')
-            ->orderBy('oid')
+            ->orderBy('id')
             ->limit(10);
     }
 

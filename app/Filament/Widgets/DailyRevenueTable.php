@@ -96,7 +96,7 @@ class DailyRevenueTable extends Base
 
         // Default path: sum from orders table
         return Order::query()
-            ->selectRaw('DATE(created_at) as day')
+            ->selectRaw('DATE(orders.created_at) as day')
             ->selectRaw("$sumExpr as revenue")
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw('MIN(orders.id) as oid')
