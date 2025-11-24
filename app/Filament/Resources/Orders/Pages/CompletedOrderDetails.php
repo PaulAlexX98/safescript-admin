@@ -48,24 +48,50 @@ class CompletedOrderDetails extends ViewRecord
                     $o  = $this->record;
                     $m  = is_array($o->meta) ? $o->meta : [];
 
-                    // product info fallbacks
-                    $prod = $m['selectedProduct']
-                        ?? ($m['items'][0] ?? null)
-                        ?? ($m['lines'][0] ?? null)
-                        ?? [];
+                    // Resolve product rows from meta (first of items/lines/products/etc or selectedProduct)
+                    $allItems = null;
+                    foreach (['items','lines','products','line_items','order.items','order.line_items','cart.items'] as $path) {
+                        $arr = data_get($m, $path);
+                        if (is_array($arr) && count($arr)) { $allItems = $arr; break; }
+                    }
+                    if (!$allItems && isset($m['selectedProduct']) && is_array($m['selectedProduct'])) {
+                        $allItems = [$m['selectedProduct']];
+                    }
+                    // Wrap associative product
+                    if (is_array($allItems) && !is_numeric(array_key_first($allItems)) && isset($allItems['name'])) {
+                        $allItems = [$allItems];
+                    }
+                    $allItems = is_array($allItems) ? array_values($allItems) : [];
 
-                    $qty   = (int) ($prod['qty'] ?? 1);
-                    $name  = trim(($prod['name'] ?? $prod['variation'] ?? ''));
-                    $var   = trim($prod['variation'] ?? '');
-                    $str   = trim($prod['strength'] ?? '');
+                    // Helper to render a single item as "qty name variation strength" (without literal "x")
+                    $renderItem = function (array $row): string {
+                        $qty = (int) ($row['qty'] ?? $row['quantity'] ?? 1);
+                        $name = trim((string) ($row['name'] ?? $row['title'] ?? $row['product_name'] ?? ''));
+                        $var  = trim((string) (
+                            $row['variation'] ?? $row['variant'] ?? $row['optionLabel'] ?? $row['strength']
+                            ?? data_get($row, 'meta.variation') ?? data_get($row, 'meta.variant') ?? data_get($row, 'meta.optionLabel') ?? data_get($row, 'meta.strength') ?? ''
+                        ));
+                        $str  = trim((string) ($row['strength'] ?? ''));
+                        $parts = [];
+                        if ($qty > 1) { $parts[] = (string)$qty; }
+                        if ($name !== '') { $parts[] = $name; }
+                        if ($var !== '' && strcasecmp($var, $name) !== 0) { $parts[] = $var; }
+                        if ($str !== '' && strcasecmp($str, $name) !== 0 && strcasecmp($str, $var) !== 0) { $parts[] = $str; }
+                        return trim(implode(' ', $parts));
+                    };
 
-                    // Compose line1 eg "1 x Mounjaro 2.5mg"
-                    $parts = array_filter([
-                        ($qty > 0 ? "{$qty} x" : null),
-                        $name ?: $var,
-                        $str && strcasecmp($str, $name) !== 0 ? $str : null,
-                    ]);
-                    $line1 = implode(' ', $parts);
+                    // Compose line1 with ALL items shown (no "+N more")
+                    if (!empty($allItems)) {
+                        $lines = [];
+                        foreach ($allItems as $row) {
+                            $lines[] = $renderItem((array) $row);
+                        }
+                        // Join all items with a middle dot separator to keep it compact
+                        // Example: "Hepatitis A • Typhoid Vi • Malarone 250mg"
+                        $line1 = trim(implode(' • ', array_filter($lines, fn ($s) => $s !== '')));
+                    } else {
+                        $line1 = '';
+                    }
 
                     // Patient
                     $first = $m['firstName'] ?? $o->shipping_address?->first_name ?? '';
@@ -515,7 +541,9 @@ class CompletedOrderDetails extends ViewRecord
                                 $arr = data_get($meta, $path);
                                 if (is_array($arr) && count($arr)) { $items = $arr; break; }
                             }
-
+                            if ((!is_array($items) || empty($items)) && is_array(data_get($meta, 'selectedProduct'))) {
+                                $items = [data_get($meta, 'selectedProduct')];
+                            }
                             // Wrap single associative product
                             if (is_array($items)) {
                                 $isList = array_keys($items) === range(0, count($items) - 1);
@@ -523,7 +551,6 @@ class CompletedOrderDetails extends ViewRecord
                                     $items = [$items];
                                 }
                             }
-
                             if (!is_array($items) || empty($items)) return [];
 
                             // Helper to parse money to minor units (pence)
@@ -568,6 +595,7 @@ class CompletedOrderDetails extends ViewRecord
                                         'variations','variation','variant','optionLabel','option','dose','strength',
                                         'meta.variations','meta.variation','meta.variant','meta.optionLabel','meta.option','meta.dose','meta.strength',
                                         'selected.variations','selected.variation','selected.variant','selected.optionLabel','selected.option','selected.dose','selected.strength',
+                                        'selectedProduct.variation','selectedProduct.strength',
                                     ];
                                     foreach ($keys as $k) {
                                         $v = data_get($row, $k);

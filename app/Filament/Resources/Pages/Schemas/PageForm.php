@@ -20,6 +20,8 @@ use Illuminate\Support\Str;
 use Filament\Forms\Components\RichEditor\TextColor;
 use Malzariey\FilamentLexicalEditor\FilamentLexicalEditor;
 use Malzariey\FilamentLexicalEditor\Enums\ToolbarItem;
+use Filament\Forms\Components\Placeholder;
+use Illuminate\Support\HtmlString;
 
 class PageForm
 {
@@ -175,14 +177,59 @@ class PageForm
 
                         Section::make('Search Engine Optimize')
                             ->schema([
+                                // Google-style preview
+                                Placeholder::make('seo_preview')
+                                    ->label('Preview')
+                                    ->content(function (Get $get) {
+                                        $title = trim($get('meta_title') ?: $get('title') ?: '');
+                                        $slug  = trim($get('slug') ?: '');
+                                        $url   = rtrim(url('/'), '/') . '/' . ltrim($slug, '/');
+                                        $desc  = trim($get('meta_description') ?: $get('description') ?: '');
+
+                                        // Soft limits
+                                        $title = mb_substr($title, 0, 60);
+                                        $desc  = mb_substr($desc, 0, 160);
+
+                                        // Precompute display values to avoid complex expressions in heredoc interpolation
+                                        $titleOut = ($title !== '') ? $title : 'Untitled page';
+                                        $descOut  = ($desc !== '') ? $desc  : 'Add a compelling summary up to 160 characters.';
+
+                                        // Simple Google-like snippet
+                                        $htmlOut = <<<HTML
+<div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px;background:#fff">
+  <div style="font-size:18px;line-height:1.2;color:#1a0dab;margin-bottom:4px;">{$titleOut}</div>
+  <div style="font-size:14px;color:#006621;margin-bottom:6px;">{$url}</div>
+  <div style="font-size:13px;color:#4b5563;">{$descOut}</div>
+</div>
+HTML;
+                                        return new HtmlString($htmlOut);
+                                    })
+                                    ->extraAttributes(['style' => 'padding-top:0'])
+                                    ->columnSpanFull(),
+
+                                // Meta fields with live counters
                                 TextInput::make('meta_title')
                                     ->label('Meta title')
-                                    ->maxLength(60),
+                                    ->maxLength(60)
+                                    ->live(onBlur: true)
+                                    ->hint(fn (Get $get) => mb_strlen((string) $get('meta_title')) . '/60'),
 
                                 Textarea::make('meta_description')
                                     ->label('Meta description')
                                     ->rows(3)
-                                    ->maxLength(160),
+                                    ->maxLength(160)
+                                    ->live(onBlur: true)
+                                    ->hint(fn (Get $get) => mb_strlen((string) $get('meta_description')) . '/160'),
+
+                                // Quick action to jump cursor to meta fields
+                                Placeholder::make('edit_seo_meta_button')
+                                    ->label('')
+                                    ->content(new HtmlString('<button type="button" class="fi-btn fi-color-gray fi-size-md">Edit SEO meta</button>'))
+                                    ->extraAttributes([
+                                        'x-on:click' => "(() => { const t = document.querySelector('[name=\"meta_title\"]'); const d = document.querySelector('[name=\"meta_description\"]'); (t ?? d)?.scrollIntoView({behavior:'smooth', block:'center'}); (t ?? d)?.focus(); })()",
+                                        'style' => 'margin-top: -8px;'
+                                    ])
+                                    ->columnSpanFull(),
                             ])
                             ->collapsible(),
 
