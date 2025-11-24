@@ -2,66 +2,83 @@
 
 namespace App\Support;
 
+use Carbon\Carbon;
 use App\Models\Order;
 
 class ZplLabelBuilder
 {
-    public function forOrder(Order|array $order): string
+    public function forOrder(array|Order $data): string
     {
-        // Normalise input to simple fields irrespective of whether we got an Eloquent Order or an array payload
-        if (is_array($order)) {
-            $ref   = (string)($order['reference'] ?? $order['ref'] ?? 'REF');
+        // If an Order model is passed, map it to the expected data array
+        if ($data instanceof Order) {
+            $order = $data;
 
-            // allow either flat fields or nested shipping array
-            $shipping = $order['shipping'] ?? $order['shipping_address'] ?? [];
-            $first = (string)($order['first_name'] ?? ($shipping['first_name'] ?? ''));
-            $last  = (string)($order['last_name'] ?? ($shipping['last_name'] ?? ''));
-            $name  = trim($first . ' ' . $last);
-            $addr1 = (string)($order['address1'] ?? ($shipping['address1'] ?? ''));
-            $city  = (string)($order['city'] ?? ($shipping['city'] ?? ''));
-            $post  = (string)($order['postcode'] ?? ($shipping['postcode'] ?? ''));
-        } else {
-            // Eloquent Order model path
-            $ref   = (string)($order->reference ?? 'REF');
-            $first = (string)($order->shipping_address->first_name ?? '');
-            $last  = (string)($order->shipping_address->last_name ?? '');
-            $name  = trim($first . ' ' . $last);
-            $addr1 = (string)($order->shipping_address->address1 ?? '');
-            $city  = (string)($order->shipping_address->city ?? '');
-            $post  = (string)($order->shipping_address->postcode ?? '');
+            // Attempt to pull common fields from order meta, with safe fallbacks
+            $line1 = (string) (
+                data_get($order->meta, 'line1')
+                ?? data_get($order->meta, 'medication')
+                ?? ''
+            );
+
+            $directions = (string) (
+                data_get($order->meta, 'directions')
+                ?? data_get($order->meta, 'sig')
+                ?? ''
+            );
+
+            $warning = (string) (data_get($order->meta, 'warning') ?? '');
+
+            $patient = trim(
+                (string)($order->shipping_address->first_name ?? '') . ' ' .
+                (string)($order->shipping_address->last_name ?? '')
+            );
+
+            // Sender details configurable with sensible defaults
+            $pharmacy = (string) (config('app.pharmacy.sender')
+                ?? 'SafeScript Pharmacy  Unit 4  WF1 2UY');
+            $phone = (string) (config('app.pharmacy.phone') ?? '01924971414');
+
+            $dateText = Carbon::now('Europe/London')->format('d/m/y');
+            $qr = $order->reference ?? null;
+
+            $data = [
+                'line1'      => $line1,
+                'directions' => $directions,
+                'warning'    => $warning,
+                'patient'    => $patient,
+                'pharmacy'   => $pharmacy,
+                'phone'      => $phone,
+                'date_text'  => $dateText,
+                'qr'         => $qr,
+            ];
         }
 
-        // fixed pharmacy sender
-        $sender = 'SafeScript Pharmacy  Unit 4  WF1 2UY';
+        // expected keys for array input: line1, directions, warning, patient, pharmacy, phone, date_text, qr(optional)
+        $line1      = mb_strtoupper((string)($data['line1'] ?? ''));
+        $directions = (string)($data['directions'] ?? '');
+        $warning    = (string)($data['warning'] ?? '');
+        $patient    = (string)($data['patient'] ?? '');
+        $pharmacy   = (string)($data['pharmacy'] ?? '');
+        $phone      = (string)($data['phone'] ?? '');
+        $dateText   = (string)($data['date_text'] ?? Carbon::now('Europe/London')->format('d/m/y'));
+        $qr         = $data['qr'] ?? null;
 
-        // super simple 4x6 content
-        $lines = [
-            '^XA',
-            '^PW812',
-            '^LH0,0',
-            '^CF0,40',
-            '^FO40,40^FD' . $sender . '^FS',
-            '^FO40,120^GB732,2,2^FS',
-
-            '^CF0,70',
-            '^FO40,160^FD' . $name . '^FS',
-            '^CF0,50',
-            '^FO40,230^FD' . $addr1 . '^FS',
-            '^FO40,280^FD' . $city . '^FS',
-            '^CF0,90',
-            '^FO40,340^FD' . $post . '^FS',
-
-            '^CF0,40',
-            '^FO40,430^FDRef ' . $ref . '^FS',
-
-            // code128 of ref
-            '^BY3,2,120',
-            '^FO40,480^BCN,120,Y,N,N',
-            '^FD' . $ref . '^FS',
-
-            '^XZ',
-        ];
-
-        return implode("\n", $lines);
+        // 600 dpi width 600, height ~400. Adjust to your label.
+        return "^XA
+^PW600
+^LH0,0
+^CF0,28
+^FO30,20^FB540,2,0,L,0^FD{$line1}^FS
+^CF0,36
+^FO30,100^FB540,1,0,C,0^FD" . mb_strtoupper($directions) . "^FS
+^CF0,24
+^FO30,150^FB540,2,0,L,0^FD{$warning}^FS
+^CF0,30
+^FO30,230^FD{$patient}^FS
+^CF0,24
+^FO30,270^FB540,2,0,L,0^FD{$pharmacy}\\& Tel: {$phone}^FS
+^CF0,28
+^FO480,310^FD{$dateText}^FS
+" . ($qr ? "^BQN,2,6^FO480,200^FDLA,{$qr}^FS\n" : '') . "^XZ";
     }
 }
