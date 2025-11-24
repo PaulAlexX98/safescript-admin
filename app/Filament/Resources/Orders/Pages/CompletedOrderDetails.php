@@ -21,6 +21,8 @@ use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\Mail;
 use Filament\Notifications\Notification;
 use Illuminate\Http\Request;
+use App\Support\ZplLabelBuilder;
+use Illuminate\Support\Facades\Log;
 
 class CompletedOrderDetails extends ViewRecord
 {
@@ -38,6 +40,43 @@ class CompletedOrderDetails extends ViewRecord
         $hasSession = !empty($sessionId);
 
         return [
+            Action::make('print_label')
+                ->label('Print label')
+                ->icon('heroicon-m-printer')
+                ->color('warning')
+                ->action(function () {
+                    $o = $this->record; // Current Order model instance
+
+                    // Build ZPL using the Order model (matches ZplLabelBuilder::forOrder signature)
+                    try {
+                        $zpl = app(\App\Support\ZplLabelBuilder::class)->forOrder($o);
+                    } catch (\Throwable $e) {
+                        \Log::error('print_label builder error', [
+                            'order_id' => $o->id ?? null,
+                            'message' => $e->getMessage(),
+                        ]);
+                        Notification::make()->danger()->title('Could not build label')->body(substr($e->getMessage(), 0, 200))->send();
+                        return;
+                    }
+
+                    if (!is_string($zpl) || trim($zpl) === '') {
+                        \Log::warning('print_label empty zpl', ['order_id' => $o->id ?? null]);
+                        Notification::make()->danger()->title('Label data was empty')->send();
+                        return;
+                    }
+
+                    \Log::info('print_label dispatch', [
+                        'order_id' => $o->id ?? null,
+                        'reference' => $o->reference ?? null,
+                        'len' => strlen($zpl),
+                    ]);
+
+                    // Dispatch to browser listener implemented in global-shortcuts.blade.php
+                    $this->dispatch('print-zpl', zpl: $zpl);
+
+                    Notification::make()->success()->title('Label sent to browser')->send();
+                }),
+                
             ActionGroup::make([
                 Action::make('pdf_full')
                     ->label('Full Consultation Record')

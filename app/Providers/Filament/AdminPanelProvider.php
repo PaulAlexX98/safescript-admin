@@ -68,6 +68,8 @@ class AdminPanelProvider extends PanelProvider
             ->passwordReset()
             ->emailVerification()
             ->emailChangeVerification()
+            ->renderHook('panels::body.end', fn () => view('components.layout.app'))
+            ->renderHook('panels::body.end', fn () => view('vendor.filament.components.global-shortcuts'))
             
             
             ->plugins([
