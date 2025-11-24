@@ -36,6 +36,8 @@ class User extends Authenticatable implements FilamentUser
             'password'             => 'hashed',   // ← make sure password is hashed
             'consultation_defaults'=> 'array',
             'is_pharmacist'        => 'boolean',
+            'scr_verified' => 'boolean',
+            'scr_verified_at' => 'datetime',
         ];
     }
 

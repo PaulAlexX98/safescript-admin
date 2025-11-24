@@ -375,6 +375,49 @@ class CompletedOrderDetails extends ViewRecord
                                         return $sd->format('d-m-Y H:i');
                                     }),
                             ]),
+
+                        Section::make('SCR Verified')
+                            ->columnSpan(4)
+                            ->schema([
+                                TextEntry::make('scr_verified')
+                                    ->hiddenLabel()
+                                    ->state(function ($record) {
+                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                        // First preference from this order's meta
+                                        $val = data_get($meta, 'scr_verified')
+                                            ?? data_get($meta, 'scr_status')
+                                            ?? data_get($meta, 'scrVerified');
+
+                                        // Fallback from the patient user record so it carries forward across orders
+                                        if ($val === null || $val === '') {
+                                            $user = $record->user;
+                                            if ($user) {
+                                                $val = data_get($user, 'scr_verified')
+                                                    ?? data_get($user, 'meta.scr_verified')
+                                                    ?? data_get($user, 'meta.scr_status')
+                                                    ?? data_get($user, 'meta.scrVerified');
+                                            }
+                                        }
+
+                                        if (is_bool($val)) return $val ? 'Yes' : 'No';
+                                        $s = strtolower(trim((string) $val));
+                                        return match ($s) {
+                                            'y', 'yes', 'true', '1' => 'Yes',
+                                            'n', 'no', 'false', '0' => 'No',
+                                            default => '—',
+                                        };
+                                    })
+                                    ->badge()
+                                    ->color(function ($state) {
+                                        $s = strtolower((string) $state);
+                                        return match ($s) {
+                                            'yes' => 'success',
+                                            'no'  => 'danger',
+                                            default => 'gray',
+                                        };
+                                    }),
+                            ]),
                     ]),
                 ])
                 ->columnSpanFull(),

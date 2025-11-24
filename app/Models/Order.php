@@ -143,4 +143,22 @@ class Order extends Model
 
         return max(0, (int) $sum);
     }
+
+    public function getScrVerifiedAttribute(): ?string
+    {
+        $meta = is_array($this->meta) ? $this->meta : (json_decode($this->meta ?? '[]', true) ?: []);
+        $val = data_get($meta, 'scr_verified') ?? data_get($meta, 'scr_status') ?? data_get($meta, 'scrVerified');
+
+        if ($val !== null && $val !== '') {
+            $s = strtolower(trim((string)$val));
+            return in_array($s, ['y','yes','true','1'], true) ? 'Yes' : (in_array($s, ['n','no','false','0'], true) ? 'No' : '—');
+        }
+
+        $u = $this->user;
+        if ($u && $u->scr_verified !== null) {
+            return $u->scr_verified ? 'Yes' : 'No';
+        }
+
+        return '—';
+    }
 }

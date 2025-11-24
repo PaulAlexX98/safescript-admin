@@ -64,21 +64,57 @@ class ApprovedOrderResource extends Resource
                 TextColumn::make('patient_priority_dot')
                     ->label('Priority')
                     ->getStateUsing(function ($record) {
-                        // Read the priority from the related User if available
-                        $p = optional($record->user)->priority;
+                        // 1) Try patient-level priority
+                        $p = optional($record->user)->priority ?? null;
+
+                        // 2) Fall back to this pending order's meta.priority
+                        if (!is_string($p) || trim($p) === '') {
+                            $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                            $p = data_get($meta, 'priority');
+                        }
+
+                        // 3) Fall back to the real order's meta.priority by reference
+                        if (!is_string($p) || trim($p) === '') {
+                            try {
+                                $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                if ($order) {
+                                    $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                    $p = data_get($om, 'priority');
+                                }
+                            } catch (\Throwable $e) {
+                                // ignore
+                            }
+                        }
+
                         $p = is_string($p) ? strtolower(trim($p)) : null;
                         return in_array($p, ['red','yellow','green'], true) ? $p : 'green';
                     })
                     ->formatStateUsing(function ($state) {
-                        return match ($state) {
-                            'red' => '🔴',
-                            'yellow' => '🟡',
-                            'green' => '🟢',
-                            default => '🟢',
+                        // Render a small coloured dot instead of emoji for cleaner UI
+                        $colour = match ($state) {
+                            'red' => '#ef4444',
+                            'yellow' => '#eab308',
+                            'green' => '#22c55e',
+                            default => '#22c55e',
                         };
+                        $label = ucfirst(is_string($state) ? $state : 'green');
+                        return '<span title="' . e($label) . '" style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:' . $colour . ';"></span>';
                     })
                     ->tooltip(function ($record) {
                         $p = optional($record->user)->priority;
+                        if (!is_string($p) || trim($p) === '') {
+                            $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                            $p = data_get($meta, 'priority');
+                        }
+                        if (!is_string($p) || trim($p) === '') {
+                            try {
+                                $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                if ($order) {
+                                    $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                    $p = data_get($om, 'priority');
+                                }
+                            } catch (\Throwable $e) {}
+                        }
                         $p = is_string($p) ? strtolower(trim($p)) : null;
                         $p = in_array($p, ['red','yellow','green'], true) ? $p : 'green';
                         return ucfirst($p);
@@ -501,35 +537,21 @@ class ApprovedOrderResource extends Resource
                                         ]),
                                 ]),
                         ]),
-                        Section::make('Notes & Comments')
+                        Section::make('Admin notes')
                             ->columnSpanFull()
                             ->schema([
-                                Section::make('Patient Notes')
-                                    ->schema([
-                                        TextEntry::make('meta.patient_notes')
-                                            ->hiddenLabel()
-                                            ->state(function ($record) {
-                                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                                return data_get($meta, 'patient_notes') ?: 'No patient notes provided';
-                                            })
-                                            ->formatStateUsing(fn ($state) => nl2br(e($state)))
-                                            ->html(),
-                                    ]),
-                                Section::make('Admin Notes')
-                                    ->schema([
-                                        TextEntry::make('meta.admin_notes')
-                                            ->hiddenLabel()
-                                            ->state(function ($record) {
-                                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                                return (string) (data_get($meta, 'admin_notes') ?: '—');
-                                            })
-                                            ->formatStateUsing(fn ($state) => nl2br(e($state)))
-                                            ->extraAttributes(function ($record) {
-                                                $ts = optional($record->updated_at)->timestamp ?? time();
-                                                return ['wire:key' => 'approved-admin-notes-' . $record->getKey() . '-' . $ts];
-                                            })
-                                            ->html(),
-                                    ]),
+                                TextEntry::make('meta.admin_notes')
+                                    ->hiddenLabel()
+                                    ->state(function ($record) {
+                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                        return (string) (data_get($meta, 'admin_notes') ?: '—');
+                                    })
+                                    ->formatStateUsing(fn ($state) => nl2br(e($state)))
+                                    ->extraAttributes(function ($record) {
+                                        $ts = optional($record->updated_at)->timestamp ?? time();
+                                        return ['wire:key' => 'approved-admin-notes-' . $record->getKey() . '-' . $ts];
+                                    })
+                                    ->html(),
                             ]),
                         Section::make(function ($record) {
                             $items = [];

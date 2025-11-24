@@ -24,22 +24,102 @@ class PatientsTable
         return $table
             ->columns([
 
-                SelectColumn::make('priority')
+                TextColumn::make('patient_priority_dot')
                     ->label('Priority')
-                    ->placeholder('Select')
-                    ->options([
-                        'red' => '🔴',
-                        'yellow' => '🟡',
-                        'green' => '🟢',
-                    ])
-                    ->sortable(query: function (\Illuminate\Database\Eloquent\Builder $query, string $direction) {
-                        $dir = strtoupper($direction) === 'DESC' ? 'DESC' : 'ASC';
-                        return $query->orderByRaw("FIELD(priority, 'red','yellow','green') $dir");
+                    ->getStateUsing(function ($record) {
+                        // 1) Try patient-level related user priority
+                        $p = optional($record->user)->priority ?? null;
+
+                        // 2) Fall back to a User matched by the patient's email
+                        if (!is_string($p) || trim($p) === '') {
+                            try {
+                                if (!empty($record->email)) {
+                                    $email = strtolower(trim((string) $record->email));
+                                    $p = \App\Models\User::query()
+                                        ->whereRaw('LOWER(email) = ?', [$email])
+                                        ->value('priority');
+                                }
+                            } catch (\Throwable $e) {
+                                // ignore
+                            }
+                        }
+
+                        // 3) Fall back to the latest order by this email
+                        if (!is_string($p) || trim($p) === '') {
+                            try {
+                                if (!empty($record->email)) {
+                                    $email = strtolower(trim((string) $record->email));
+                                    $order = \App\Models\Order::query()
+                                        ->whereRaw('LOWER(email) = ?', [$email])
+                                        ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email'))) = ?", [$email])
+                                        ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.email'))) = ?", [$email])
+                                        ->latest('created_at')
+                                        ->first();
+                                    if ($order) {
+                                        $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                        $p = data_get($om, 'priority');
+                                    }
+                                }
+                            } catch (\Throwable $e) {
+                                // ignore
+                            }
+                        }
+
+                        $p = is_string($p) ? strtolower(trim($p)) : null;
+                        return in_array($p, ['red','yellow','green'], true) ? $p : 'green';
                     })
-                    ->rules(['nullable','in:red,yellow,green'])
-                    ->extraAttributes(['style' => 'text-align:center; width:6rem'])
-                    ->default('green')
-                    ->toggleable(),
+                    ->formatStateUsing(function ($state) {
+                        // Render a small coloured dot instead of emoji for cleaner UI
+                        $colour = match ($state) {
+                            'red' => '#ef4444',
+                            'yellow' => '#eab308',
+                            'green' => '#22c55e',
+                            default => '#22c55e',
+                        };
+                        $label = ucfirst(is_string($state) ? $state : 'green');
+                        return '<span title="' . e($label) . '" style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:' . $colour . ';"></span>';
+                    })
+                    ->tooltip(function ($record) {
+                        // 1) Related user
+                        $p = optional($record->user)->priority ?? null;
+
+                        // 2) User by patient email
+                        if (!is_string($p) || trim($p) === '') {
+                            try {
+                                if (!empty($record->email)) {
+                                    $email = strtolower(trim((string) $record->email));
+                                    $p = \App\Models\User::query()
+                                        ->whereRaw('LOWER(email) = ?', [$email])
+                                        ->value('priority');
+                                }
+                            } catch (\Throwable $e) {}
+                        }
+
+                        // 3) Latest order by email
+                        if (!is_string($p) || trim($p) === '') {
+                            try {
+                                if (!empty($record->email)) {
+                                    $email = strtolower(trim((string) $record->email));
+                                    $order = \App\Models\Order::query()
+                                        ->whereRaw('LOWER(email) = ?', [$email])
+                                        ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email'))) = ?", [$email])
+                                        ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.email'))) = ?", [$email])
+                                        ->latest('created_at')
+                                        ->first();
+                                    if ($order) {
+                                        $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                        $p = data_get($om, 'priority');
+                                    }
+                                }
+                            } catch (\Throwable $e) {}
+                        }
+
+                        $p = is_string($p) ? strtolower(trim($p)) : null;
+                        $p = in_array($p, ['red','yellow','green'], true) ? $p : 'green';
+                        return ucfirst($p);
+                    })
+                    ->html()
+                    ->extraAttributes(['style' => 'text-align:center; width:5rem']),
 
                 // Left-most: computed 4-digit internal id
                 TextColumn::make('computed_internal_id')

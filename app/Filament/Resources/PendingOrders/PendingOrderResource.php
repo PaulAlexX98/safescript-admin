@@ -32,12 +32,14 @@ use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Grid;
 use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\Select;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\OrderApprovedMail;
 use Illuminate\Support\Str;
 use Illuminate\Support\Arr;
 use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\ViewColumn;
+use Filament\Notifications\Notification;
 
 
 class PendingOrderResource extends Resource
@@ -67,21 +69,57 @@ class PendingOrderResource extends Resource
                 TextColumn::make('patient_priority_dot')
                     ->label('Priority')
                     ->getStateUsing(function ($record) {
-                        // Read the priority from the related User if available
-                        $p = optional($record->user)->priority;
+                        // 1) Try patient-level priority
+                        $p = optional($record->user)->priority ?? null;
+
+                        // 2) Fall back to this pending order's meta.priority
+                        if (!is_string($p) || trim($p) === '') {
+                            $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                            $p = data_get($meta, 'priority');
+                        }
+
+                        // 3) Fall back to the real order's meta.priority by reference
+                        if (!is_string($p) || trim($p) === '') {
+                            try {
+                                $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                if ($order) {
+                                    $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                    $p = data_get($om, 'priority');
+                                }
+                            } catch (\Throwable $e) {
+                                // ignore
+                            }
+                        }
+
                         $p = is_string($p) ? strtolower(trim($p)) : null;
                         return in_array($p, ['red','yellow','green'], true) ? $p : 'green';
                     })
                     ->formatStateUsing(function ($state) {
-                        return match ($state) {
-                            'red' => '🔴',
-                            'yellow' => '🟡',
-                            'green' => '🟢',
-                            default => '🟢',
+                        // Render a small coloured dot instead of emoji for cleaner UI
+                        $colour = match ($state) {
+                            'red' => '#ef4444',
+                            'yellow' => '#eab308',
+                            'green' => '#22c55e',
+                            default => '#22c55e',
                         };
+                        $label = ucfirst(is_string($state) ? $state : 'green');
+                        return '<span title="' . e($label) . '" style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:' . $colour . ';"></span>';
                     })
                     ->tooltip(function ($record) {
                         $p = optional($record->user)->priority;
+                        if (!is_string($p) || trim($p) === '') {
+                            $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                            $p = data_get($meta, 'priority');
+                        }
+                        if (!is_string($p) || trim($p) === '') {
+                            try {
+                                $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                if ($order) {
+                                    $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                    $p = data_get($om, 'priority');
+                                }
+                            } catch (\Throwable $e) {}
+                        }
                         $p = is_string($p) ? strtolower(trim($p)) : null;
                         $p = in_array($p, ['red','yellow','green'], true) ? $p : 'green';
                         return ucfirst($p);
@@ -554,36 +592,21 @@ class PendingOrderResource extends Resource
                                     ]),
                                 ]),
                         ]),
-                        // Noftes & Comments (patient notes above admin notes)
-                        Section::make('Notes & Comments')
+                        Section::make('Admin notes')
                             ->columnSpanFull()
                             ->schema([
-                                Section::make('Patient Notes')
-                                    ->schema([
-                                        TextEntry::make('meta.patient_notes')
-                                            ->hiddenLabel()
-                                            ->getStateUsing(function ($record) {
-                                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                                return data_get($meta, 'patient_notes') ?: 'No patient notes provided';
-                                            })
-                                            ->formatStateUsing(fn ($state) => nl2br(e($state)))
-                                            ->html(),
-                                    ]),
-                                Section::make('Admin Notes')
-                                    ->schema([
-                                        TextEntry::make('meta.admin_notes')
-                                            ->hiddenLabel()
-                                            ->getStateUsing(function ($record) {
-                                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                                return (string) (data_get($meta, 'admin_notes') ?: '—');
-                                            })
-                                            ->formatStateUsing(fn ($state) => nl2br(e($state)))
-                                            ->extraAttributes(function ($record) {
-                                                $ts = optional($record->updated_at)->timestamp ?? time();
-                                                return ['wire:key' => 'pending-admin-notes-' . $record->getKey() . '-' . $ts];
-                                            })
-                                            ->html(),
-                                    ]),
+                                TextEntry::make('meta.admin_notes')
+                                    ->hiddenLabel()
+                                    ->getStateUsing(function ($record) {
+                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                        return (string) (data_get($meta, 'admin_notes') ?: '—');
+                                    })
+                                    ->formatStateUsing(fn ($state) => nl2br(e($state)))
+                                    ->extraAttributes(function ($record) {
+                                        $ts = optional($record->updated_at)->timestamp ?? time();
+                                        return ['wire:key' => 'pending-admin-notes-' . $record->getKey() . '-' . $ts];
+                                    })
+                                    ->html(),
                             ]),
 
                         // Products (from order meta or booking relation)
@@ -966,6 +989,168 @@ class PendingOrderResource extends Resource
                             ]),
                     ])
                     ->extraModalFooterActions([
+                        Action::make('set_priority')
+                            ->label('Priority')
+                            ->icon('heroicon-o-flag')
+                            ->color('warning')
+                            ->modalHeading('Set patient priority')
+                            ->form([
+                                Select::make('priority')
+                                    ->options([
+                                        'red' => 'Red',
+                                        'yellow' => 'Yellow',
+                                        'green' => 'Green',
+                                    ])
+                                    ->required()
+                                    ->default(function (\App\Models\PendingOrder $record) {
+                                        $u = optional($record->user);
+                                        return $u?->priority ?: 'green';
+                                    })
+    
+                            ])
+                            ->action(function (\App\Models\PendingOrder $record, \Filament\Actions\Action $action, array $data) {
+                                $prio = $data['priority'] ?? null;
+
+                                if (!in_array($prio, ['red','yellow','green'], true)) {
+                                    \Filament\Notifications\Notification::make()
+                                        ->danger()
+                                        ->title('Choose a valid priority')
+                                        ->send();
+                                    return;
+                                }
+
+                                // Persist on the patient
+                                try {
+                                    if ($record->user) {
+                                        $record->user->forceFill(['priority' => $prio])->save();
+                                    }
+                                } catch (\Throwable $e) {
+                                    // ignore
+                                }
+
+                                // Also copy onto this pending order so the UI reflects immediately
+                                try {
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                    $meta['priority'] = $prio;
+                                    $record->forceFill(['meta' => $meta])->save();
+                                } catch (\Throwable $e) {
+                                    // ignore
+                                }
+
+                                \Filament\Notifications\Notification::make()
+                                    ->success()
+                                    ->title('Priority updated')
+                                    ->send();
+
+                                // Refresh the table/modal
+                                $action->getLivewire()->dispatch('$refresh');
+                                $action->getLivewire()->dispatch('refreshTable');
+                            }),
+                        Action::make('setScrVerified')
+                            ->label('SCR Verified')
+                            ->color('gray')
+                            ->icon('heroicon-o-check-badge')
+                            ->form([
+                                Select::make('value')
+                                    ->label('Set SCR status')
+                                    ->options([
+                                        'yes' => 'Yes',
+                                        'no'  => 'No',
+                                    ])
+                                    ->required()
+                                    ->default(function ($record) {
+                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                        // 1) Prefer current order meta
+                                        $v = data_get($meta, 'scr_verified');
+                                        if ($v === true || $v === 1 || $v === '1' || $v === 'true') return 'yes';
+                                        if ($v === false || $v === 0 || $v === '0' || $v === 'false') return 'no';
+
+                                        // 2) Fallback to patient-level memory if available
+                                        try {
+                                            $u = $record->user ?? null;
+                                            if ($u) {
+                                                // users.meta JSON
+                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                                    $um = is_array($u->meta) ? $u->meta : (json_decode($u->meta ?? '[]', true) ?: []);
+                                                    $uv = data_get($um, 'scr_verified');
+                                                    if ($uv === true || $uv === 1 || $uv === '1' || $uv === 'true') return 'yes';
+                                                    if ($uv === false || $uv === 0 || $uv === '0' || $uv === 'false') return 'no';
+                                                }
+                                                // users.scr_verified boolean column
+                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'scr_verified')) {
+                                                    if ((int)($u->scr_verified ?? 0) === 1) return 'yes';
+                                                    return 'no';
+                                                }
+                                            }
+                                        } catch (\Throwable $e) {
+                                            // ignore and let it be null
+                                        }
+
+                                        return null; // no preselection
+                                    }),
+                            ])
+                            ->action(function (PendingOrder $record, Action $action, array $data) {
+                                $setYes = ($data['value'] ?? null) === 'yes';
+
+                                // Update on PendingOrder
+                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                data_set($meta, 'scr_verified', $setYes);
+                                if ($setYes) {
+                                    data_set($meta, 'scr_verified_at', now()->toIso8601String());
+                                } else {
+                                    data_forget($meta, 'scr_verified_at');
+                                }
+                                $record->meta = $meta;
+                                $record->save();
+
+                                // Mirror to the corresponding Order, if found by reference
+                                try {
+                                    $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                    if ($order) {
+                                        $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                        data_set($om, 'scr_verified', $setYes);
+                                        if ($setYes) {
+                                            data_set($om, 'scr_verified_at', now()->toIso8601String());
+                                        } else {
+                                            data_forget($om, 'scr_verified_at');
+                                        }
+                                        $order->meta = $om;
+                                        $order->save();
+                                    }
+                                } catch (\Throwable $e) {
+                                    // swallow to keep UX smooth
+                                }
+
+                                // Persist on patient profile so future orders auto-populate
+                                try {
+                                    $user = $record->user ?? null;
+                                    if ($user) {
+                                        if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                            $um = is_array($user->meta) ? $user->meta : (json_decode($user->meta ?? '[]', true) ?: []);
+                                            data_set($um, 'scr_verified', $setYes);
+                                            if ($setYes) {
+                                                data_set($um, 'scr_verified_at', now()->toIso8601String());
+                                            } else {
+                                                data_forget($um, 'scr_verified_at');
+                                            }
+                                            $user->meta = $um;
+                                            $user->save();
+                                        } elseif (\Illuminate\Support\Facades\Schema::hasColumn('users', 'scr_verified')) {
+                                            $user->scr_verified = $setYes ? 1 : 0;
+                                            if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'scr_verified_at')) {
+                                                $user->scr_verified_at = $setYes ? now() : null;
+                                            }
+                                            $user->save();
+                                        }
+                                    }
+                                } catch (\Throwable $e) {
+                                    // swallow
+                                }
+
+                                $action->success();
+                                $action->getLivewire()->dispatch('$refresh');
+                                $action->getLivewire()->dispatch('refreshTable');
+                            }),
                         Action::make('approve')
                             ->label('Approve')
                             ->color('success')
