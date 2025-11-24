@@ -42,39 +42,78 @@ class CompletedOrderDetails extends ViewRecord
         return [
             Action::make('print_label')
                 ->label('Print label')
-                ->icon('heroicon-m-printer')
-                ->color('warning')
+                ->icon('heroicon-o-printer')
+                ->color('primary')
                 ->action(function () {
-                    $o = $this->record; // Current Order model instance
+                    $o  = $this->record;
+                    $m  = is_array($o->meta) ? $o->meta : [];
 
-                    // Build ZPL using the Order model (matches ZplLabelBuilder::forOrder signature)
-                    try {
-                        $zpl = app(\App\Support\ZplLabelBuilder::class)->forOrder($o);
-                    } catch (\Throwable $e) {
-                        \Log::error('print_label builder error', [
-                            'order_id' => $o->id ?? null,
-                            'message' => $e->getMessage(),
-                        ]);
-                        Notification::make()->danger()->title('Could not build label')->body(substr($e->getMessage(), 0, 200))->send();
-                        return;
-                    }
+                    // product info fallbacks
+                    $prod = $m['selectedProduct']
+                        ?? ($m['items'][0] ?? null)
+                        ?? ($m['lines'][0] ?? null)
+                        ?? [];
 
-                    if (!is_string($zpl) || trim($zpl) === '') {
-                        \Log::warning('print_label empty zpl', ['order_id' => $o->id ?? null]);
-                        Notification::make()->danger()->title('Label data was empty')->send();
-                        return;
-                    }
+                    $qty   = (int) ($prod['qty'] ?? 1);
+                    $name  = trim(($prod['name'] ?? $prod['variation'] ?? ''));
+                    $var   = trim($prod['variation'] ?? '');
+                    $str   = trim($prod['strength'] ?? '');
 
-                    \Log::info('print_label dispatch', [
-                        'order_id' => $o->id ?? null,
-                        'reference' => $o->reference ?? null,
-                        'len' => strlen($zpl),
+                    // Compose line1 eg "1 x Mounjaro 2.5mg"
+                    $parts = array_filter([
+                        ($qty > 0 ? "{$qty} x" : null),
+                        $name ?: $var,
+                        $str && strcasecmp($str, $name) !== 0 ? $str : null,
+                    ]);
+                    $line1 = implode(' ', $parts);
+
+                    // Patient
+                    $first = $m['firstName'] ?? $o->shipping_address?->first_name ?? '';
+                    $last  = $m['lastName']  ?? $o->shipping_address?->last_name  ?? '';
+                    $patient = trim($first . ' ' . $last);
+
+                    // Pharmacy sender
+                    $pharmacy = 'Pharmacy Express FME51  Unit 4  WF1 2UY';
+                    $phone    = '01924971414';
+
+                    // Directions and warnings
+                    $directions = 'WEEKLY AS DIRECTED';
+                    $warningLines = [
+                        'Warning. Read the additional information given with this medicine',
+                        'Keep out of the reach and sight of children',
+                    ];
+                    $warning = implode("\n", $warningLines);
+
+                    // Date from approved_at or now
+                    $dateText = isset($m['approved_at'])
+                        ? \Carbon\Carbon::parse($m['approved_at'])->timezone('Europe/London')->format('d/m/y')
+                        : \Carbon\Carbon::now('Europe/London')->format('d/m/y');
+
+                    $payload = [
+                        'line1'      => $line1,
+                        'directions' => $directions,
+                        'warning'    => $warning,     // supports two lines in the builder
+                        'patient'    => $patient,
+                        'pharmacy'   => $pharmacy,
+                        'phone'      => $phone,
+                        'date_text'  => $dateText,
+                        'qr'         => $o->reference,
+                    ];
+
+                    $zpl = app(\App\Support\ZplLabelBuilder::class)->forOrder($payload);
+
+                    logger()->info('print_label dispatch', [
+                        'order_id'  => $o->id,
+                        'reference' => $o->reference,
+                        'len'       => strlen($zpl),
                     ]);
 
-                    // Dispatch to browser listener implemented in global-shortcuts.blade.php
                     $this->dispatch('print-zpl', zpl: $zpl);
 
-                    Notification::make()->success()->title('Label sent to browser')->send();
+                    \Filament\Notifications\Notification::make()
+                        ->title('Label sent to browser')
+                        ->success()
+                        ->send();
                 }),
                 
             ActionGroup::make([
