@@ -32,38 +32,47 @@ class ZplLabelBuilder
         $dateText   = trim($data['date_text'] ?? Carbon::now('Europe/London')->format('d/m/y'));
         $qr         = $data['qr'] ?? null;
 
-        // 4x6 inch at 203 dpi width 812 dots height 1218 dots
-        // ^CI28 ensures UTF-8 handling for text
-        // Layout tuned to resemble the provided example label
+        // 76mm x 36mm label at 203 dpi
+        // 203 dpi is ~8 dots per mm
+        $dotsPerMm = 203 / 25.4; // ≈ 8.0
+        $PW = (int) round(76 * $dotsPerMm);  // ≈ 608 dots width
+        $LL = (int) round(36 * $dotsPerMm);  // ≈ 288 dots height
+
+        // Left column width leaves space at right for date + QR
+        $leftColWidth = $PW - 150; // reserve ~150 dots for the right column
+        $rightColX    = $PW - 120; // right column X anchor
+
+        // Build ZPL (UTF-8 via ^CI28)
+        // Keep left text roughly where it previously appeared, scaled to the new canvas
         return "^XA
 ^CI28
-^PW812
-^LL1218
+^PW{$PW}
+^LL{$LL}
 ^LH0,0
 
-^CF0,30
-^FO30,40^FB752,2,0,L,0^FD{$line1}^FS
+^CF0,22
+^FO10,12^FB{$leftColWidth},2,0,L,0^FD{$line1}^FS
 
-^CF0,44
-^FO30,170^FB752,1,0,C,0^FD" . mb_strtoupper($directions) . "^FS
+^CF0,24
+^FO10,52^FB" . ($PW - 20) . ",1,0,C,0^FD" . mb_strtoupper($directions) . "^FS
 
-^CF0,28
-^FO30,230^FB752,2,0,L,0^FDWarning. Read the additional information given with this medicine^FS
+^CF0,18
+^FO10,84^FB{$leftColWidth},2,0,L,0^FDWarning. Read the additional information given with this medicine^FS
 
-^CF0,32
-^FO30,330^FD{$patient}^FS
+^CF0,20
+^FO10,116^FB{$leftColWidth},1,0,L,0^FD{$patient}^FS
 
-^CF0,26
-^FO30,372^FB620,2,0,L,0^FD{$pharmacy}\\& Tel: {$phone}^FS
+^CF0,16
+^FO10,148^FB{$leftColWidth},2,0,L,0^FD{$pharmacy}\\& Tel: {$phone}^FS
 
-^CF0,30
-^FO690,280^FD{$dateText}^FS
-
-" . ($qr ? "^BQN,2,6
-^FO690,320^FDLA,{$qr}^FS
+^CF0,18
+^FO{$rightColX}," . ($LL - 122) . "^FB100,1,0,R,0^FD{$dateText}^FS
+" . ($qr ? "
+^BQN,2,4
+^FO{$rightColX}," . ($LL - 100) . "^FDLA,{$qr}^FS
 " : '') . "
-^CF0,26
-^FO30,430^FB752,2,0,L,0^FD{$bottomWarning}^FS
+^CF0,16
+^FO10," . ($LL - 26) . "^FB" . ($PW - 20) . ",2,0,L,0^FD{$bottomWarning}^FS
 
 ^XZ";
     }
