@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Patients\Tables;
 
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\SelectColumn;
 use App\Filament\Resources\Patients\PatientResource;
 use App\Models\Order;
 use Throwable;
@@ -13,6 +14,8 @@ use Filament\Tables;
 use Illuminate\Database\Eloquent\Builder;
 use Filament\Actions\Action;
 use Illuminate\Support\HtmlString;
+use Filament\Tables\Columns\ViewColumn;
+use App\Models\Patient;
 
 class PatientsTable
 {
@@ -20,6 +23,23 @@ class PatientsTable
     {
         return $table
             ->columns([
+
+                SelectColumn::make('priority')
+                    ->label('Priority')
+                    ->placeholder('Select')
+                    ->options([
+                        'red' => '🔴',
+                        'yellow' => '🟡',
+                        'green' => '🟢',
+                    ])
+                    ->sortable(query: function (\Illuminate\Database\Eloquent\Builder $query, string $direction) {
+                        $dir = strtoupper($direction) === 'DESC' ? 'DESC' : 'ASC';
+                        return $query->orderByRaw("FIELD(priority, 'red','yellow','green') $dir");
+                    })
+                    ->rules(['nullable','in:red,yellow,green'])
+                    ->extraAttributes(['style' => 'text-align:center; width:6rem'])
+                    ->default('green')
+                    ->toggleable(),
 
                 // Left-most: computed 4-digit internal id
                 TextColumn::make('computed_internal_id')

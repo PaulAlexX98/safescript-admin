@@ -354,4 +354,85 @@ class PendingOrder extends Model
     {
         return $this->hasOne(Booking::class, 'order_id');
     }
+
+    /**
+ * Resolve the Patient for this order by signals:
+ * 1) user_id
+ * 2) orders.email
+ * 3) meta.email or meta.patient.email
+ */
+    public function resolvePatient()
+    {
+        try {
+            // 1) user_id direct link
+            if (!empty($this->user_id)) {
+                $p = \App\Models\Patient::query()->where('user_id', $this->user_id)->first();
+                if ($p) return $p;
+            }
+
+            // derive email from column or meta
+            $email = null;
+
+            if (!empty($this->email)) {
+                $email = strtolower(trim((string) $this->email));
+            }
+
+            if (!$email) {
+                $meta = $this->meta;
+                if (is_string($meta)) {
+                    $decoded = json_decode($meta, true);
+                    $meta = json_last_error() === JSON_ERROR_NONE ? $decoded : [];
+                } elseif (!is_array($meta)) {
+                    $meta = [];
+                }
+
+                foreach ([
+                    data_get($meta, 'email'),
+                    data_get($meta, 'patient.email'),
+                    data_get($meta, 'customer.email'),
+                ] as $cand) {
+                    if ($cand) {
+                        $email = strtolower(trim((string) $cand));
+                        break;
+                    }
+                }
+            }
+
+            if ($email) {
+                return \App\Models\Patient::query()
+                    ->whereRaw('LOWER(email) = ?', [$email])
+                    ->first();
+            }
+
+            return null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Expose patient's priority as an accessor on orders.
+     * Returns red yellow green or null.
+     */
+    public function getPatientPriorityAttribute(): ?string
+    {
+        try {
+            $val = $this->resolvePatient()?->priority;
+            if (!$val) return null;
+            $val = strtolower((string) $val);
+            return in_array($val, ['red','yellow','green'], true) ? $val : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * A handy coloured dot for tables.
+     */
+    public function getPatientPriorityDotAttribute(): string
+    {
+        $map = ['red'=>'🔴','yellow'=>'🟡','green'=>'🟢'];
+        $key = $this->patient_priority ?? null;
+        return $map[$key] ?? '🟢';
+    }
 }

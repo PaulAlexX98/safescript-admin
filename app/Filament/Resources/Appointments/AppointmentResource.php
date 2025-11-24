@@ -533,7 +533,7 @@ class AppointmentResource extends Resource
                         'cancelled' => 'Cancelled',
                         'rejected'  => 'Rejected',
                     ])
-                    ->default(['approved'])
+                    ->default(['completed'])
                     ->query(function (Builder $query, array $data): Builder {
                         // $data may be ['values' => [...]] for multiple select
                         $values = $data['values'] ?? [];

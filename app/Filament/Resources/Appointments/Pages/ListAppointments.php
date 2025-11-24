@@ -13,6 +13,9 @@ class ListAppointments extends ListRecords
     protected function getHeaderActions(): array
     {
         return [
+            Actions\Action::make('Zoom meetings')
+                ->url('https://zoom.us/meeting#/upcoming')
+                ->openUrlInNewTab(),
             Actions\CreateAction::make(),   // this is what shows “Create Appointment”
             // keep any other actions you already had here
         ]; // add CreateAction if you want to create from admin

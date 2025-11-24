@@ -57,8 +57,35 @@ class ApprovedOrderResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            
             ->defaultSort('created_at', 'desc')
             ->columns([
+
+                TextColumn::make('patient_priority_dot')
+                    ->label('Priority')
+                    ->getStateUsing(function ($record) {
+                        // Read the priority from the related User if available
+                        $p = optional($record->user)->priority;
+                        $p = is_string($p) ? strtolower(trim($p)) : null;
+                        return in_array($p, ['red','yellow','green'], true) ? $p : 'green';
+                    })
+                    ->formatStateUsing(function ($state) {
+                        return match ($state) {
+                            'red' => '🔴',
+                            'yellow' => '🟡',
+                            'green' => '🟢',
+                            default => '🟢',
+                        };
+                    })
+                    ->tooltip(function ($record) {
+                        $p = optional($record->user)->priority;
+                        $p = is_string($p) ? strtolower(trim($p)) : null;
+                        $p = in_array($p, ['red','yellow','green'], true) ? $p : 'green';
+                        return ucfirst($p);
+                    })
+                    ->html()
+                    ->extraAttributes(['style' => 'text-align:center; width:5rem']),
+                    
                 TextColumn::make('created_at')
                     ->label('Order Created')
                     ->dateTime('d M Y, H:i')
