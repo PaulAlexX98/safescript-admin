@@ -223,9 +223,11 @@ HTML;
 
                                 // Quick action to jump cursor to meta fields
                                 Placeholder::make('edit_seo_meta_button')
-                                    ->label('')
+                                    ->label('Edit SEO meta')
                                     ->content(new HtmlString('<button type="button" class="fi-btn fi-color-gray fi-size-md">Edit SEO meta</button>'))
                                     ->extraAttributes([
+                                        // Hide only the label element to remove spacing while keeping the button visible
+                                        'x-init' => '(function(){ const field = $el.closest(".fi-fo-field-wrp"); const lab = field ? field.querySelector("label") : null; if(lab) lab.classList.add("sr-only"); })()',
                                         'x-on:click' => "(() => { const t = document.querySelector('[name=\"meta_title\"]'); const d = document.querySelector('[name=\"meta_description\"]'); (t ?? d)?.scrollIntoView({behavior:'smooth', block:'center'}); (t ?? d)?.focus(); })()",
                                         'style' => 'margin-top: -8px;'
                                     ])
