@@ -1051,43 +1051,54 @@ class PendingOrderResource extends Resource
                             ->color('gray')
                             ->icon('heroicon-o-check-badge')
                             ->form([
-                                Select::make('value')
-                                    ->label('Set SCR status')
-                                    ->options([
-                                        'yes' => 'Yes',
-                                        'no'  => 'No',
-                                    ])
-                                    ->required()
-                                    ->default(function ($record) {
-                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        // 1) Prefer current order meta
-                                        $v = data_get($meta, 'scr_verified');
-                                        if ($v === true || $v === 1 || $v === '1' || $v === 'true') return 'yes';
-                                        if ($v === false || $v === 0 || $v === '0' || $v === 'false') return 'no';
+                        Select::make('value')
+                            ->label('Set SCR status')
+                            ->options([
+                                'yes' => 'Yes',
+                                'no'  => 'No',
+                            ])
+                            ->required()
+                            ->default(function ($record) {
+                                $norm = function ($v) {
+                                    if (in_array($v, [true, 1, '1', 'true', 'yes', 'YES', 'Yes'], true)) return 'yes';
+                                    if (in_array($v, [false, 0, '0', 'false', 'no', 'NO', 'No'], true)) return 'no';
+                                    return null;
+                                };
 
-                                        // 2) Fallback to patient-level memory if available
-                                        try {
-                                            $u = $record->user ?? null;
-                                            if ($u) {
-                                                // users.meta JSON
-                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
-                                                    $um = is_array($u->meta) ? $u->meta : (json_decode($u->meta ?? '[]', true) ?: []);
-                                                    $uv = data_get($um, 'scr_verified');
-                                                    if ($uv === true || $uv === 1 || $uv === '1' || $uv === 'true') return 'yes';
-                                                    if ($uv === false || $uv === 0 || $uv === '0' || $uv === 'false') return 'no';
-                                                }
-                                                // users.scr_verified boolean column
-                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'scr_verified')) {
-                                                    if ((int)($u->scr_verified ?? 0) === 1) return 'yes';
-                                                    return 'no';
-                                                }
-                                            }
-                                        } catch (\Throwable $e) {
-                                            // ignore and let it be null
+                                // 1) Pending order meta
+                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                $v = $norm(data_get($meta, 'scr_verified'));
+                                if ($v !== null) return $v;
+
+                                // 2) User meta
+                                try {
+                                    $u = $record->user ?? null;
+                                    if ($u) {
+                                        if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                            $um = is_array($u->meta) ? $u->meta : (json_decode($u->meta ?? '[]', true) ?: []);
+                                            $uv = $norm(data_get($um, 'scr_verified'));
+                                            if ($uv !== null) return $uv;
                                         }
+                                        // 3) User flat column
+                                        if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'scr_verified')) {
+                                            $flat = $norm($u->scr_verified ?? null);
+                                            if ($flat !== null) return $flat;
+                                        }
+                                    }
+                                } catch (\Throwable $e) {}
 
-                                        return null; // no preselection
-                                    }),
+                                // 4) Linked order by reference
+                                try {
+                                    $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                    if ($ord) {
+                                        $om = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
+                                        $ov = $norm(data_get($om, 'scr_verified'));
+                                        if ($ov !== null) return $ov;
+                                    }
+                                } catch (\Throwable $e) {}
+
+                                return null; // no preselection
+                            })
                             ])
                             ->action(function (PendingOrder $record, Action $action, array $data) {
                                 $setYes = ($data['value'] ?? null) === 'yes';
@@ -1156,6 +1167,61 @@ class PendingOrderResource extends Resource
                             ->color('success')
                             ->icon('heroicon-o-check')
                             ->action(function (PendingOrder $record, Action $action) {
+                                // SCR must be explicitly chosen once per patient or order before approval
+                                try {
+                                    $norm = function ($v) {
+                                        if (in_array($v, [true, 1, '1', 'true', 'yes', 'YES', 'Yes'], true)) return 'yes';
+                                        if (in_array($v, [false, 0, '0', 'false', 'no', 'NO', 'No'], true)) return 'no';
+                                        return null;
+                                    };
+
+                                    // 1) Check this pending order meta
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                    $scr = $norm(data_get($meta, 'scr_verified'));
+
+                                    // 2) Fall back to linked Order by reference
+                                    if ($scr === null) {
+                                        try {
+                                            $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                            if ($ord) {
+                                                $om = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
+                                                $scr = $norm(data_get($om, 'scr_verified'));
+                                            }
+                                        } catch (\Throwable $e) { /* ignore */ }
+                                    }
+
+                                    // 3) Fall back to user profile
+                                    if ($scr === null && $record->user) {
+                                        try {
+                                            if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                                $um = is_array($record->user->meta) ? $record->user->meta : (json_decode($record->user->meta ?? '[]', true) ?: []);
+                                                $scr = $norm(data_get($um, 'scr_verified'));
+                                            }
+                                            if ($scr === null && \Illuminate\Support\Facades\Schema::hasColumn('users', 'scr_verified')) {
+                                                $scr = $norm($record->user->scr_verified ?? null);
+                                            }
+                                        } catch (\Throwable $e) { /* ignore */ }
+                                    }
+
+                                    if ($scr === null) {
+                                        \Filament\Notifications\Notification::make()
+                                            ->danger()
+                                            ->title('SCR required')
+                                            ->body('Choose SCR yes or no')
+                                            ->send();
+                                        try { $action->getLivewire()->dispatch('$refresh'); $action->getLivewire()->dispatch('refreshTable'); } catch (\Throwable $e) {}
+                                        return; // block approval until a choice has been made
+                                    }
+                                } catch (\Throwable $e) {
+                                    \Filament\Notifications\Notification::make()
+                                        ->danger()
+                                        ->title('SCR check failed')
+                                        ->body('Could not confirm SCR selection. Please choose Yes or No and try again.')
+                                        ->send();
+                                    try { $action->getLivewire()->dispatch('$refresh'); $action->getLivewire()->dispatch('refreshTable'); } catch (\Throwable $ex) {}
+                                    return;
+                                }
+
                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                 data_set($meta, 'approved_at', now()->toISOString());
                                 $record->status = 'approved';
