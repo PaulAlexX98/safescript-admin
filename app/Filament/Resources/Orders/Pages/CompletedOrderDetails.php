@@ -103,7 +103,7 @@ class CompletedOrderDetails extends ViewRecord
                     $phone    = '01924971414';
 
                     // Directions and warnings
-                    $directions = 'WEEKLY AS DIRECTED';
+                    $directions = 'Use once a week same day as directed';
                     $warningLines = [
                         'Warning. Read the additional information given with this medicine',
                         'Keep out of the reach and sight of children',

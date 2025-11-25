@@ -9,7 +9,7 @@ class ZplLabelBuilder
     public function forOrder(array $data): string
     {
         $line1      = mb_strtoupper(trim($data['line1'] ?? ''));
-        $directions = trim($data['directions'] ?? 'WEEKLY AS DIRECTED');
+        $directions = trim($data['directions'] ?? 'Use once a week same day as directed');
         $warning    = trim((string) ($data['warning'] ?? ''));
         $bottomWarning = 'Keep out of the reach and sight of children';
         $patient    = trim($data['patient'] ?? '');
@@ -28,7 +28,7 @@ class ZplLabelBuilder
     ^CF0,22
     ^FO32,24^FB560,2,0,C,10^FD{$line1}^FS
 
-    ^CF0,24
+    ^CF0,20
     ^FO32,80^FB560,1,0,C,20^FD" . mb_strtoupper($directions) . "^FS
 
     ^CF0,18
