@@ -1,0 +1,84 @@
+/* Voice Textarea Component Styles */
+
+.voice-textarea-container {
+    position: relative;
+}
+
+/* Position the button relative to the textarea input */
+.fi-fo-textarea-input {
+    position: relative !important;
+    padding-right: 3rem !important;
+}
+
+/* Microphone button styles for Filament VoiceTextarea */
+.voice-textarea-button {
+    background: transparent;
+    border: none;
+    padding: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #6b7280; /* Tailwind gray-400 */
+    transition: background 0.2s, color 0.2s;
+    border-radius: 9999px;
+    cursor: pointer;
+}
+
+.voice-textarea-button:hover,
+.voice-textarea-button:focus {
+    background: #f3f4f6; /* Tailwind gray-100 */
+    color: #374151;      /* Tailwind gray-700 */
+}
+
+.voice-textarea-button.listening {
+    background: #f87171; /* Tailwind red-400 */
+    color: #fff;
+}
+
+/* Dark mode styles */
+.dark .voice-textarea-button {
+    background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+    box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.3), 0 1px 2px -1px rgba(0, 0, 0, 0.2);
+}
+
+.dark .voice-textarea-button:hover {
+    background: linear-gradient(135deg, #93c5fd 0%, #60a5fa 100%);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+}
+
+.dark .voice-textarea-button:focus {
+    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3), 0 1px 2px -1px rgba(0, 0, 0, 0.2);
+}
+
+/* Listening state - red gradient */
+.voice-textarea-button.listening {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.voice-textarea-button.listening:hover {
+    background: linear-gradient(135deg, #f87171 0%, #ef4444 100%);
+}
+
+.dark .voice-textarea-button.listening {
+    background: linear-gradient(135deg, #fca5a5 0%, #f87171 100%);
+}
+
+.dark .voice-textarea-button.listening:hover {
+    background: linear-gradient(135deg, #fecaca 0%, #fca5a5 100%);
+}
+
+/* Pulse animation for listening state */
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.8;
+    }
+}
+
+/* Ensure the textarea maintains its original Filament styling */
+.voice-textarea-container .fi-fo-textarea-input {
+    /* Preserve all original Filament textarea styles */
+}

@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "c12b2903075a204dbd60e35397c62960",
+    "content-hash": "f7ae8fd9687502dd75c03738924d4239",
     "packages": [
         {
             "name": "anourvalar/eloquent-serialize",
@@ -5384,6 +5384,85 @@
                 "source": "https://github.com/ramsey/uuid/tree/4.9.1"
             },
             "time": "2025-09-04T20:59:21+00:00"
+        },
+        {
+            "name": "ruelluna/filament-voice-textarea",
+            "version": "1.1",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/ruelluna/filament-voice-textarea.git",
+                "reference": "a143e4af94a123ba35c396dfae8c527c6d6212b2"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/ruelluna/filament-voice-textarea/zipball/a143e4af94a123ba35c396dfae8c527c6d6212b2",
+                "reference": "a143e4af94a123ba35c396dfae8c527c6d6212b2",
+                "shasum": ""
+            },
+            "require": {
+                "filament/forms": "^3.0|^4.0",
+                "php": "^8.1",
+                "spatie/laravel-package-tools": "^1.15.0"
+            },
+            "require-dev": {
+                "laravel/pint": "^1.0",
+                "nunomaduro/collision": "^8.0",
+                "nunomaduro/larastan": "^3.0",
+                "orchestra/testbench": "^9.0",
+                "pestphp/pest": "^3.0",
+                "pestphp/pest-plugin-arch": "^3.0",
+                "pestphp/pest-plugin-laravel": "^3.0",
+                "phpstan/extension-installer": "^1.1",
+                "phpstan/phpstan-deprecation-rules": "^2.0",
+                "phpstan/phpstan-phpunit": "^2.0",
+                "spatie/laravel-ray": "^1.26"
+            },
+            "type": "library",
+            "extra": {
+                "laravel": {
+                    "aliases": {
+                        "FilamentVoiceTextarea": "Ruelluna\\FilamentVoiceTextarea\\Facades\\FilamentVoiceTextarea"
+                    },
+                    "providers": [
+                        "Ruelluna\\FilamentVoiceTextarea\\FilamentVoiceTextareaServiceProvider"
+                    ]
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Ruelluna\\FilamentVoiceTextarea\\": "src/",
+                    "Ruelluna\\FilamentVoiceTextarea\\Database\\Factories\\": "database/factories/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Ruel Luna",
+                    "email": "ruelluna@gmail.com",
+                    "role": "Developer"
+                }
+            ],
+            "description": "A filament plugin to use microphone to Textarea fields.",
+            "homepage": "https://github.com/ruelluna/filament-voice-textarea",
+            "keywords": [
+                "RuelLuna",
+                "filament-voice-textarea",
+                "laravel"
+            ],
+            "support": {
+                "issues": "https://github.com/ruelluna/filament-voice-textarea/issues",
+                "source": "https://github.com/ruelluna/filament-voice-textarea"
+            },
+            "funding": [
+                {
+                    "url": "https://github.com/ruelluna",
+                    "type": "github"
+                }
+            ],
+            "time": "2025-08-19T15:12:17+00:00"
         },
         {
             "name": "ryangjchandler/blade-capture-directive",
