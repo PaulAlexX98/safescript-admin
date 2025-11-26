@@ -1050,6 +1050,26 @@ class PendingOrderResource extends Resource
                             ->label('SCR Verified')
                             ->color('gray')
                             ->icon('heroicon-o-check-badge')
+                            ->visible(function ($record) {
+                                try {
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                    $slug = data_get($meta, 'service_slug')
+                                        ?? data_get($meta, 'service.slug')
+                                        ?? data_get($meta, 'consultation.service_slug');
+                                    if (!is_string($slug) || strtolower($slug) !== 'weight-management') return false;
+
+                                    $rawType = strtolower((string) (data_get($meta, 'type') ?? data_get($meta, 'mode') ?? data_get($meta, 'flow') ?? ''));
+                                    $path    = strtolower((string) (data_get($meta, 'path') ?? data_get($meta, 'source_url') ?? data_get($meta, 'referer') ?? ''));
+                                    $ref     = strtoupper((string) ($record->reference ?? ''));
+
+                                    $isReorder = in_array($rawType, ['reorder','repeat','re-order','repeat-order'], true)
+                                        || str_contains($path, '/reorder')
+                                        || preg_match('/^PTC[A-Z]*R\d{6}$/', $ref);
+                                    $isNew = ($rawType === 'new') || preg_match('/^PTC[A-Z]*N\d{6}$/', $ref);
+
+                                    return $isNew && !$isReorder;
+                                } catch (\Throwable $e) { return false; }
+                            })
                             ->form([
                         Select::make('value')
                             ->label('Set SCR status')
@@ -1162,61 +1182,194 @@ class PendingOrderResource extends Resource
                                 $action->getLivewire()->dispatch('$refresh');
                                 $action->getLivewire()->dispatch('refreshTable');
                             }),
+                        Action::make('setIdVerified')
+                            ->label('ID Verified')
+                            ->color('gray')
+                            ->icon('heroicon-o-identification')
+                            ->visible(function ($record) {
+                                try {
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                    $slug = data_get($meta, 'service_slug')
+                                        ?? data_get($meta, 'service.slug')
+                                        ?? data_get($meta, 'consultation.service_slug');
+                                    if (!is_string($slug) || strtolower($slug) !== 'weight-management') return false;
+
+                                    $rawType = strtolower((string) (data_get($meta, 'type') ?? data_get($meta, 'mode') ?? data_get($meta, 'flow') ?? ''));
+                                    $path    = strtolower((string) (data_get($meta, 'path') ?? data_get($meta, 'source_url') ?? data_get($meta, 'referer') ?? ''));
+                                    $ref     = strtoupper((string) ($record->reference ?? ''));
+
+                                    $isReorder = in_array($rawType, ['reorder','repeat','re-order','repeat-order'], true)
+                                        || str_contains($path, '/reorder')
+                                        || preg_match('/^PTC[A-Z]*R\d{6}$/', $ref);
+                                    $isNew = ($rawType === 'new') || preg_match('/^PTC[A-Z]*N\d{6}$/', $ref);
+
+                                    return $isNew && !$isReorder;
+                                } catch (\Throwable $e) { return false; }
+                            })
+                            ->form([
+                                Select::make('value')
+                                    ->label('Set ID status')
+                                    ->options([
+                                        'yes' => 'Yes',
+                                        'no'  => 'No',
+                                    ])
+                                    ->required()
+                                    ->default(function ($record) {
+                                        $norm = function ($v) {
+                                            if (in_array($v, [true, 1, '1', 'true', 'yes', 'YES', 'Yes'], true)) return 'yes';
+                                            if (in_array($v, [false, 0, '0', 'false', 'no', 'NO', 'No'], true)) return 'no';
+                                            return null;
+                                        };
+                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                        $v = $norm(data_get($meta, 'id_verified'));
+                                        if ($v !== null) return $v;
+                                        try {
+                                            $u = $record->user ?? null;
+                                            if ($u && \Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                                $um = is_array($u->meta) ? $u->meta : (json_decode($u->meta ?? '[]', true) ?: []);
+                                                $uv = $norm(data_get($um, 'id_verified'));
+                                                if ($uv !== null) return $uv;
+                                            }
+                                            if ($u && \Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified')) {
+                                                $flat = $norm($u->id_verified ?? null);
+                                                if ($flat !== null) return $flat;
+                                            }
+                                        } catch (\Throwable $e) {}
+                                        try {
+                                            $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                            if ($ord) {
+                                                $om = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
+                                                $ov = $norm(data_get($om, 'id_verified'));
+                                                if ($ov !== null) return $ov;
+                                            }
+                                        } catch (\Throwable $e) {}
+                                        return null;
+                                    }),
+                            ])
+                            ->action(function (\App\Models\PendingOrder $record, \Filament\Actions\Action $action, array $data) {
+                                $setYes = ($data['value'] ?? null) === 'yes';
+                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                data_set($meta, 'id_verified', $setYes);
+                                $record->meta = $meta;
+                                $record->save();
+                                try {
+                                    $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                    if ($order) {
+                                        $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                        data_set($om, 'id_verified', $setYes);
+                                        $order->meta = $om;
+                                        $order->save();
+                                    }
+                                } catch (\Throwable $e) {}
+                                try {
+                                    $user = $record->user ?? null;
+                                    if ($user && \Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                        $um = is_array($user->meta) ? $user->meta : (json_decode($user->meta ?? '[]', true) ?: []);
+                                        data_set($um, 'id_verified', $setYes);
+                                        $user->meta = $um;
+                                        $user->save();
+                                    } elseif ($user && \Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified')) {
+                                        $user->id_verified = $setYes ? 1 : 0;
+                                        $user->save();
+                                    }
+                                } catch (\Throwable $e) {}
+                                $action->success();
+                                try { $action->getLivewire()->dispatch('$refresh'); $action->getLivewire()->dispatch('refreshTable'); } catch (\Throwable $e) {}
+                            }),
                         Action::make('approve')
                             ->label('Approve')
                             ->color('success')
                             ->icon('heroicon-o-check')
                             ->action(function (PendingOrder $record, Action $action) {
-                                // SCR must be explicitly chosen once per patient or order before approval
+                                // Gate approval for Weight Management NEW orders: require both SCR and ID choices
                                 try {
-                                    $norm = function ($v) {
-                                        if (in_array($v, [true, 1, '1', 'true', 'yes', 'YES', 'Yes'], true)) return 'yes';
-                                        if (in_array($v, [false, 0, '0', 'false', 'no', 'NO', 'No'], true)) return 'no';
-                                        return null;
-                                    };
-
-                                    // 1) Check this pending order meta
+                                    /** @var \App\Models\PendingOrder $record */
                                     $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                    $scr = $norm(data_get($meta, 'scr_verified'));
 
-                                    // 2) Fall back to linked Order by reference
-                                    if ($scr === null) {
-                                        try {
-                                            $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
-                                            if ($ord) {
-                                                $om = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
-                                                $scr = $norm(data_get($om, 'scr_verified'));
-                                            }
-                                        } catch (\Throwable $e) { /* ignore */ }
-                                    }
+                                    $slug = data_get($meta, 'service_slug')
+                                        ?? data_get($meta, 'service.slug')
+                                        ?? data_get($meta, 'consultation.service_slug');
 
-                                    // 3) Fall back to user profile
-                                    if ($scr === null && $record->user) {
-                                        try {
-                                            if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
-                                                $um = is_array($record->user->meta) ? $record->user->meta : (json_decode($record->user->meta ?? '[]', true) ?: []);
-                                                $scr = $norm(data_get($um, 'scr_verified'));
-                                            }
-                                            if ($scr === null && \Illuminate\Support\Facades\Schema::hasColumn('users', 'scr_verified')) {
-                                                $scr = $norm($record->user->scr_verified ?? null);
-                                            }
-                                        } catch (\Throwable $e) { /* ignore */ }
-                                    }
+                                    $rawType = strtolower((string) (data_get($meta, 'type') ?? data_get($meta, 'mode') ?? data_get($meta, 'flow') ?? ''));
+                                    $path    = strtolower((string) (data_get($meta, 'path') ?? data_get($meta, 'source_url') ?? data_get($meta, 'referer') ?? ''));
+                                    $ref     = strtoupper((string) ($record->reference ?? ''));
 
-                                    if ($scr === null) {
-                                        \Filament\Notifications\Notification::make()
-                                            ->danger()
-                                            ->title('SCR required')
-                                            ->body('Choose SCR yes or no')
-                                            ->send();
-                                        try { $action->getLivewire()->dispatch('$refresh'); $action->getLivewire()->dispatch('refreshTable'); } catch (\Throwable $e) {}
-                                        return; // block approval until a choice has been made
+                                    $isReorder = in_array($rawType, ['reorder','repeat','re-order','repeat-order'], true)
+                                        || str_contains($path, '/reorder')
+                                        || preg_match('/^PTC[A-Z]*R\d{6}$/', $ref);
+                                    $isNew = ($rawType === 'new') || preg_match('/^PTC[A-Z]*N\d{6}$/', $ref);
+
+                                    if (is_string($slug) && strtolower($slug) === 'weight-management' && $isNew && !$isReorder) {
+                                        $norm = function ($v) {
+                                            if (in_array($v, [true, 1, '1', 'true', 'yes', 'YES', 'Yes'], true)) return 'yes';
+                                            if (in_array($v, [false, 0, '0', 'false', 'no', 'NO', 'No'], true)) return 'no';
+                                            return null;
+                                        };
+
+                                        // Resolve SCR
+                                        $scr = $norm(data_get($meta, 'scr_verified'));
+                                        if ($scr === null) {
+                                            try {
+                                                $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                                if ($ord) {
+                                                    $om = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
+                                                    $scr = $norm(data_get($om, 'scr_verified'));
+                                                }
+                                            } catch (\Throwable $e) { /* ignore */ }
+                                        }
+                                        if ($scr === null && $record->user) {
+                                            try {
+                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                                    $um = is_array($record->user->meta) ? $record->user->meta : (json_decode($record->user->meta ?? '[]', true) ?: []);
+                                                    $scr = $norm(data_get($um, 'scr_verified'));
+                                                }
+                                                if ($scr === null && \Illuminate\Support\Facades\Schema::hasColumn('users', 'scr_verified')) {
+                                                    $scr = $norm($record->user->scr_verified ?? null);
+                                                }
+                                            } catch (\Throwable $e) { /* ignore */ }
+                                        }
+
+                                        // Resolve ID
+                                        $idv = $norm(data_get($meta, 'id_verified'));
+                                        if ($idv === null) {
+                                            try {
+                                                $ord2 = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                                if ($ord2) {
+                                                    $om2 = is_array($ord2->meta) ? $ord2->meta : (json_decode($ord2->meta ?? '[]', true) ?: []);
+                                                    $idv = $norm(data_get($om2, 'id_verified'));
+                                                }
+                                            } catch (\Throwable $e) { /* ignore */ }
+                                        }
+                                        if ($idv === null && $record->user) {
+                                            try {
+                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                                    $um2 = is_array($record->user->meta) ? $record->user->meta : (json_decode($record->user->meta ?? '[]', true) ?: []);
+                                                    $idv = $norm(data_get($um2, 'id_verified'));
+                                                }
+                                                if ($idv === null && \Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified')) {
+                                                    $idv = $norm($record->user->id_verified ?? null);
+                                                }
+                                            } catch (\Throwable $e) { /* ignore */ }
+                                        }
+
+                                        $missing = [];
+                                        if ($scr === null) $missing[] = 'SCR Verified';
+                                        if ($idv === null) $missing[] = 'ID Verified';
+
+                                        if (!empty($missing)) {
+                                            \Filament\Notifications\Notification::make()
+                                                ->danger()
+                                                ->title('Please choose Yes or No for ' . implode(' and ', $missing) . ' before approving this order.')
+                                                ->send();
+                                            try { $action->getLivewire()->dispatch('$refresh'); $action->getLivewire()->dispatch('refreshTable'); } catch (\Throwable $e) {}
+                                            return; // stop approval
+                                        }
                                     }
                                 } catch (\Throwable $e) {
                                     \Filament\Notifications\Notification::make()
                                         ->danger()
-                                        ->title('SCR check failed')
-                                        ->body('Could not confirm SCR selection. Please choose Yes or No and try again.')
+                                        ->title('Verification check failed')
+                                        ->body('Could not confirm SCR or ID selection. Please choose Yes or No and try again.')
                                         ->send();
                                     try { $action->getLivewire()->dispatch('$refresh'); $action->getLivewire()->dispatch('refreshTable'); } catch (\Throwable $ex) {}
                                     return;

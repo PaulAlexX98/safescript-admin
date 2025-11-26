@@ -482,6 +482,13 @@ class CompletedOrderDetails extends ViewRecord
 
                         Section::make('SCR Verified')
                             ->columnSpan(4)
+                            ->visible(function ($record) {
+                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                $slug = data_get($meta, 'service_slug')
+                                    ?? data_get($meta, 'service.slug')
+                                    ?? data_get($meta, 'consultation.service_slug');
+                                return is_string($slug) && strtolower($slug) === 'weight-management';
+                            })
                             ->schema([
                                 TextEntry::make('scr_verified')
                                     ->hiddenLabel()
@@ -501,6 +508,56 @@ class CompletedOrderDetails extends ViewRecord
                                                     ?? data_get($user, 'meta.scr_verified')
                                                     ?? data_get($user, 'meta.scr_status')
                                                     ?? data_get($user, 'meta.scrVerified');
+                                            }
+                                        }
+
+                                        if (is_bool($val)) return $val ? 'Yes' : 'No';
+                                        $s = strtolower(trim((string) $val));
+                                        return match ($s) {
+                                            'y', 'yes', 'true', '1' => 'Yes',
+                                            'n', 'no', 'false', '0' => 'No',
+                                            default => '—',
+                                        };
+                                    })
+                                    ->badge()
+                                    ->color(function ($state) {
+                                        $s = strtolower((string) $state);
+                                        return match ($s) {
+                                            'yes' => 'success',
+                                            'no'  => 'danger',
+                                            default => 'gray',
+                                        };
+                                    }),
+                            ]),
+                        // --- ID Verified section for weight-management ---
+                        Section::make('ID Verified')
+                            ->columnSpan(4)
+                            ->visible(function ($record) {
+                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                $slug = data_get($meta, 'service_slug')
+                                    ?? data_get($meta, 'service.slug')
+                                    ?? data_get($meta, 'consultation.service_slug');
+                                return is_string($slug) && strtolower($slug) === 'weight-management';
+                            })
+                            ->schema([
+                                TextEntry::make('id_verified')
+                                    ->hiddenLabel()
+                                    ->state(function ($record) {
+                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                        // Prefer this order's meta
+                                        $val = data_get($meta, 'id_verified')
+                                            ?? data_get($meta, 'id_status')
+                                            ?? data_get($meta, 'idVerified');
+
+                                        // Fallback from the patient so it carries forward across orders
+                                        if ($val === null || $val === '') {
+                                            $user = $record->user;
+                                            if ($user) {
+                                                $val = data_get($user, 'id_verified')
+                                                    ?? data_get($user, 'meta.id_verified')
+                                                    ?? data_get($user, 'meta.id_status')
+                                                    ?? data_get($user, 'meta.idVerified');
                                             }
                                         }
 
@@ -756,15 +813,6 @@ class CompletedOrderDetails extends ViewRecord
                         ]),
                 ])
                 ->columnSpanFull(),
-
-            // Row 3: Patient Notes
-            Section::make('Patient Notes')
-                ->extraAttributes(['class' => 'bg-transparent shadow-none ring-0 border-0'])
-                ->schema([
-                TextEntry::make('patient_notes')->hiddenLabel()
-                    ->state(fn () => (string)(data_get($meta, 'patient_notes') ?: 'No patient notes provided'))
-                    ->formatStateUsing(fn($s) => nl2br(e($s)))->html(),
-            ])->columnSpanFull(),
 
             // Row 4: Admin Notes
             Section::make('Admin Notes')

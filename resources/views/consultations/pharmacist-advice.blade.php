@@ -174,6 +174,49 @@
         }
     }
 
+    // Admin notes resolver pulled from Record of Supply logic
+    $adminNotes = '';
+    $order = $order ?? null;
+    try {
+        // Prefer lazy-loaded relation if present on the session
+        if (!$order && isset($sessionLike) && method_exists($sessionLike, 'order')) {
+            $order = $sessionLike->order;
+        }
+        // Fallback to known order models by order_id
+        if (!$order && isset($sessionLike->order_id) && class_exists('App\\Models\\ApprovedOrder')) {
+            $order = \App\Models\ApprovedOrder::find($sessionLike->order_id);
+        }
+        if (!$order && isset($sessionLike->order_id) && class_exists('App\\Models\\Order')) {
+            $order = \App\Models\Order::find($sessionLike->order_id);
+        }
+
+        if ($order) {
+            // 1) Direct column if available
+            if (isset($order->admin_notes) && is_string($order->admin_notes) && trim($order->admin_notes) !== '') {
+                $adminNotes = (string) $order->admin_notes;
+            }
+            // 2) Meta lookups for common shapes
+            $metaArr = is_array($order->meta ?? null) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+            $paths = [
+                'admin_notes',
+                'notes.admin',
+                'admin.notes',
+                'internal.admin_notes',
+                'internal_notes',
+                'internal.admin.notes',
+                'order.admin_notes',
+                'manager_notes',
+                'notes',
+            ];
+            foreach ($paths as $p) {
+                $v = data_get($metaArr, $p);
+                if (is_string($v) && trim($v) !== '') { $adminNotes = (string) $v; break; }
+            }
+        }
+    } catch (\Throwable $e) {
+        // ignore – admin notes are optional
+    }
+
     // Decode schema
     $schema = [];
     if ($form) {
@@ -339,6 +382,7 @@
       .cf-section-card{border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:24px;margin-top:20px;box-shadow:0 1px 2px rgba(0,0,0,.45)}
       .cf-grid{display:grid;grid-template-columns:1fr;gap:16px}
       .cf-field-card{border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:18px}
+      .cf-field-flat{border:0;padding:0}
       .cf-title{font-weight:600;font-size:16px;color:#e5e7eb;margin:0 0 6px 0}
       .cf-summary{font-size:13px;color:#9ca3af;margin:0}
       .cf-label{font-size:14px;color:#e5e7eb;display:block;margin-bottom:6px}
@@ -351,6 +395,15 @@
       .cf-input, .cf-select, .cf-file{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px}
       .cf-textarea{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px;min-height:140px;resize:vertical}
       .cf-input:focus, .cf-textarea:focus, .cf-select:focus{outline:none;border-color:rgba(255,255,255,.28);box-shadow:0 0 0 2px rgba(255,255,255,.12)}
+      /* Voice toolbar styling */
+      .voice-toolbar{display:flex;align-items:center;gap:10px;margin-top:8px}
+      .voice-btn{appearance:none;border:0;border-radius:999px;padding:8px 14px;font-weight:600;cursor:pointer;background:rgba(34,197,94,.15);transition:filter .15s ease, background-color .15s ease}
+      .voice-btn:hover{filter:brightness(1.08)}
+      .voice-btn[aria-pressed="true"]{background:rgba(239,68,68,.18)}
+      .voice-status{font-size:12px;opacity:.85;display:inline-flex;align-items:center;gap:6px}
+      .voice-dot{width:8px;height:8px;border-radius:999px;background:#9ca3af;display:inline-block}
+      .voice-btn[aria-pressed="true"] + .voice-status .voice-dot{background:#22c55e;animation:voicepulse 1.2s infinite}
+      @keyframes voicepulse{0%{transform:scale(1);opacity:.6}50%{transform:scale(1.35);opacity:1}100%{transform:scale(1);opacity:.6}}
     </style>
 @endonce
 
@@ -574,6 +627,38 @@
                 </div>
                 </div>
             @endforeach
+
+            {{-- Admin Notes (from Record of Supply logic) --}}
+            <div class="cf-section-card">
+                <div class="cf-field-flat">
+                    <label class="cf-label">Admin notes</label>
+                    <textarea
+                        id="admin_notes"
+                        name="admin_notes"
+                        rows="6"
+                        class="cf-textarea"
+                    >{{ old('admin_notes', $oldData['admin_notes'] ?? ($adminNotes ?? '')) }}</textarea>
+                    <input type="hidden" name="answers[admin_notes]" id="answers_admin_notes" value="{{ old('admin_notes', $oldData['admin_notes'] ?? ($adminNotes ?? '')) }}">
+                </div>
+            </div>
+
+            {{-- Consultation Notes --}}
+            <div class="cf-section-card">
+                <div class="cf-field-flat">
+                    <label class="cf-label">Consultation notes</label>
+                    <textarea
+                        id="consultation_notes"
+                        name="consultation_notes"
+                        rows="6"
+                        class="cf-textarea"
+                    >{{ old('consultation_notes', $oldData['consultation_notes'] ?? '') }}</textarea>
+                    <input type="hidden" name="answers[consultation_notes]" id="answers_consultation_notes" value="{{ old('consultation_notes', $oldData['consultation_notes'] ?? '') }}">
+                    <div class="voice-toolbar" id="voice_toolbar_consultation_notes">
+                      <button type="button" class="voice-btn" id="voice_btn_consultation_notes" aria-pressed="false" aria-controls="consultation_notes">Start dictation</button>
+                      <span id="voice_status_consultation_notes" class="voice-status"><i class="voice-dot"></i> Mic off</span>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="cf-section-card">
@@ -614,6 +699,24 @@
           });
 
           syncMaster();
+        });
+        </script>
+
+        <script>
+        document.addEventListener('DOMContentLoaded', function(){
+          var form = document.getElementById('cf_pharmacist-advice');
+          if (!form) return;
+          function bindMirror(srcId, mirrorId){
+            var src = document.getElementById(srcId);
+            var mir = document.getElementById(mirrorId);
+            if (!src || !mir) return;
+            function sync(){ mir.value = src.value; }
+            src.addEventListener('input', sync);
+            form.addEventListener('submit', sync);
+            sync();
+          }
+          bindMirror('admin_notes','answers_admin_notes');
+          bindMirror('consultation_notes','answers_consultation_notes');
         });
         </script>
 
@@ -709,5 +812,93 @@
         });
         </script>
 
+    <script>
+(function(){
+  var btn = document.getElementById('voice_btn_consultation_notes');
+  var statusEl = document.getElementById('voice_status_consultation_notes');
+  var ta = document.getElementById('consultation_notes');
+  var mirror = document.getElementById('answers_consultation_notes');
+  if (!btn || !statusEl || !ta) return;
+
+  // Feature detect SpeechRecognition
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    // Hide toolbar if unsupported
+    var tb = document.getElementById('voice_toolbar_consultation_notes');
+    if (tb) tb.style.display = 'none';
+    return;
+  }
+
+  var rec = new SR();
+  rec.lang = 'en-GB';
+  rec.continuous = true;
+  rec.interimResults = true;
+
+  var active = false;
+  var userStopped = false; // distinguish from auto end
+
+  function syncMirror(){ if (mirror) mirror.value = ta.value; }
+  function setStatus(text){ statusEl.textContent = text; }
+  function toggleUI(on){
+    active = !!on;
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.textContent = on ? 'Stop dictation' : 'Start dictation';
+    setStatus(on ? 'Listening…' : 'Mic off');
+  }
+
+  // Buffer interim text without permanently inserting until final
+  var interim = '';
+
+  rec.onresult = function(e){
+    interim = '';
+    var finalDelta = '';
+    for (var i = e.resultIndex; i < e.results.length; i++) {
+      var res = e.results[i];
+      var txt = res[0].transcript;
+      if (res.isFinal) {
+        finalDelta += txt;
+      } else {
+        interim += txt;
+      }
+    }
+    if (finalDelta) {
+      // Append final text with a space if needed
+      var needsSpace = ta.value && !/\s$/.test(ta.value);
+      ta.value += (needsSpace ? ' ' : '') + finalDelta.trim();
+      syncMirror();
+      // Move caret to end
+      try { ta.selectionStart = ta.selectionEnd = ta.value.length; } catch(e) {}
+    }
+    // Optionally show interim in status
+    if (interim) setStatus('Listening… ' + interim.trim()); else setStatus('Listening…');
+  };
+
+  rec.onerror = function(e){
+    setStatus('Mic error ' + (e.error || ''));
+  };
+
+  rec.onstart = function(){ toggleUI(true); };
+  rec.onend = function(){
+    toggleUI(false);
+    if (!userStopped) {
+      // Auto-restart to keep continuous capture on some browsers
+      try { rec.start(); } catch(err) {}
+    }
+  };
+
+  btn.addEventListener('click', function(){
+    if (!active) {
+      userStopped = false;
+      try { rec.start(); } catch(e) { setStatus('Mic error starting'); }
+    } else {
+      userStopped = true;
+      try { rec.stop(); } catch(e) {}
+    }
+  });
+
+  // Keep mirror in sync when user types manually
+  ta.addEventListener('input', syncMirror);
+})();
+</script>
     </form>
 @endif

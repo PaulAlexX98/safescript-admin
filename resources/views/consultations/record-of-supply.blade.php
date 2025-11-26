@@ -129,38 +129,14 @@
         return $out;
     };
 
-    // Pull Admin Notes from the related Approved Order so we can prefill a field at the bottom
+    // Resolve related Order once for defaults (admin notes UI removed here; logic to be used in Pharmacist Advice)
     $order = null;
-    $adminNotes = '';
     try {
         if ($sessionLike && method_exists($sessionLike, 'order')) {
             $order = $sessionLike->order; // lazy-load OK in Blade
         }
-        if ($order) {
-            // direct column, if present
-            if (isset($order->admin_notes) && is_string($order->admin_notes) && trim($order->admin_notes) !== '') {
-                $adminNotes = (string) $order->admin_notes;
-            }
-            // look through meta for common note paths
-            $metaArr = is_array($order->meta ?? null) ? $order->meta : [];
-            $paths = [
-                'admin_notes',
-                'notes.admin',
-                'admin.notes',
-                'internal.admin_notes',
-                'internal_notes',
-                'internal.admin.notes',
-                'order.admin_notes',
-                'manager_notes',
-                'notes',
-            ];
-            foreach ($paths as $p) {
-                $v = data_get($metaArr, $p);
-                if (is_string($v) && trim($v) !== '') { $adminNotes = (string) $v; break; }
-            }
-        }
     } catch (Throwable $e) {
-        // fail silent – admin notes are optional
+        // ignore
     }
 
     // --- Defaults from the first order line (for prefill) ---
@@ -258,9 +234,24 @@
                             $ph    = $field['placeholder'] ?? null;
                             // Try both the slugged key and the original key when prefilling saved data
                             $val   = old($name, $oldData[$name] ?? ($oldData[$key] ?? ''));
-                            // For date fields, default to today's date if nothing saved yet
-                            if ($type === 'date' && $val === '') {
-                                $val = now()->format('Y-m-d');
+
+                            // If saved value is an object-like array, extract a usable scalar
+                            if (is_array($val)) {
+                                $val = $val['value'] ?? $val['raw'] ?? $val['answer'] ?? $val['label'] ?? '';
+                            }
+
+                            // Date inputs must be in Y-m-d for the browser; convert common formats if needed
+                            if ($type === 'date') {
+                                if ($val === '') {
+                                    // default to today only when nothing saved yet
+                                    $val = now()->format('Y-m-d');
+                                } else {
+                                    try {
+                                        $val = \Carbon\Carbon::parse((string) $val)->format('Y-m-d');
+                                    } catch (\Throwable $e) {
+                                        // leave as-is if it cannot be parsed
+                                    }
+                                }
                             }
                             // Slug variants of key and label for matching special fields (vaccine, specific etc)
                             $slugKey   = \Illuminate\Support\Str::slug($key);
@@ -497,41 +488,6 @@
                 </div>
             @endforeach
 
-            {{-- Other clinical notes --}}
-            <div class="cf-section-card">
-                <div class="mb-4">
-                    <h3 class="cf-title">Other clinical notes</h3>
-                </div>
-                <div class="cf-grid">
-                    <div class="cf-field-flat cf-span-2">
-                        @php
-                            $otherNotesVal = old(
-                                'other_clinical_notes',
-                                $oldData['other_clinical_notes'] ?? ($oldData['other-clinical-notes'] ?? '')
-                            );
-                        @endphp
-                        <input
-                            type="text"
-                            id="other_clinical_notes"
-                            name="other_clinical_notes"
-                            value="{{ $otherNotesVal }}"
-                            placeholder="Add any additional clinical notes"
-                            class="cf-input"
-                        />
-                    </div>
-                </div>
-            </div>
-            {{-- Admin Notes imported from Approved Order --}}
-            <div class="cf-section-card">
-                <div class="mb-4">
-                    <h3 class="cf-title">Admin notes</h3>
-                </div>
-                <div class="cf-grid">
-                    <div class="cf-field-flat cf-span-2">
-                        <textarea id="admin_notes" name="admin_notes" rows="6" placeholder="Admin notes from order" class="cf-textarea">{{ old('admin_notes', $adminNotes) }}</textarea>
-                    </div>
-                </div>
-            </div>
         </div>
 
         <script>

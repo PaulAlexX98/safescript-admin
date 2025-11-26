@@ -37,7 +37,102 @@
     .right { text-align:right; }
   </style>
 </head>
+
 <body>
+  @php
+      // Resolve "Date Provided" before rendering the header
+      // Will pull from the saved Record of Supply / Clinical Notes response, then session meta, then request meta.
+      if (!isset($dateProvided) || !is_string($dateProvided)) { $dateProvided = ''; }
+
+      $fmtDate = function ($s) {
+          $s = is_string($s) ? trim($s) : (is_null($s) ? '' : (string)$s);
+          if ($s === '') return '';
+          try { return \Carbon\Carbon::parse($s)->format('d/m/Y'); }
+          catch (\Throwable $e) { return $s; }
+      };
+      $scalar = function ($v) {
+          if (is_array($v)) {
+              foreach (['value','raw','answer','label','text','date'] as $k) {
+                  if (array_key_exists($k, $v) && $v[$k] !== '') return (string) $v[$k];
+              }
+              return '';
+          }
+          if (is_bool($v)) return $v ? 'Yes' : 'No';
+          return (string) $v;
+      };
+      $pick = function (array $data, array $keys) use ($scalar) {
+          foreach ($keys as $k) {
+              $v = data_get($data, $k);
+              if ($v !== null && $v !== '') {
+                  $s = $scalar($v);
+                  if ($s !== '') return $s;
+              }
+          }
+          return '';
+      };
+
+      // Try from the latest saved Clinical Notes response in this consultation session
+      try {
+          $sid = data_get($meta ?? [], 'consultation_session_id')
+              ?? data_get($meta ?? [], 'session_id')
+              ?? data_get($meta ?? [], 'consultation_id');
+          $sess = $sid ? \App\Models\ConsultationSession::find($sid) : null;
+
+          if ($sess) {
+              // Prefer a response that posted with __step_slug = record-of-supply, else any clinical_notes latest
+              $resp = \App\Models\ConsultationFormResponse::query()
+                  ->where('consultation_session_id', $sess->id)
+                  ->where(function ($q) {
+                      $q->where('data->__step_slug', 'record-of-supply')
+                        ->orWhere('form_type', 'clinical_notes');
+                  })
+                  ->latest('id')
+                  ->first();
+
+              if ($resp) {
+                  $raw = $resp->data ?? [];
+                  $data = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
+                  $answers = (array) data_get($data, 'data', []) + (array) data_get($data, 'answers', []) + (array) $data;
+
+                  $dateProvided = $fmtDate($pick($answers, [
+                      'date_provided','date-provided','date provided','dateProvided',
+                      'date_of_supply','date-of-supply','supply_date',
+                      'administration_date','admin_date','vaccination_date',
+                      'dispense_date','issue_date','date'
+                  ]));
+
+                  // If still empty, scan all keys for something that *looks* like a date provided
+                  if ($dateProvided === '') {
+                      foreach ($answers as $k => $v) {
+                          if (!is_string($k)) continue;
+                          if (!preg_match('~(date\s*provided|provided\s*date|date[_\- ]of[_\- ]supply|supply[_\- ]date|administration[_\- ]date|admin[_\- ]date|vaccination[_\- ]date|dispense[_\- ]date|issue[_\- ]date|ros[_\- ]date)~i', $k)) {
+                              continue;
+                          }
+                          $probe = $fmtDate($scalar($v));
+                          if ($probe !== '') { $dateProvided = $probe; break; }
+                      }
+                  }
+              }
+
+              // Fallback to session meta
+              if ($dateProvided === '' && isset($sess->meta)) {
+                  $smeta = is_array($sess->meta) ? $sess->meta : (json_decode($sess->meta ?? '[]', true) ?: []);
+                  $dateProvided = $fmtDate($pick($smeta, [
+                      'date_provided','date_of_supply','date-of-supply','supply_date',
+                      'administration_date','admin_date','vaccination_date','date'
+                  ]));
+              }
+          }
+      } catch (\Throwable $e) { /* ignore and continue to meta fallback */ }
+
+      // Final fallback to request-level meta
+      if ($dateProvided === '') {
+          $dateProvided = $fmtDate($pick(($meta ?? []), [
+              'date_provided','date_of_supply','date-of-supply','supply_date',
+              'administration_date','admin_date','vaccination_date','date'
+          ]));
+      }
+  @endphp
 
   <div class="header">
     @if(isset($pharmacy['logo']) && is_file($pharmacy['logo']))
@@ -45,7 +140,7 @@
     @endif
     <div>
       <div class="title">Record of Supply</div>
-      <div class="meta">Reference: {{ $ref }} | Date: {{ now()->format('d/m/Y') }}</div>
+      <div class="meta">Reference: {{ $ref }} | Date: {{ $dateProvided ?: now()->format('d/m/Y') }}</div>
     </div>
   </div>
 
@@ -229,6 +324,7 @@
       // batch and expiry from clinical notes
       $batchNumber = '';
       $expiryDate  = '';
+      // date provided from clinical notes (eg date_of_supply)
 
       // pretty print any saved answer shape
       $__prettyAns = function ($v) {
@@ -247,6 +343,40 @@
           if ($s === '') return '';
           try { return \Carbon\Carbon::parse($s)->format('d/m/Y'); }
           catch (\Throwable $e) { return $s; }
+      };
+
+      // Helper to robustly find a date provided field anywhere in saved data
+      $__findDateProvided = function ($arr) use (&$__findDateProvided, $__prettyAns, $__fmtDate) {
+          if (!is_array($arr)) return '';
+          foreach ($arr as $k => $v) {
+              // if associative and has nested data, search inside first
+              if (is_array($v) && !\Illuminate\Support\Arr::isAssoc($v)) {
+                  // list
+                  foreach ($v as $vv) {
+                      $found = $__findDateProvided($vv);
+                      if ($found !== '') return $found;
+                  }
+              } elseif (is_array($v) && \Illuminate\Support\Arr::isAssoc($v)) {
+                  // common wrappers
+                  $inner = $v['value'] ?? $v['raw'] ?? $v['answer'] ?? $v['date'] ?? null;
+                  if ($inner !== null) {
+                      $pretty = $__prettyAns($inner);
+                      $fmt = $__fmtDate($pretty);
+                      if ($fmt !== '') return $fmt;
+                  }
+                  $found = $__findDateProvided($v);
+                  if ($found !== '') return $found;
+              }
+
+              $keyStr = is_string($k) ? $k : '';
+              // Match a wide range of possible keys for date provided
+              if ($keyStr !== '' && preg_match('~(date\s*provided|provided\s*date|date[_\- ]of[_\- ]supply|supply[_\- ]date|administration[_\- ]date|admin[_\- ]date|vaccination[_\- ]date|dispense[_\- ]date|issue[_\- ]date|ros[_\- ]date)~i', $keyStr)) {
+                  $pretty = $__prettyAns($v);
+                  $fmt = $__fmtDate($pretty);
+                  if ($fmt !== '') return $fmt;
+              }
+          }
+          return '';
       };
 
       $__pickFrom = function (array $data, array $keys) use ($__prettyAns) {
@@ -332,6 +462,15 @@
                       'expiry_date','expiry','exp_date','exp','expiryDate','expiry_date_input',
                   ]));
               }
+              // resolve supplied date / date provided from the same saved data
+              if ($dateProvided === '') {
+                  $dateProvided = $__fmtDate($__pickFrom($data, [
+                      'dateProvided','date provided','date_provided','date-of-provided','date-of-supply','date_of_supply','supply_date','dispense_date','issue_date','administration_date','admin_date','vaccination_date','date'
+                  ]));
+                  if ($dateProvided === '') {
+                      $dateProvided = $__findDateProvided($data);
+                  }
+              }
           }
       } catch (\Throwable $e) {}
 
@@ -358,6 +497,20 @@
               if ($expiryDate === '') {
                   $v = data_get($smeta, 'expiry_date') ?? data_get($smeta, 'expiry') ?? data_get($smeta, 'exp_date');
                   if ($v !== null && $v !== '') { $expiryDate = $__fmtDate($v); }
+              }
+              if ($dateProvided === '') {
+                  $v = data_get($smeta, 'date_provided')
+                      ?? data_get($smeta, 'date_of_supply')
+                      ?? data_get($smeta, 'date-of-supply')
+                      ?? data_get($smeta, 'supply_date')
+                      ?? data_get($smeta, 'administration_date')
+                      ?? data_get($smeta, 'admin_date')
+                      ?? data_get($smeta, 'vaccination_date')
+                      ?? data_get($smeta, 'date');
+                  if ($v !== null && $v !== '') { $dateProvided = $__fmtDate($v); }
+              }
+              if ($dateProvided === '') {
+                  $dateProvided = $__findDateProvided($smeta);
               }
           } catch (\Throwable $e) {}
       }
@@ -393,6 +546,17 @@
                       $vv = $__fmtDate($vv);
                       if ($vv !== '') { $expiryDate = $vv; }
                   }
+                  if ($dateProvided === '') {
+                      $vv = $__pickFrom($d, [
+                          'date_provided','date-of-supply','date_of_supply','supply_date',
+                          'administration_date','admin_date','vaccination_date','date'
+                      ]);
+                      $vv = $__fmtDate($vv);
+                      if ($vv !== '') { $dateProvided = $vv; }
+                  }
+                  if ($dateProvided === '') {
+                      $dateProvided = $__findDateProvided($d);
+                  }
               }
           } catch (\Throwable $e) {}
       }
@@ -417,6 +581,18 @@
       if ($expiryDate === '') {
           $expiryDate = $__fmtDate(data_get($meta ?? [], 'expiry_date') ?? data_get($meta ?? [], 'expiry') ?? data_get($meta ?? [], 'exp_date'));
       }
+      if ($dateProvided === '') {
+          $dateProvided = $__fmtDate(
+              data_get($meta ?? [], 'date_provided')
+              ?? data_get($meta ?? [], 'date_of_supply')
+              ?? data_get($meta ?? [], 'date-of-supply')
+              ?? data_get($meta ?? [], 'supply_date')
+              ?? data_get($meta ?? [], 'administration_date')
+              ?? data_get($meta ?? [], 'admin_date')
+              ?? data_get($meta ?? [], 'vaccination_date')
+              ?? data_get($meta ?? [], 'date')
+          );
+      }
   @endphp
   <div class="panel" style="margin-top:16px;">
     <div class="section-title">Pharmacist Declaration</div>
@@ -435,7 +611,7 @@
       </tr>
       <tr>
         <td>Date:</td>
-        <td>{{ now()->format('d/m/Y') }}</td>
+        <td>{{ $dateProvided ?: now()->format('d/m/Y') }}</td>
       </tr>
       <tr>
         <td>Signature:</td>
@@ -458,33 +634,241 @@
   <div class="panel" style="margin-top:16px;">
     <div class="section-title">Clinical Notes</div>
 
+    {{-- ==== Dynamic Record of Supply form rendering (schema + answers) ==== --}}
     @php
-      // $first and $extraNotes are prepared earlier; ensure safe defaults
-      $first = $first ?? ($items[0] ?? []);
-      $extraNotes = isset($extraNotes) ? $extraNotes : '';
+      // ==== Dynamic Record of Supply form rendering (schema + answers) ====
+      $toArray = function ($v) {
+          if (is_array($v)) return $v;
+          if (is_string($v)) { $d = json_decode($v, true); return is_array($d) ? $d : []; }
+          if ($v instanceof \Illuminate\Contracts\Support\Arrayable) return $v->toArray();
+          return [];
+      };
+
+      $slugify = function ($v) { return \Illuminate\Support\Str::slug((string) $v); };
+
+      // Resolve the Clinical Notes / Record of Supply form for this consultation
+      $rosSections = [];
+      $rosAnswers  = [];
+
+      try {
+          // Prefer the response we already loaded above ($resp)
+          if (isset($resp) && $resp) {
+              $raw = $resp->data ?? [];
+              $rosAnswers = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
+          }
+
+          // Decode the matched form schema from $rosForm (if available from above fallback chain)
+          if (!isset($rosForm) || !$rosForm) {
+              if (!empty($rosFormId)) {
+                  $rosForm = \App\Models\ClinicForm::find($rosFormId);
+              }
+          }
+
+          if (isset($rosForm) && $rosForm) {
+              $rawSchema = is_array($rosForm->schema) ? $rosForm->schema : (json_decode($rosForm->schema ?? '[]', true) ?: []);
+
+              // Normalise into sections [ { title, fields: [...] } ]
+              if (is_array($rawSchema) && !empty($rawSchema)) {
+                  if (array_key_exists('fields', $rawSchema[0] ?? [])) {
+                      $rosSections = $rawSchema;
+                  } else {
+                      $current = ['title' => null, 'fields' => []];
+                      foreach ($rawSchema as $blk) {
+                          $type = $blk['type'] ?? null;
+                          $data = (array) ($blk['data'] ?? []);
+                          if ($type === 'section') {
+                              if (!empty($current['fields'])) $rosSections[] = $current;
+                              $current = ['title' => $data['label'] ?? ($data['title'] ?? null), 'fields' => []];
+                          } else {
+                              $field = ['type' => $type];
+                              foreach (['label','key','required','options','content','accept','multiple'] as $k) {
+                                  if (array_key_exists($k, $data)) $field[$k] = $data[$k];
+                              }
+                              $current['fields'][] = $field;
+                          }
+                      }
+                      if (!empty($current['fields'])) $rosSections[] = $current;
+                  }
+              }
+          }
+
+          // Prefer flattened top-level maps (data, answers)
+          if (is_array($rosAnswers)) {
+              $rosAnswers = (array) data_get($rosAnswers, 'data', [])
+                         + (array) data_get($rosAnswers, 'answers', [])
+                         + (array) $rosAnswers; // fall back to raw
+          } else {
+              $rosAnswers = [];
+          }
+
+          // If answer list is row-shaped, convert to map
+          if (!empty($rosAnswers) && array_keys($rosAnswers) === range(0, count($rosAnswers) - 1)) {
+              $map = [];
+              foreach ($rosAnswers as $row) {
+                  if (!is_array($row)) continue;
+                  $k = $row['key'] ?? ($row['question'] ?? ($row['label'] ?? null));
+                  $v = $row['value'] ?? ($row['answer'] ?? ($row['selected'] ?? ($row['raw'] ?? null)));
+                  if ($k !== null) $map[(string) $k] = $v;
+              }
+              if (!empty($map)) $rosAnswers = $map;
+          }
+
+          // Build q_N walk and ordering from schema
+          $rosOrder = [];
+          $idx = 0;
+          $inputTypes = ['text_input','text','select','textarea','date','radio','checkbox','file','file_upload','image','email','number','tel','yesno','signature'];
+          foreach ($rosSections as $sec) {
+              foreach (($sec['fields'] ?? []) as $f) {
+                  $t = $f['type'] ?? '';
+                  if (!in_array($t, $inputTypes, true)) continue;
+                  $key = $f['key'] ?? ($f['label'] ? $slugify($f['label']) : null);
+                  if ($key) {
+                      $rosOrder[$key] = $idx;
+                      $rosOrder[$slugify($key)] = $idx;
+                  }
+                  if (!empty($f['label'])) {
+                      $rosOrder[$slugify($f['label'])] = $idx;
+                  }
+                  $idx++;
+              }
+          }
+
+          // Helper mappers
+          $human = function ($v) {
+              if (is_bool($v)) return $v ? 'Yes' : 'No';
+              if ($v === 1 || $v === '1' || $v === 'true' || $v === 'yes' || $v === 'on') return 'Yes';
+              if ($v === 0 || $v === '0' || $v === 'false' || $v === 'no'  || $v === 'off') return 'No';
+              if (is_array($v)) {
+                  $parts = [];
+                  $list = \Illuminate\Support\Arr::isAssoc($v) ? [$v] : $v;
+                  foreach ($list as $x) {
+                      if (is_scalar($x)) $parts[] = (string) $x;
+                      elseif (is_array($x)) $parts[] = $x['label'] ?? $x['value'] ?? $x['text'] ?? $x['name'] ?? null;
+                  }
+                  $parts = array_values(array_filter($parts, fn($s) => is_string($s) ? trim($s) !== '' : (bool)$s));
+                  return implode(', ', $parts);
+              }
+              if ($v === null) return '';
+              return trim((string) $v);
+          };
+
+          $labelise = function ($k) {
+              $k = str_replace(['_', '-'], ' ', (string) $k);
+              $k = preg_replace('/\s+/', ' ', trim($k));
+              return ucwords($k);
+          };
+
+          // Reorder answers by schema order for nicer output
+          if (!empty($rosAnswers)) {
+              uksort($rosAnswers, function($a,$b) use ($rosOrder,$slugify){
+                  $ia = $rosOrder[$a] ?? $rosOrder[$slugify($a)] ?? PHP_INT_MAX - 1;
+                  $ib = $rosOrder[$b] ?? $rosOrder[$slugify($b)] ?? PHP_INT_MAX - 1;
+                  return $ia <=> $ib;
+              });
+          }
+
+          // Build grouped rows by sections and collect any text_block content to show above the table
+          $rosGrouped = [];
+          $rosContent = [];    // $__secTitle => list of html/paragraph blocks
+          $rosSectionOrder = [];
+
+          foreach ($rosSections as $sec) {
+              $title = $sec['title'] ?? 'Record of Supply';
+              if (!isset($rosGrouped[$title])) {
+                  $rosGrouped[$title] = [];
+                  $rosContent[$title] = [];
+                  $rosSectionOrder[] = $title;
+              }
+
+              $i = 0;
+              foreach (($sec['fields'] ?? []) as $f) {
+                  $t = $f['type'] ?? '';
+                  // Render static text blocks above the table
+                  if (in_array($t, ['text_block','rich_text'], true)) {
+                      $html  = (string) ($f['content'] ?? '');
+                      if (trim(strip_tags($html)) !== '') {
+                          // If it's not html, convert newlines to paragraphs
+                          $hasHtml = (bool) preg_match('/<\w+[^>]*>/', $html ?? '');
+                          if ($hasHtml) {
+                              $rosContent[$title][] = $html;
+                          } else {
+                              $lines = preg_split("/\r\n|\r|\n/", $html);
+                              $clean = array_values(array_filter(array_map('trim', $lines), fn ($l) => $l !== ''));
+                              $para  = '';
+                              foreach ($clean as $ln) {
+                                  $para .= '<p>'.e($ln).'</p>';
+                              }
+                              $rosContent[$title][] = $para;
+                          }
+                      }
+                      continue;
+                  }
+
+                  // Only include input-like fields in the Q A table
+                  if (!in_array($t, $inputTypes, true)) continue;
+
+                  $lab = $f['label'] ?? ($f['key'] ?? 'Question');
+                  $key = $f['key'] ?? ($lab ? $slugify($lab) : null);
+
+                  // Pick an answer across common shapes  try exact key, slugged key, and q_i fallback
+                  $ans = $rosAnswers[$key] ?? $rosAnswers[$slugify($key)] ?? $rosAnswers['q_'.$i] ?? null;
+
+                  if (is_array($ans) && \Illuminate\Support\Arr::isAssoc($ans)) {
+                      $ans = $ans['raw'] ?? $ans['answer'] ?? $ans['value'] ?? $ans['label'] ?? $ans['text'] ?? $ans;
+                  }
+
+                  $disp = $human($ans);
+
+                  // If this looks like a date field, format as dd/mm/YYYY
+                  $labProbe = is_string($lab) ? strtolower(trim($lab)) : '';
+                  $keyProbe = is_string($key) ? strtolower(trim($key)) : '';
+                  if ($disp !== 'No response provided' && $disp !== '' && (
+                        preg_match('~\bdate\b~', $labProbe)
+                     || preg_match('~\bdate\b~', $keyProbe)
+                     || preg_match('~(supply|provided|administration|vaccination|dispense|issue).*date~', $labProbe)
+                     || preg_match('~(supply|provided|administration|vaccination|dispense|issue).*date~', $keyProbe)
+                  )) {
+                      $disp = $__fmtDate($disp);
+                  }
+
+                  if ($disp === '' || $disp === null) $disp = 'No response provided';
+
+                  $rosGrouped[$title][] = [$lab, $disp];
+                  $i++;
+              }
+          }
+
+      } catch (\Throwable $e) { /* ignore */ }
     @endphp
 
-    <table class="items" style="margin-top:10px;">
-      <tbody>
-        <tr><th>Date Provided</th><td>{{ now()->format('d/m/Y') }}</td></tr>
-        <tr><th>Item</th><td>{{ $first['name'] ?? '—' }}</td></tr>
-        <tr><th>Strength</th><td>{{ $first['variation'] ?? $first['variations'] ?? $first['optionLabel'] ?? $first['strength'] ?? $first['dose'] ?? '—' }}</td></tr>
-        <tr><th>Batch Number</th><td>{{ $batchNumber !== '' ? $batchNumber : 'No response provided' }}</td></tr>
-        <tr><th>Expiry Date</th><td>{{ $expiryDate !== '' ? $expiryDate : 'No response provided' }}</td></tr>
-        <tr><th>Quantity</th><td>{{ $first['qty'] ?? 1 }}</td></tr>
-        <tr><th>Administration Site</th><td>{{ $adminSite !== '' ? $adminSite : 'No response provided' }}</td></tr>
-        <tr><th>Administration Route</th><td>{{ $adminRoute !== '' ? $adminRoute : 'No response provided' }}</td></tr>
-      </tbody>
-    </table>
+    @if(!empty($rosSections))
+      @foreach($rosSectionOrder as $__secTitle)
+        @php $__contentBlocks = $rosContent[$__secTitle] ?? []; @endphp
+        @if(!empty($__contentBlocks))
+          <div class="panel" style="margin:8px 0 6px 0;">
+            @foreach($__contentBlocks as $__html)
+              {!! $__html !!}
+            @endforeach
+          </div>
+        @endif
+        <table class="items" style="margin-top:6px;">
+          <tbody>
+            @foreach(($rosGrouped[$__secTitle] ?? []) as $__row)
+              <tr>
+                <td style="width:55%">{{ $__row[0] }}</td>
+                <td>{{ $__row[1] }}</td>
+              </tr>
+            @endforeach
+          </tbody>
+        </table>
+      @endforeach
+    @endif
 
-    <table class="items" style="margin-top:10px;">
-      <tbody>
-        <tr>
-          <th style="width:160px;">Other Clinical Notes</th>
-          <td>{!! $extraNotes ? nl2br(e($extraNotes)) : 'No response provided' !!}</td>
-        </tr>
-      </tbody>
-    </table>
+    @php
+      // ensure we have the first line item
+      $first = $first ?? ($items[0] ?? []);
+    @endphp
+
   </div>
 
 </body>
