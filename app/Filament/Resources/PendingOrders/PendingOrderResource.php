@@ -32,6 +32,7 @@ use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Grid;
 use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\OrderApprovedMail;
@@ -40,7 +41,6 @@ use Illuminate\Support\Arr;
 use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\ViewColumn;
 use Filament\Notifications\Notification;
-use Ruelluna\FilamentVoiceTextarea\Forms\Components\VoiceTextarea;
 
 
 class PendingOrderResource extends Resource
@@ -1700,18 +1700,118 @@ class PendingOrderResource extends Resource
 
                                 return redirect(ListPendingOrders::getUrl());
                             }),
-                        Action::make('addAdminNote')
-                            ->label('Add Admin Note')
-                            ->color('primary')
-                            ->icon('heroicon-o-document-check')
-                            ->schema([
-                                VoiceTextarea::make('new_note')
-                                    ->label('Add New Note')
-                                    ->enableVoice()
-                                    ->helperText('Click the microphone icon to start voice recognition')
-                                    ->hiddenLabel()
-                                    ->rows(4)
-                                    ->columnSpanFull(),
+                            Action::make('addAdminNote')
+                                ->label('Add Admin Note')
+                                ->color('primary')
+                                ->icon('heroicon-o-document-check')
+                                ->form([
+                                    Textarea::make('new_note')
+                                        ->label('Add New Note')
+                                        ->hiddenLabel()
+                                        ->rows(4)
+                                        ->columnSpanFull()
+                                        ->extraAttributes(['id' => 'new_admin_note_textarea']),
+                                    Placeholder::make('dictate_toolbar_new_note')
+                                        ->hiddenLabel()
+                                        ->label(false)
+                                        ->content(function () {
+                                            return new \Illuminate\Support\HtmlString(<<<'HTMLX'
+                                    <div
+                                        class="flex items-center gap-3 mt-2"
+                                        wire:ignore
+                                        wire:ignore.self
+                                        x-data="{
+                                            listening:false, rec:null, userStopped:false, status:'Mic off',
+
+                                            root(){ return $el.closest('[data-dialog]') || $el.closest('.fi-modal') || document },
+                                            ta(){
+                                                return this.root().querySelector('textarea#new_admin_note_textarea')
+                                                    || this.root().querySelector('textarea[name=&quot;data[new_note]&quot;]')
+                                                    || this.root().querySelector('textarea[name=&quot;new_note&quot;], textarea[name$=&quot;[new_note]&quot;]')
+                                                    || this.root().querySelector('textarea');
+                                            },
+                                            push(txt){
+                                                const el=this.ta(); if(!el){ this.status='Textarea not found'; return }
+                                                const chunk=String(txt||'').trim(); if(!chunk) return
+                                                const space = el.value && !/\\s$/.test(el.value) ? ' ' : ''
+                                                el.value += space + chunk
+                                                el.dispatchEvent(new Event('input', {bubbles:true}))
+                                                el.dispatchEvent(new Event('change', {bubbles:true}))
+                                            },
+                                            async ensurePerm(){
+                                                try{ const s=await navigator.mediaDevices.getUserMedia({audio:true}); (s.getTracks?.()||[]).forEach(t=>t.stop()); return true }
+                                                catch(e){ this.status='Mic blocked'; return false }
+                                            },
+                                            start(){
+                                                const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+                                                if(!SR){ this.status='Not supported'; return }
+                                                this.userStopped=false
+                                                this.rec=new SR(); this.rec.lang='en-GB'; this.rec.continuous=true; this.rec.interimResults=true
+                                                this.rec.onresult = e => {
+                                                    let fin='', tmp=''
+                                                    for(let i=e.resultIndex;i<e.results.length;i++){
+                                                        const r=e.results[i]
+                                                        if(r.isFinal) fin += r[0].transcript
+                                                        else tmp += r[0].transcript
+                                                    }
+                                                    if(fin) this.push(fin)
+                                                    this.status = this.listening ? ('Listening… ' + tmp.trim()) : 'Mic off'
+                                                }
+                                                this.rec.onstart = ()=>{ this.listening=true; this.status='Listening…' }
+                                                this.rec.onerror = e=>{ this.status='Error ' + (e?.error ?? '') }
+                                                this.rec.onend   = ()=>{
+                                                    this.listening=false; this.status='Mic off'
+                                                    if(!this.userStopped){ try{ this.rec.start() }catch(_){} }
+                                                }
+                                                try{ this.rec.start() }catch(_){ this.status='Start failed' }
+                                            },
+                                            async toggle(){
+                                                if(!this.listening){
+                                                    if(await this.ensurePerm()) this.start()
+                                                }else{
+                                                    this.userStopped=true
+                                                    try{ this.rec?.stop() }catch(_){}
+                                                    this.listening=false; this.status='Mic off'
+                                                }
+                                            }
+                                        }"
+                                        >
+                                        <button
+                                            type="button"
+                                            class="inline-flex items-center gap-3 px-3 py-1.5 rounded-md text-sm font-medium
+                                                bg-green-600/20 hover:bg-green-600/30 transition"
+                                            x-bind:class="{ 'bg-red-600/20 hover:bg-red-600/30': listening }"
+                                            x-on:click="toggle()"
+                                        >
+                                            <!-- mic icon -->
+                                            <svg x-show="!listening" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+                                                class="w-4 h-4" fill="currentColor" aria-hidden="true">
+                                                <path d="M12 14a4 4 0 0 0 4-4V7a4 4 0 1 0-8 0v3a4 4 0 0 0 4 4Zm-7-4a1 1 0 0 1 2 0 5 5 0 1 0 10 0 1 1 0 1 1 2 0 7 7 0 0 1-6 6.93V20h3a1 1 0 1 1 0 2H10a1 1 0 1 1 0-2h3v-3.07A7 7 0 0 1 5 10Z"/>
+                                            </svg>
+
+                                            <!-- stop icon -->
+                                            <svg x-show="listening" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+                                                class="w-4 h-4" fill="currentColor" aria-hidden="true">
+                                                <path d="M6 6h12v12H6z"/>
+                                            </svg>
+
+                                            <!-- labels -->
+                                            <span x-show="!listening">Start dictation</span>
+                                            <span x-show="listening">Stop dictation</span>
+                                        </button>
+
+                                        <!-- status (spaced away from button) -->
+                                        <span class="inline-flex items-center gap-2 text-xs opacity-80 ml-3">
+                                            <span class="inline-block w-2 h-2 rounded-full bg-gray-400"
+                                                x-bind:class="listening ? 'bg-emerald-400 animate-pulse' : 'bg-gray-400'"></span>
+
+                                            <span x-text="status"></span>
+                                        </span>
+                                        </div>
+                                    HTMLX);
+                                        })
+                                        ->columnSpanFull(),
+                                    
                             ])
                             ->action(function (PendingOrder $record, array $data, Action $action) {
                                 $newNote = trim($data['new_note'] ?? '');

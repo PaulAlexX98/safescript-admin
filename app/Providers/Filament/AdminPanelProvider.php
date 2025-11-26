@@ -70,6 +70,7 @@ class AdminPanelProvider extends PanelProvider
             ->emailChangeVerification()
             ->renderHook('panels::body.end', fn () => view('components.layout.app'))
             ->renderHook('panels::body.end', fn () => view('vendor.filament.components.global-shortcuts'))
+            ->renderHook('panels::scripts.after', fn () => view('partials.dictation-worker'))
             
             
             ->plugins([
@@ -102,6 +103,8 @@ class AdminPanelProvider extends PanelProvider
                 Route::get('/consultations/{session}/{tab}', ConsultationRunner::class)
                     ->name('filament.admin.consultations.session.tab');
             })
+
+            
 
             ->renderHook('panels::head.end', function () {
                 if (!request()->boolean('inline')) return '';
