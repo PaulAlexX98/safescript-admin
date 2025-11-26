@@ -40,6 +40,7 @@ use Illuminate\Support\Arr;
 use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\ViewColumn;
 use Filament\Notifications\Notification;
+use Filament\Forms\Components\Placeholder;
 
 
 class PendingOrderResource extends Resource
@@ -1701,42 +1702,55 @@ class PendingOrderResource extends Resource
                             }),
                         Action::make('addAdminNote')
                             ->label('Add Admin Note')
+                            ->button()
                             ->color('primary')
                             ->icon('heroicon-o-document-check')
-                            ->schema([
+                            ->modalHeading('Add admin note')
+                            ->schema([   // follow your existing pattern using ->schema
                                 Textarea::make('new_note')
                                     ->label('Add New Note')
                                     ->hiddenLabel()
                                     ->rows(4)
                                     ->columnSpanFull()
                                     ->extraAttributes(['id' => 'new_admin_note_textarea']),
-                                    \Filament\Forms\Components\Placeholder::make('dictate_toolbar_new_note')
-                                        ->hiddenLabel()
-                                        ->label(false)
-                                        ->content(function () {
-                                            return new \Illuminate\Support\HtmlString(
-                                                view('components.admin-dictation', [
-                                                    'target'   => 'new_admin_note_textarea',
-                                                    'startId'  => 'voice_btn_new_admin_note',
-                                                    'statusId' => 'voice_status_new_admin_note',
-                                                ])->render()
-                                            );
-                                        })
-                                        ->columnSpanFull(),
+
+                                Placeholder::make('dictate_toolbar_new_note')
+                                    ->hiddenLabel()
+                                    ->content(function () {
+                                        return new \Illuminate\Support\HtmlString(
+                                            view('components.admin-dictation', [
+                                                'target'   => 'new_admin_note_textarea',
+                                                'startId'  => 'voice_btn_new_admin_note',
+                                                'statusId' => 'voice_status_new_admin_note',
+                                            ])->render()
+                                        );
+                                    })
+                                    ->columnSpanFull(),
                             ])
-                            ->action(function (PendingOrder $record, array $data, Action $action) {
+                            ->extraModalFooterActions([
+                                Action::make('dictateFooter')
+                                    ->label('Dictate')
+                                    ->color('gray')
+                                    ->extraAttributes([
+                                        'x-data'     => '{}',
+                                        'x-on:click' => "document.getElementById('voice_btn_new_admin_note')?.click()",
+                                    ]),
+                            ])
+                            ->action(function (\App\Models\PendingOrder $record, array $data, \Filament\Actions\Action $action) {
                                 $newNote = trim($data['new_note'] ?? '');
-                                if ($newNote === '') {
-                                    return;
-                                }
+                                if ($newNote === '') return;
+
                                 $timestamp = now()->format('d-m-Y H:i');
                                 $toAppend = $timestamp . ': ' . $newNote;
+
                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                 $existing = data_get($meta, 'admin_notes', '');
                                 data_set($meta, 'admin_notes', $existing ? ($existing . "\n" . $toAppend) : $toAppend);
+
                                 $record->meta = $meta;
                                 $record->save();
                                 $record->refresh();
+
                                 $action->getLivewire()->dispatch('$refresh');
                                 $action->getLivewire()->dispatch('refreshTable');
                                 $action->success();
