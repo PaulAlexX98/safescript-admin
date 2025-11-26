@@ -961,6 +961,7 @@ class PendingOrderResource extends Resource
                         // Consultation QA snapshot (RAF only — rendered via Blade)
                         Section::make('Assessment Answers')
                             ->collapsible()
+                            ->collapsed()
                             ->schema([
                                 ViewEntry::make('consultation_qa')
                                     ->label(false)
@@ -1705,8 +1706,23 @@ class PendingOrderResource extends Resource
                             ->schema([
                                 Textarea::make('new_note')
                                     ->label('Add New Note')
+                                    ->hiddenLabel()
                                     ->rows(4)
-                                    ->columnSpanFull(),
+                                    ->columnSpanFull()
+                                    ->extraAttributes(['id' => 'new_admin_note_textarea']),
+                                    \Filament\Forms\Components\Placeholder::make('dictate_toolbar_new_note')
+                                        ->hiddenLabel()
+                                        ->label(false)
+                                        ->content(function () {
+                                            return new \Illuminate\Support\HtmlString(
+                                                view('components.admin-dictation', [
+                                                    'target'   => 'new_admin_note_textarea',
+                                                    'startId'  => 'voice_btn_new_admin_note',
+                                                    'statusId' => 'voice_status_new_admin_note',
+                                                ])->render()
+                                            );
+                                        })
+                                        ->columnSpanFull(),
                             ])
                             ->action(function (PendingOrder $record, array $data, Action $action) {
                                 $newNote = trim($data['new_note'] ?? '');
