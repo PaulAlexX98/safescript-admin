@@ -55,7 +55,6 @@
 </head>
 
 <body>
-  <div class="watermark">Do not dispense</div>
   @php
       // Resolve "Date Provided" before rendering the header
       // Will pull from the saved Record of Supply / Clinical Notes response, then session meta, then request meta.
