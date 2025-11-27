@@ -911,6 +911,34 @@ class ClinicFormForm
                                             Notification::make()->title('Import failed')->body($e->getMessage())->danger()->send();
                                         }
                                     }),
+                                Action::make('export_json')
+                                    ->label('Export JSON')
+                                    ->icon('heroicon-o-arrow-up-tray')
+                                    ->modalHeading('Export form as JSON')
+                                    ->modalWidth('4xl')
+                                    ->requiresConfirmation()
+                                    ->modalSubmitActionLabel('Close')
+                                    ->modalContent(function (Get $get) {
+                                        $schema = $get('schema');
+                                        if ($schema instanceof \Illuminate\Support\Collection) {
+                                            $schema = $schema->all();
+                                        }
+                                        // Fallback in case state path differs in some containers
+                                        if (empty($schema) && is_array($get(null))) {
+                                            $root = (array) $get(null);
+                                            $schema = $root['schema'] ?? [];
+                                        }
+                                        $json = json_encode($schema ?: [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+                                        $escaped = e($json);
+                                        return new \Illuminate\Support\HtmlString(
+                                            '<div style="margin-top:.5rem">'
+                                            . '<textarea readonly style="width:100%;height:420px;padding:.75rem;border:1px solid #e5e7eb;border-radius:.75rem;background:transparent;color:inherit;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace;font-size:.85rem;line-height:1.3">'
+                                            . $escaped
+                                            . '</textarea>'
+                                            . '<p style="margin-top:.5rem;font-size:.75rem;color:#6b7280">Copy this JSON to reuse or export your form structure</p>'
+                                            . '</div>'
+                                        );
+                                    }),
                             ])
                             ->schema([
                                 Placeholder::make('structure_help')
