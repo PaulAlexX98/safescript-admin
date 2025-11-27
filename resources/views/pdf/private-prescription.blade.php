@@ -225,9 +225,9 @@
 
           // Prefer template placed on the session
           if ($sess && isset($sess->templates)) {
-              $tpl = Arr::get($sess->templates, 'declaration')
-                  ?? Arr::get($sess->templates, 'pharmacist_declaration')
-                  ?? Arr::get($sess->templates, 'pharmacist-declaration');
+              $tpl = \Illuminate\Support\Arr::get($sess->templates, 'declaration')
+                  ?? \Illuminate\Support\Arr::get($sess->templates, 'pharmacist_declaration')
+                  ?? \Illuminate\Support\Arr::get($sess->templates, 'pharmacist-declaration');
               if ($tpl) {
                   if (is_array($tpl))       $declFormId = $tpl['id'] ?? $tpl['form_id'] ?? null;
                   elseif (is_numeric($tpl)) $declFormId = (int) $tpl;
@@ -408,10 +408,10 @@
           $rosFormId = null;
 
           if ($sess && isset($sess->templates)) {
-              $tpl = Arr::get($sess->templates, 'clinical_notes')
-                  ?? Arr::get($sess->templates, 'record_of_supply')
-                  ?? Arr::get($sess->templates, 'supply')
-                  ?? Arr::get($sess->templates, 'clinicalNotes');
+              $tpl = \Illuminate\Support\Arr::get($sess->templates, 'clinical_notes')
+                  ?? \Illuminate\Support\Arr::get($sess->templates, 'record_of_supply')
+                  ?? \Illuminate\Support\Arr::get($sess->templates, 'supply')
+                  ?? \Illuminate\Support\Arr::get($sess->templates, 'clinicalNotes');
               if ($tpl) {
                   if (is_array($tpl))       $rosFormId = $tpl['id'] ?? $tpl['form_id'] ?? null;
                   elseif (is_numeric($tpl)) $rosFormId = (int) $tpl;
@@ -728,7 +728,8 @@
 
           // 1) Prefer list-shaped rows
           foreach ($candidates as $cand) {
-              if (array_keys($cand) === range(0, count($cand) - 1)) {
+              $looksList = is_array($cand) && (array_key_exists(0, $cand) || array_keys($cand) === range(0, count($cand) - 1));
+              if ($looksList) {
                   foreach ($cand as $row) {
                       if (!is_array($row)) continue;
                       $label = $row['label'] ?? $row['question'] ?? $row['key'] ?? null;
@@ -738,6 +739,53 @@
                       }
                   }
                   break;
+              }
+          }
+
+          // 2.5) Recursive flatten fallback for associative shapes
+          if (empty($rosRows) && !empty($decoded)) {
+              $skipKey = function($k){
+                  if (!is_string($k)) return true;
+                  if ($k === '' || $k[0] === '_') return true;
+                  $bad = [
+                      'form_type','__step_slug','service','treatment','_token','schema','version','id',
+                      'clinic_form_id','consultation_session_id','created_at','updated_at','meta'
+                  ];
+                  return in_array($k, $bad, true);
+              };
+              $flatten = function($arr, $prefix = '') use (&$flatten, $skipKey) {
+                  $out = [];
+                  if (!is_array($arr)) return $out;
+                  foreach ($arr as $k => $v) {
+                      $kstr = is_string($k) ? $k : (string)$k;
+                      if ($skipKey($kstr)) continue;
+                      $key = $prefix ? $prefix.'.'.$kstr : $kstr;
+                      if (is_array($v)) {
+                          // common value wrappers
+                          foreach (['value','label','answer','raw'] as $inner) {
+                              if (array_key_exists($inner, $v)) { $v = $v[$inner]; break; }
+                          }
+                      }
+                      if (is_array($v)) {
+                          $out += $flatten($v, $key);
+                      } elseif (is_bool($v)) {
+                          $out[$key] = $v ? 'Yes' : 'No';
+                      } else {
+                          $sv = trim((string)$v);
+                          if ($sv !== '') $out[$key] = $sv;
+                      }
+                  }
+                  return $out;
+              };
+              $flat = $flatten($decoded);
+              if (empty($flat)) {
+                  $flat = $flatten((array) data_get($decoded, 'data', []));
+              }
+              if (empty($flat)) {
+                  $flat = $flatten((array) data_get($decoded, 'answers', []));
+              }
+              foreach ($flat as $k => $v) {
+                  $rosRows[] = [ (string)$k, (string)$v ];
               }
           }
 
