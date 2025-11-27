@@ -608,6 +608,14 @@
 
       // Helper to coerce any answer value into a printable string
       $rosHuman = function ($v) {
+      $__slug = function ($v) { return $v ? \Illuminate\Support\Str::slug((string) $v) : null; };
+      $__prettify = function ($s) {
+          $s = trim((string) $s);
+          if ($s === '') return '';
+          $s = str_replace(['_', '-'], ' ', $s);
+          $s = preg_replace('/\s+/', ' ', $s);
+          return \Illuminate\Support\Str::title($s);
+      };
           if (is_bool($v)) return $v ? 'Yes' : 'No';
           if (is_array($v)) {
               // common shapes
@@ -679,6 +687,42 @@
                       ->first();
               }
               $rosFormId = $rosForm->id ?? null;
+
+          // Build key→label lookup from Clinical Notes schema
+          $labelMap = [];
+          if (!isset($rosForm) && isset($rosFormId)) {
+              $rosForm = \App\Models\ClinicForm::find($rosFormId);
+          }
+          if (isset($rosForm)) {
+              $schemaRaw = is_array($rosForm->schema) ? $rosForm->schema : (json_decode($rosForm->schema ?? '[]', true) ?: []);
+              if (is_array($schemaRaw) && !empty($schemaRaw)) {
+                  // sectioned or block-based
+                  if (array_key_exists('fields', $schemaRaw[0] ?? [])) {
+                      foreach ($schemaRaw as $sec) {
+                          foreach ((array)($sec['fields'] ?? []) as $f) {
+                              $k = $f['key'] ?? null; $lab = $f['label'] ?? null;
+                              if ($k && $lab) { $labelMap[$__slug($k)] = (string) $lab; }
+                          }
+                      }
+                  } else {
+                      foreach ($schemaRaw as $blk) {
+                          if (($blk['type'] ?? null) === 'section') continue;
+                          $d = (array)($blk['data'] ?? []);
+                          $k = $d['key'] ?? null; $lab = $d['label'] ?? null;
+                          if ($k && $lab) { $labelMap[$__slug($k)] = (string) $lab; }
+                      }
+                  }
+              }
+          }
+          $__displayLabel = function ($label, $key = null) use ($labelMap, $__slug, $__prettify) {
+              $lab = trim((string)($label ?? ''));
+              $k = $key ? $__slug($key) : ($lab !== '' ? $__slug($lab) : null);
+              if ($k && isset($labelMap[$k])) return (string) $labelMap[$k];
+              if ($lab === '' || preg_match('~^[a-z0-9]+([\-_][a-z0-9]+)+$~', $lab)) {
+                  return $key ? $__prettify($key) : $__prettify($lab);
+              }
+              return $lab;
+          };
           }
 
           if (!isset($resp) || !$resp) {
@@ -714,10 +758,12 @@
               if (array_keys($cand) === range(0, count($cand) - 1)) {
                   foreach ($cand as $row) {
                       if (!is_array($row)) continue;
-                      $label = $row['label'] ?? $row['question'] ?? $row['key'] ?? null;
+                      $rawLabel = $row['label'] ?? $row['question'] ?? null;
+                      $rawKey   = $row['key'] ?? null;
                       $val = $row['value'] ?? $row['answer'] ?? ($row['selected']['label'] ?? $row['selected']['value'] ?? null) ?? ($row['raw'] ?? null);
-                      if ($label !== null) {
-                          $rosRows[] = [ (string) $label, $rosHuman($val) ];
+                      $dispLabel = $__displayLabel($rawLabel, $rawKey);
+                      if ($dispLabel !== null && $dispLabel !== '') {
+                          $rosRows[] = [ (string) $dispLabel, $rosHuman($val) ];
                       }
                   }
                   break;
@@ -772,7 +818,7 @@
                   }
               }
 
-              $renderGroup = function(array $group, array $fields) use (&$rosRows, $rosHuman, $assoc) {
+              $renderGroup = function(array $group, array $fields) use (&$rosRows, $rosHuman, $assoc, $__displayLabel) {
                   // helper to fetch by key or label slug
                   $getFromGroup = function (array $group, string $key, ?string $label = null) use ($assoc) {
                       $slugKey   = \Illuminate\Support\Str::slug($key);
@@ -800,13 +846,13 @@
                           $key   = $f['key']   ?? ($label ? \Illuminate\Support\Str::slug((string) $label) : null);
                           if (!$label || !$key) continue;
                           $val = $getFromGroup($group, (string) $key, (string) $label);
-                          $rosRows[] = [ (string) $label, $rosHuman($val) ];
+                          $rosRows[] = [ (string) $__displayLabel($label, $key), $rosHuman($val) ];
                       }
                   } else {
                       // no schema — dump keys in alpha order
                       ksort($group);
                       foreach ($group as $k => $v) {
-                          $rosRows[] = [ (string) $k, $rosHuman($v) ];
+                          $rosRows[] = [ (string) $__displayLabel(null, (string)$k), $rosHuman($v) ];
                       }
                   }
               };
@@ -831,7 +877,7 @@
                   foreach ($flat as $k => $v) {
                       if (!is_string($k)) continue;
                       if (str_starts_with($k, '_')) continue;
-                      $rosRows[] = [ (string) $k, $rosHuman($v) ];
+                      $rosRows[] = [ (string) $__displayLabel(null, (string)$k), $rosHuman($v) ];
                   }
               }
           }
@@ -841,7 +887,7 @@
               foreach ((array) ($decoded['data'] ?? $decoded['answers'] ?? $decoded) as $k => $v) {
                   if (!is_string($k)) continue;
                   if (str_starts_with($k, '_')) continue;
-                  $rosRows[] = [ (string) $k, $rosHuman($v) ];
+                  $rosRows[] = [ (string) $__displayLabel(null, (string)$k), $rosHuman($v) ];
               }
           } else {
               $rosRows = [];
