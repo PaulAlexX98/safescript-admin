@@ -207,7 +207,7 @@
       try { if ($sid) { $sess = \App\Models\ConsultationSession::find($sid); } } catch (\Throwable $e) {}
 
       // Helper for service/treatment slugs
-      $slugify = function ($v) { return $v ? Str::slug((string) $v) : null; };
+      $slugify = function ($v) { return $v ? \Illuminate\Support\Str::slug((string) $v) : null; };
       $svcSlug = $slugify($sess->service_slug ?? $sess->service ?? data_get($meta ?? [], 'service_slug'));
       $trtSlug = $slugify($sess->treatment_slug ?? data_get($meta ?? [], 'treatment_slug'));
 
@@ -833,10 +833,10 @@
               }
           }
 
-          // Remove rows with empty labels or labels that contain a hyphen like "item-1"
+          // Keep all rows except ones with an empty label. Do not drop labels just because they contain hyphens.
           $rosRows = array_values(array_filter($rosRows, function ($r) {
               $lab = isset($r[0]) ? trim((string) $r[0]) : '';
-              return $lab !== '' && !str_contains($lab, '-');
+              return $lab !== '';
           }));
 
           // 3) Ultra-defensive fallback: if still empty but decoded has data, dump flat map

@@ -816,10 +816,10 @@
               }
           }
 
-          // Remove rows with empty labels or labels that contain a hyphen like "item-1"
+          // Keep all rows except ones with an empty label. Do not drop labels just because they contain hyphens.
           $rosRows = array_values(array_filter($rosRows, function ($r) {
               $lab = isset($r[0]) ? trim((string) $r[0]) : '';
-              return $lab !== '' && !str_contains($lab, '-');
+              return $lab !== '';
           }));
 
           // 3) Ultra-defensive fallback: if still empty but decoded has data, dump flat map
