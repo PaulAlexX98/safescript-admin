@@ -3,20 +3,32 @@
 namespace App\Filament\Resources\PendingOrders\Schemas;
 
 use Filament\Schemas\Schema;
-use Filament\Schemas\Components\TextEntry;
-use Filament\Schemas\Components\DateTimeEntry;
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Placeholder;
 
 class PendingOrderForm
 {
     public static function configure(Schema $schema): Schema
     {
-        return $schema
-            ->components([
-                DateTimeEntry::make('created_at')->label('Booking Date'),
-                TextEntry::make('meta->service')->label('Appointment Name'),
-                TextEntry::make('meta->firstName')->label('First Name'),
-                TextEntry::make('meta->lastName')->label('Last Name'),
-                TextEntry::make('meta->dob')->label('DOB'),
-            ]);
+        return $schema->components([
+            Placeholder::make('booking_heading')->content('Booking Details'),
+
+            TextInput::make('created_at')
+                ->label('Booking Date'),
+
+            TextInput::make('meta.service')
+                ->label('Appointment Name'),
+
+            Placeholder::make('patient_heading')->content('Patient'),
+
+            TextInput::make('meta.firstName')
+                ->label('First Name'),
+
+            TextInput::make('meta.lastName')
+                ->label('Last Name'),
+
+            TextInput::make('meta.dob')
+                ->label('DOB'),
+        ]);
     }
 }

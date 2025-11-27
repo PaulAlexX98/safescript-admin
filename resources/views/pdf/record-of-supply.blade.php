@@ -180,8 +180,6 @@
   </div>
 
   @php
-      use Illuminate\Support\Arr;
-      use Illuminate\Support\Str;
 
       // Locate the ConsultationSession if present
       $sid = data_get($meta ?? [], 'consultation_session_id')
@@ -594,6 +592,298 @@
           );
       }
   @endphp
+
+  <div class="panel" style="margin-top:16px;">
+    <div class="section-title">Clinical Notes</div>
+
+    @php
+      /**
+       * Goal: render exactly what was saved in the Record of Supply / Clinical Notes form,
+       * in the same order, without hardcoding any field names or trying to infer groups.
+       *
+       * We prefer list-shaped data (answers[] or data[]) where each row contains
+       * label|question|key and value|answer|raw|selected.
+       * If only associative maps exist, we fall back to the matched schema order to build rows.
+       */
+
+      // Helper to coerce any answer value into a printable string
+      $rosHuman = function ($v) {
+          if (is_bool($v)) return $v ? 'Yes' : 'No';
+          if (is_array($v)) {
+              // common shapes
+              if (array_key_exists('label', $v)) return (string) $v['label'];
+              if (array_key_exists('value', $v)) return (string) $v['value'];
+              if (array_key_exists('answer', $v)) return (string) $v['answer'];
+              if (array_key_exists('raw', $v))   return (string) $v['raw'];
+              if (isset($v['selected']) && is_array($v['selected'])) {
+                  $sel = $v['selected'];
+                  return (string) ($sel['label'] ?? $sel['value'] ?? '');
+              }
+              // array of scalars or objects
+              $parts = [];
+              $list  = \Illuminate\Support\Arr::isAssoc($v) ? [$v] : $v;
+              foreach ($list as $x) {
+                  if (is_scalar($x)) { $parts[] = (string) $x; continue; }
+                  if (is_array($x)) {
+                      if (array_key_exists('label', $x)) { $parts[] = (string) $x['label']; continue; }
+                      if (array_key_exists('value', $x)) { $parts[] = (string) $x['value']; continue; }
+                      if (array_key_exists('answer', $x)) { $parts[] = (string) $x['answer']; continue; }
+                      if (array_key_exists('raw', $x))   { $parts[] = (string) $x['raw']; continue; }
+                  }
+              }
+              $parts = array_values(array_filter($parts, fn($s) => trim((string) $s) !== ''));
+              return implode(', ', $parts);
+          }
+          return trim((string) $v);
+      };
+
+      $rosRows = [];
+      $decoded = [];
+
+      try {
+          // Ensure we have the latest Clinical Notes response for this session
+          if (!isset($sess)) {
+              $sid = data_get($meta ?? [], 'consultation_session_id')
+                  ?? data_get($meta ?? [], 'session_id')
+                  ?? data_get($meta ?? [], 'consultation_id');
+              $sess = $sid ? \App\Models\ConsultationSession::find($sid) : null;
+          }
+
+          if (!isset($rosFormId) || !$rosFormId) {
+              // Resolve a clinical_notes form id matching this session (service/treatment aware)
+              $slug = fn($v) => $v ? \Illuminate\Support\Str::slug((string) $v) : null;
+              $svcSlug = isset($sess) ? $slug($sess->service_slug ?? $sess->service ?? data_get($meta ?? [], 'service_slug')) : null;
+              $trtSlug = isset($sess) ? $slug($sess->treatment_slug ?? data_get($meta ?? [], 'treatment_slug')) : null;
+
+              $base = \App\Models\ClinicForm::query()
+                  ->where('form_type', 'clinical_notes')
+                  ->where('is_active', 1)
+                  ->orderByDesc('version')->orderByDesc('id');
+
+              $rosForm = null;
+              if ($svcSlug && $trtSlug) {
+                  $rosForm = (clone $base)->where('service_slug', $svcSlug)->where('treatment_slug', $trtSlug)->first();
+              }
+              if (!$rosForm && $svcSlug) {
+                  $rosForm = (clone $base)->where('service_slug', $svcSlug)
+                      ->where(function ($q) { $q->whereNull('treatment_slug')->orWhere('treatment_slug', ''); })->first();
+              }
+              if (!$rosForm && $svcSlug) {
+                  $svc = \App\Models\Service::query()->where('slug', $svcSlug)->first();
+                  if ($svc && $svc->clinicalNotesForm) $rosForm = $svc->clinicalNotesForm;
+              }
+              if (!$rosForm) {
+                  $rosForm = (clone $base)
+                      ->where(function ($q) { $q->whereNull('service_slug')->orWhere('service_slug', ''); })
+                      ->where(function ($q) { $q->whereNull('treatment_slug')->orWhere('treatment_slug', ''); })
+                      ->first();
+              }
+              $rosFormId = $rosForm->id ?? null;
+          }
+
+          if (!isset($resp) || !$resp) {
+              if (isset($sess)) {
+                  $resp = \App\Models\ConsultationFormResponse::query()
+                      ->where('consultation_session_id', $sess->id)
+                      ->where(function ($q) use ($rosFormId) {
+                          if ($rosFormId) $q->where('clinic_form_id', $rosFormId);
+                          $q->orWhere('data->__step_slug', 'record-of-supply');
+                      })
+                      ->latest('id')
+                      ->first();
+              }
+          }
+
+          if (isset($resp) && $resp) {
+              $raw = $resp->data ?? [];
+              $decoded = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
+          }
+
+          // Candidate sources in order
+          $candidates = [];
+          foreach (['answers', 'data'] as $k) {
+              $v = data_get($decoded, $k);
+              if (is_array($v)) $candidates[] = $v;
+          }
+          if (empty($candidates) && is_array($decoded)) {
+              $candidates[] = $decoded;
+          }
+
+          // 1) Prefer list-shaped rows
+          foreach ($candidates as $cand) {
+              if (array_keys($cand) === range(0, count($cand) - 1)) {
+                  foreach ($cand as $row) {
+                      if (!is_array($row)) continue;
+                      $label = $row['label'] ?? $row['question'] ?? $row['key'] ?? null;
+                      $val = $row['value'] ?? $row['answer'] ?? ($row['selected']['label'] ?? $row['selected']['value'] ?? null) ?? ($row['raw'] ?? null);
+                      if ($label !== null) {
+                          $rosRows[] = [ (string) $label, $rosHuman($val) ];
+                      }
+                  }
+                  break;
+              }
+          }
+
+          // 2) Fallback: build from associative maps using schema order and index suffixes
+          if (empty($rosRows)) {
+              $assoc = (array) $decoded + (array) data_get($decoded, 'data', []) + (array) data_get($decoded, 'answers', []);
+
+              $assoc = array_filter($assoc, function ($v, $k) {
+                  if (!is_string($k)) return true;
+                  if (str_starts_with($k, '_')) return false;
+                  return !in_array($k, ['form_type','__step_slug','service','treatment','_token'], true);
+              }, ARRAY_FILTER_USE_BOTH);
+
+              $byIndex = [];
+              foreach ($assoc as $k => $v) {
+                  if (!is_string($k)) continue;
+                  $normKey = str_replace('_', '-', $k);
+                  if (preg_match('~^(.*?)-(\d+)$~', $normKey, $m)) {
+                      $base = $m[1];
+                      $idx  = (int) $m[2];
+                  } else {
+                      $base = $normKey;
+                      $idx  = 1;
+                  }
+                  if (!isset($byIndex[$idx])) $byIndex[$idx] = [];
+                  $byIndex[$idx][$base] = $v;
+              }
+              ksort($byIndex);
+
+              // load schema for order if available
+              $schemaFields = [];
+              if (!isset($rosForm) && isset($rosFormId)) {
+                  $rosForm = \App\Models\ClinicForm::find($rosFormId);
+              }
+              if (isset($rosForm)) {
+                  $schemaRaw = is_array($rosForm->schema) ? $rosForm->schema : (json_decode($rosForm->schema ?? '[]', true) ?: []);
+                  if (is_array($schemaRaw) && !empty($schemaRaw)) {
+                      if (array_key_exists('fields', $schemaRaw[0] ?? [])) {
+                          foreach ($schemaRaw as $sec) {
+                              foreach (($sec['fields'] ?? []) as $f) $schemaFields[] = $f;
+                          }
+                      } else {
+                          foreach ($schemaRaw as $blk) {
+                              $type = $blk['type'] ?? null;
+                              if ($type === 'section') continue;
+                              $schemaFields[] = (array) ($blk['data'] ?? []);
+                          }
+                      }
+                  }
+              }
+
+              $renderGroup = function(array $group, array $fields) use (&$rosRows, $rosHuman, $assoc) {
+                  // helper to fetch by key or label slug
+                  $getFromGroup = function (array $group, string $key, ?string $label = null) use ($assoc) {
+                      $slugKey   = \Illuminate\Support\Str::slug($key);
+                      $slugLabel = $label !== null ? \Illuminate\Support\Str::slug($label) : null;
+
+                      foreach ([$key, $slugKey] as $try) {
+                          if (array_key_exists($try, $group)) return $group[$try];
+                      }
+                      if ($slugLabel && array_key_exists($slugLabel, $group)) return $group[$slugLabel];
+
+                      foreach ([$key, $slugKey] as $try) {
+                          if (array_key_exists($try, $assoc)) return $assoc[$try];
+                      }
+                      if ($slugLabel && array_key_exists($slugLabel, $assoc)) return $assoc[$slugLabel];
+
+                      if ($label !== null && array_key_exists((string)$label, $group)) return $group[(string)$label];
+                      if ($label !== null && array_key_exists((string)$label, $assoc))  return $assoc[(string)$label];
+
+                      return null;
+                  };
+
+                  if (!empty($fields)) {
+                      foreach ($fields as $f) {
+                          $label = $f['label'] ?? ($f['key'] ?? null);
+                          $key   = $f['key']   ?? ($label ? \Illuminate\Support\Str::slug((string) $label) : null);
+                          if (!$label || !$key) continue;
+                          $val = $getFromGroup($group, (string) $key, (string) $label);
+                          $rosRows[] = [ (string) $label, $rosHuman($val) ];
+                      }
+                  } else {
+                      // no schema — dump keys in alpha order
+                      ksort($group);
+                      foreach ($group as $k => $v) {
+                          $rosRows[] = [ (string) $k, $rosHuman($v) ];
+                      }
+                  }
+              };
+
+              foreach ($byIndex as $idx => $groupVals) {
+                  $renderGroup($groupVals, $schemaFields);
+              }
+          }
+
+          // Remove rows with empty labels or labels that contain a hyphen like "item-1"
+          $rosRows = array_values(array_filter($rosRows, function ($r) {
+              $lab = isset($r[0]) ? trim((string) $r[0]) : '';
+              return $lab !== '' && !str_contains($lab, '-');
+          }));
+
+          // 3) Ultra-defensive fallback: if still empty but decoded has data, dump flat map
+          if (empty($rosRows) && !empty($decoded)) {
+              $flat = (array) data_get($decoded, 'data', []);
+              if (empty($flat)) $flat = (array) data_get($decoded, 'answers', []);
+              if (empty($flat)) $flat = (array) $decoded;
+              if (!empty($flat)) {
+                  foreach ($flat as $k => $v) {
+                      if (!is_string($k)) continue;
+                      if (str_starts_with($k, '_')) continue;
+                      $rosRows[] = [ (string) $k, $rosHuman($v) ];
+                  }
+              }
+          }
+      } catch (\Throwable $e) {
+          // As a last resort, if we captured decoded data, try to render it raw
+          if (!empty($decoded)) {
+              foreach ((array) ($decoded['data'] ?? $decoded['answers'] ?? $decoded) as $k => $v) {
+                  if (!is_string($k)) continue;
+                  if (str_starts_with($k, '_')) continue;
+                  $rosRows[] = [ (string) $k, $rosHuman($v) ];
+              }
+          } else {
+              $rosRows = [];
+          }
+      }
+    @endphp
+
+    @php
+      // Hide rows with empty values or placeholders like '-' or '—'
+      $visibleRows = array_values(array_filter($rosRows, function ($r) {
+          $val = trim((string)($r[1] ?? ''));
+          return $val !== '' && $val !== '-' && $val !== '—';
+      }));
+    @endphp
+
+    @if(empty($visibleRows))
+      <p>No clinical notes were found for this consultation.</p>
+    @else
+      <table class="items" style="margin-top:6px;">
+        <tbody>
+          @foreach($visibleRows as $row)
+            @php
+              $label = $row[0] ?? '';
+              $disp  = $row[1] ?? '';
+            @endphp
+            <tr>
+              <td style="width:38%">{{ $label }}</td>
+              <td>{{ $disp }}</td>
+            </tr>
+          @endforeach
+        </tbody>
+      </table>
+    @endif
+
+    @php
+      // keep downstream usage happy
+      $first = $first ?? ($items[0] ?? []);
+    @endphp
+
+  </div>
+</div>
+
   <div class="panel" style="margin-top:16px;">
     <div class="section-title">Pharmacist Declaration</div>
     <p>
@@ -629,246 +919,6 @@
         </td>
       </tr>
     </table>
-  </div>
-
-  <div class="panel" style="margin-top:16px;">
-    <div class="section-title">Clinical Notes</div>
-
-    {{-- ==== Dynamic Record of Supply form rendering (schema + answers) ==== --}}
-    @php
-      // ==== Dynamic Record of Supply form rendering (schema + answers) ====
-      $toArray = function ($v) {
-          if (is_array($v)) return $v;
-          if (is_string($v)) { $d = json_decode($v, true); return is_array($d) ? $d : []; }
-          if ($v instanceof \Illuminate\Contracts\Support\Arrayable) return $v->toArray();
-          return [];
-      };
-
-      $slugify = function ($v) { return \Illuminate\Support\Str::slug((string) $v); };
-
-      // Resolve the Clinical Notes / Record of Supply form for this consultation
-      $rosSections = [];
-      $rosAnswers  = [];
-
-      try {
-          // Prefer the response we already loaded above ($resp)
-          if (isset($resp) && $resp) {
-              $raw = $resp->data ?? [];
-              $rosAnswers = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
-          }
-
-          // Decode the matched form schema from $rosForm (if available from above fallback chain)
-          if (!isset($rosForm) || !$rosForm) {
-              if (!empty($rosFormId)) {
-                  $rosForm = \App\Models\ClinicForm::find($rosFormId);
-              }
-          }
-
-          if (isset($rosForm) && $rosForm) {
-              $rawSchema = is_array($rosForm->schema) ? $rosForm->schema : (json_decode($rosForm->schema ?? '[]', true) ?: []);
-
-              // Normalise into sections [ { title, fields: [...] } ]
-              if (is_array($rawSchema) && !empty($rawSchema)) {
-                  if (array_key_exists('fields', $rawSchema[0] ?? [])) {
-                      $rosSections = $rawSchema;
-                  } else {
-                      $current = ['title' => null, 'fields' => []];
-                      foreach ($rawSchema as $blk) {
-                          $type = $blk['type'] ?? null;
-                          $data = (array) ($blk['data'] ?? []);
-                          if ($type === 'section') {
-                              if (!empty($current['fields'])) $rosSections[] = $current;
-                              $current = ['title' => $data['label'] ?? ($data['title'] ?? null), 'fields' => []];
-                          } else {
-                              $field = ['type' => $type];
-                              foreach (['label','key','required','options','content','accept','multiple'] as $k) {
-                                  if (array_key_exists($k, $data)) $field[$k] = $data[$k];
-                              }
-                              $current['fields'][] = $field;
-                          }
-                      }
-                      if (!empty($current['fields'])) $rosSections[] = $current;
-                  }
-              }
-          }
-
-          // Prefer flattened top-level maps (data, answers)
-          if (is_array($rosAnswers)) {
-              $rosAnswers = (array) data_get($rosAnswers, 'data', [])
-                         + (array) data_get($rosAnswers, 'answers', [])
-                         + (array) $rosAnswers; // fall back to raw
-          } else {
-              $rosAnswers = [];
-          }
-
-          // If answer list is row-shaped, convert to map
-          if (!empty($rosAnswers) && array_keys($rosAnswers) === range(0, count($rosAnswers) - 1)) {
-              $map = [];
-              foreach ($rosAnswers as $row) {
-                  if (!is_array($row)) continue;
-                  $k = $row['key'] ?? ($row['question'] ?? ($row['label'] ?? null));
-                  $v = $row['value'] ?? ($row['answer'] ?? ($row['selected'] ?? ($row['raw'] ?? null)));
-                  if ($k !== null) $map[(string) $k] = $v;
-              }
-              if (!empty($map)) $rosAnswers = $map;
-          }
-
-          // Build q_N walk and ordering from schema
-          $rosOrder = [];
-          $idx = 0;
-          $inputTypes = ['text_input','text','select','textarea','date','radio','checkbox','file','file_upload','image','email','number','tel','yesno','signature'];
-          foreach ($rosSections as $sec) {
-              foreach (($sec['fields'] ?? []) as $f) {
-                  $t = $f['type'] ?? '';
-                  if (!in_array($t, $inputTypes, true)) continue;
-                  $key = $f['key'] ?? ($f['label'] ? $slugify($f['label']) : null);
-                  if ($key) {
-                      $rosOrder[$key] = $idx;
-                      $rosOrder[$slugify($key)] = $idx;
-                  }
-                  if (!empty($f['label'])) {
-                      $rosOrder[$slugify($f['label'])] = $idx;
-                  }
-                  $idx++;
-              }
-          }
-
-          // Helper mappers
-          $human = function ($v) {
-              if (is_bool($v)) return $v ? 'Yes' : 'No';
-              if ($v === 1 || $v === '1' || $v === 'true' || $v === 'yes' || $v === 'on') return 'Yes';
-              if ($v === 0 || $v === '0' || $v === 'false' || $v === 'no'  || $v === 'off') return 'No';
-              if (is_array($v)) {
-                  $parts = [];
-                  $list = \Illuminate\Support\Arr::isAssoc($v) ? [$v] : $v;
-                  foreach ($list as $x) {
-                      if (is_scalar($x)) $parts[] = (string) $x;
-                      elseif (is_array($x)) $parts[] = $x['label'] ?? $x['value'] ?? $x['text'] ?? $x['name'] ?? null;
-                  }
-                  $parts = array_values(array_filter($parts, fn($s) => is_string($s) ? trim($s) !== '' : (bool)$s));
-                  return implode(', ', $parts);
-              }
-              if ($v === null) return '';
-              return trim((string) $v);
-          };
-
-          $labelise = function ($k) {
-              $k = str_replace(['_', '-'], ' ', (string) $k);
-              $k = preg_replace('/\s+/', ' ', trim($k));
-              return ucwords($k);
-          };
-
-          // Reorder answers by schema order for nicer output
-          if (!empty($rosAnswers)) {
-              uksort($rosAnswers, function($a,$b) use ($rosOrder,$slugify){
-                  $ia = $rosOrder[$a] ?? $rosOrder[$slugify($a)] ?? PHP_INT_MAX - 1;
-                  $ib = $rosOrder[$b] ?? $rosOrder[$slugify($b)] ?? PHP_INT_MAX - 1;
-                  return $ia <=> $ib;
-              });
-          }
-
-          // Build grouped rows by sections and collect any text_block content to show above the table
-          $rosGrouped = [];
-          $rosContent = [];    // $__secTitle => list of html/paragraph blocks
-          $rosSectionOrder = [];
-
-          foreach ($rosSections as $sec) {
-              $title = $sec['title'] ?? 'Record of Supply';
-              if (!isset($rosGrouped[$title])) {
-                  $rosGrouped[$title] = [];
-                  $rosContent[$title] = [];
-                  $rosSectionOrder[] = $title;
-              }
-
-              $i = 0;
-              foreach (($sec['fields'] ?? []) as $f) {
-                  $t = $f['type'] ?? '';
-                  // Render static text blocks above the table
-                  if (in_array($t, ['text_block','rich_text'], true)) {
-                      $html  = (string) ($f['content'] ?? '');
-                      if (trim(strip_tags($html)) !== '') {
-                          // If it's not html, convert newlines to paragraphs
-                          $hasHtml = (bool) preg_match('/<\w+[^>]*>/', $html ?? '');
-                          if ($hasHtml) {
-                              $rosContent[$title][] = $html;
-                          } else {
-                              $lines = preg_split("/\r\n|\r|\n/", $html);
-                              $clean = array_values(array_filter(array_map('trim', $lines), fn ($l) => $l !== ''));
-                              $para  = '';
-                              foreach ($clean as $ln) {
-                                  $para .= '<p>'.e($ln).'</p>';
-                              }
-                              $rosContent[$title][] = $para;
-                          }
-                      }
-                      continue;
-                  }
-
-                  // Only include input-like fields in the Q A table
-                  if (!in_array($t, $inputTypes, true)) continue;
-
-                  $lab = $f['label'] ?? ($f['key'] ?? 'Question');
-                  $key = $f['key'] ?? ($lab ? $slugify($lab) : null);
-
-                  // Pick an answer across common shapes  try exact key, slugged key, and q_i fallback
-                  $ans = $rosAnswers[$key] ?? $rosAnswers[$slugify($key)] ?? $rosAnswers['q_'.$i] ?? null;
-
-                  if (is_array($ans) && \Illuminate\Support\Arr::isAssoc($ans)) {
-                      $ans = $ans['raw'] ?? $ans['answer'] ?? $ans['value'] ?? $ans['label'] ?? $ans['text'] ?? $ans;
-                  }
-
-                  $disp = $human($ans);
-
-                  // If this looks like a date field, format as dd/mm/YYYY
-                  $labProbe = is_string($lab) ? strtolower(trim($lab)) : '';
-                  $keyProbe = is_string($key) ? strtolower(trim($key)) : '';
-                  if ($disp !== 'No response provided' && $disp !== '' && (
-                        preg_match('~\bdate\b~', $labProbe)
-                     || preg_match('~\bdate\b~', $keyProbe)
-                     || preg_match('~(supply|provided|administration|vaccination|dispense|issue).*date~', $labProbe)
-                     || preg_match('~(supply|provided|administration|vaccination|dispense|issue).*date~', $keyProbe)
-                  )) {
-                      $disp = $__fmtDate($disp);
-                  }
-
-                  if ($disp === '' || $disp === null) $disp = 'No response provided';
-
-                  $rosGrouped[$title][] = [$lab, $disp];
-                  $i++;
-              }
-          }
-
-      } catch (\Throwable $e) { /* ignore */ }
-    @endphp
-
-    @if(!empty($rosSections))
-      @foreach($rosSectionOrder as $__secTitle)
-        @php $__contentBlocks = $rosContent[$__secTitle] ?? []; @endphp
-        @if(!empty($__contentBlocks))
-          <div class="panel" style="margin:8px 0 6px 0;">
-            @foreach($__contentBlocks as $__html)
-              {!! $__html !!}
-            @endforeach
-          </div>
-        @endif
-        <table class="items" style="margin-top:6px;">
-          <tbody>
-            @foreach(($rosGrouped[$__secTitle] ?? []) as $__row)
-              <tr>
-                <td style="width:55%">{{ $__row[0] }}</td>
-                <td>{{ $__row[1] }}</td>
-              </tr>
-            @endforeach
-          </tbody>
-        </table>
-      @endforeach
-    @endif
-
-    @php
-      // ensure we have the first line item
-      $first = $first ?? ($items[0] ?? []);
-    @endphp
-
   </div>
 
 </body>

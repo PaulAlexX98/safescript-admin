@@ -8,7 +8,7 @@ use Illuminate\Support\Collection;
 use Filament\Tables\Filters\SelectFilter;
 use App\Filament\Resources\PendingOrders\Pages\CreatePendingOrder;
 use App\Filament\Resources\PendingOrders\Pages\EditPendingOrder;
-use App\Filament\Resources\PendingOrders\Pages\ListPendingOrders;
+use App\Filament\Resources\PendingOrders\Pages\ListPendingOrders;             // Forms components
 use App\Filament\Resources\PendingOrders\Schemas\PendingOrderForm;
 use App\Filament\Resources\PendingOrders\Tables\PendingOrdersTable;
 use Filament\Actions\Action;

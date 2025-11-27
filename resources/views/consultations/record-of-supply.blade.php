@@ -139,19 +139,101 @@
         // ignore
     }
 
-    // --- Defaults from the first order line (for prefill) ---
-    $lineItems = is_array($order->items ?? null) ? $order->items : [];
-    $firstItem = $lineItems[0] ?? [];
-    $defaultVaccine = (string) ($firstItem['name'] ?? '');
-    $defaultSpecific = (string) (
-        $firstItem['variation']
-        ?? $firstItem['variations']
-        ?? $firstItem['optionLabel']
-        ?? $firstItem['strength']
-        ?? $firstItem['dose']
-        ?? ''
-    );
-    $defaultQty = (int) ($firstItem['qty'] ?? $firstItem['quantity'] ?? 0);
+    // --- Build list of items from order so we can render one block per item ---
+    $items = [];
+    try {
+        // prefer explicit order items
+        $items = is_array($order?->items) ? $order->items : [];
+
+        // fallback to meta lines/items shapes
+        if (!count($items)) {
+            $m = is_array($order?->meta) ? $order->meta : (json_decode($order?->meta ?? '[]', true) ?: []);
+            $items = $m['lines'] ?? $m['items'] ?? data_get($m, 'order.items') ?? [];
+            $items = is_array($items) ? $items : [];
+        }
+    } catch (\Throwable $e) {}
+
+    if (!count($items)) {
+        // Always render at least one empty block
+        $items = [[]];
+    }
+
+    // Detect if schema already uses fixed, numbered keys like: item1, item-variation1, qty1, item2, ...
+    $schemaHasNumberedKeys = false;
+    try {
+        foreach ((array) $sections as $__sec) {
+            foreach ((array) ($__sec['fields'] ?? []) as $__fld) {
+                $k = (string) ($__fld['key'] ?? '');
+                if ($k !== '' && preg_match('~[0-9]$~', $k)) { $schemaHasNumberedKeys = true; break 2; }
+            }
+        }
+    } catch (\Throwable $e) {}
+
+    // If the schema has fixed numbered keys, render the form ONCE and prefill those keys from order lines.
+    if ($schemaHasNumberedKeys) {
+        // Force single render pass
+        $items = [[]];
+
+        // Normalise order line items
+        $lineItems = is_array($order->items ?? null) ? array_values($order->items) : [];
+        if (!count($lineItems)) {
+            $m = is_array($order?->meta) ? $order->meta : (json_decode($order?->meta ?? '[]', true) ?: []);
+            $lineItems = data_get($m, 'lines') ?? data_get($m, 'items') ?? data_get($m, 'order.items') ?? [];
+            $lineItems = is_array($lineItems) ? array_values($lineItems) : [];
+        }
+
+        // Helper to safely coerce to string
+        $toS = function($v){
+            if (is_bool($v)) return $v ? 'Yes' : 'No';
+            if (is_scalar($v)) return (string) $v;
+            if (is_array($v))  return (string) ($v['label'] ?? $v['value'] ?? $v['answer'] ?? $v['raw'] ?? '');
+            return (string) $v;
+        };
+
+        // How many slots to attempt based on what exists in the schema (max 10)
+        $maxSlots = 0;
+        foreach ((array) $sections as $__sec) {
+            foreach ((array) ($__sec['fields'] ?? []) as $__fld) {
+                $k = (string) ($__fld['key'] ?? '');
+                if (preg_match('~(\d+)$~', $k, $m)) { $n = (int) $m[1]; if ($n > $maxSlots) $maxSlots = $n; }
+            }
+        }
+        if ($maxSlots < 1) { $maxSlots = 5; } // sensible default
+
+        // Build defaults for numbered keys per line index: 1-based
+        for ($i = 1; $i <= $maxSlots; $i++) {
+            $src = $lineItems[$i-1] ?? [];
+            if (!is_array($src)) $src = [];
+
+            $name      = $toS(data_get($src, 'name') ?? data_get($src,'product.name') ?? data_get($src,'title'));
+            $variation = $toS(data_get($src, 'variation') ?? data_get($src,'variations') ?? data_get($src,'optionLabel') ?? data_get($src,'strength') ?? data_get($src,'dose'));
+            $qty       = $toS(data_get($src, 'qty') ?? data_get($src,'quantity'));
+            $batch     = $toS(data_get($src, 'batch') ?? data_get($src,'batch_number') ?? data_get($src,'lot'));
+            $expiry    = $toS(data_get($src, 'expiry') ?? data_get($src,'expiry_date'));
+            $site      = $toS(data_get($src, 'administration_site') ?? data_get($src,'site'));
+            $route     = $toS(data_get($src, 'administration_route') ?? data_get($src,'route'));
+            $dateProv  = $toS(data_get($src, 'date_provided') ?? data_get($src,'date_of_supply') ?? data_get($src,'date'));
+
+            // Only set a default if the answer is currently empty, so we never overwrite saved data
+            $setIfEmpty = function (&$arr, $key, $val) {
+                if ($val === null || $val === '') return;
+                if (!array_key_exists($key, $arr) || trim((string)$arr[$key]) === '') $arr[$key] = $val;
+            };
+
+            $setIfEmpty($oldData, "item{$i}",                $name);
+            $setIfEmpty($oldData, "vaccine{$i}",             $name);
+            $setIfEmpty($oldData, "item-variation{$i}",      $variation);
+            $setIfEmpty($oldData, "specific-vaccine{$i}",    $variation);
+            $setIfEmpty($oldData, "specific{$i}",            $variation);
+            $setIfEmpty($oldData, "quantity{$i}",            $qty);
+            $setIfEmpty($oldData, "qty{$i}",                  $qty);       // if you used qtyN instead of quantityN
+            $setIfEmpty($oldData, "batch-number{$i}",        $batch);
+            $setIfEmpty($oldData, "expiry-date{$i}",         $expiry);
+            $setIfEmpty($oldData, "administration-site{$i}", $site);
+            $setIfEmpty($oldData, "administration-route{$i}",$route);
+            $setIfEmpty($oldData, "date-provided{$i}",       $dateProv);
+        }
+    }
 @endphp
 
 @once
@@ -202,49 +284,69 @@
         <input type="hidden" name="treatment" value="{{ $treatFor ?? '' }}">
 
         <div class="space-y-10">
-            @foreach ($sections as $section)
+            @foreach ($items as $idx => $it)
                 @php
-                    $title = $section['title'] ?? null;
-                    $summary = $section['summary'] ?? null;
+                    // Per-item defaults derived from the current order line
+                    $defaultVaccine = (string) (data_get($it, 'name') ?? data_get($it, 'product.name') ?? '');
+                    $defaultSpecific = (string) (
+                        data_get($it,'variation') ?? data_get($it,'variations') ?? data_get($it,'optionLabel')
+                        ?? data_get($it,'strength') ?? data_get($it,'dose') ?? ''
+                    );
+                    $defaultQty = (int) (data_get($it,'qty') ?? data_get($it,'quantity') ?? 0);
                 @endphp
-                <div class="cf-section-card">
-                    @if ($title)
-                        <div class="mb-4">
-                            <h3 class="cf-title">{{ $title }}</h3>
-                            @if ($summary)
-                                <p class="cf-summary">{!! nl2br(e($summary)) !!}</p>
-                            @endif
-                        </div>
-                    @endif
 
-                    <div class="cf-grid">
+
+                @foreach ($sections as $section)
                     @php
-                        $onlyOne = count($section['fields'] ?? []) === 1;
-                        $cardBase = $onlyOne ? 'cf-field-flat' : 'cf-field-card';
+                        $title = $section['title'] ?? null;
+                        $summary = $section['summary'] ?? null;
                     @endphp
-                    @foreach (($section['fields'] ?? []) as $i => $field)
+                    <div class="cf-section-card">
+                        @if ($title)
+                            <div class="mb-4">
+                                <h3 class="cf-title">{{ $title }}</h3>
+                                @if ($summary)
+                                    <p class="cf-summary">{!! nl2br(e($summary)) !!}</p>
+                                @endif
+                            </div>
+                        @endif
+
+                        <div class="cf-grid">
+                        @php
+                            $onlyOne = count($section['fields'] ?? []) === 1;
+                            $cardBase = $onlyOne ? 'cf-field-flat' : 'cf-field-card';
+                        @endphp
+                        @foreach (($section['fields'] ?? []) as $i => $field)
                         @php
                             $type  = $field['type'] ?? 'text_input';
                             $label = $field['label'] ?? null;
                             $key   = $field['key'] ?? ($label ? \Illuminate\Support\Str::slug($label) : ('field_'.$loop->index));
                             // Always use a slugged name so it matches validation rules (eg scale_photo -> scale-photo)
-                            $name  = \Illuminate\Support\Str::slug((string) $key);
+                            $base  = \Illuminate\Support\Str::slug((string) $key);
+                            $name  = $idx === 0 ? $base : ($base . '_' . $idx);
                             $help  = $field['help'] ?? ($field['description'] ?? null);
                             $req   = (bool) ($field['required'] ?? false);
                             $ph    = $field['placeholder'] ?? null;
                             // Try both the slugged key and the original key when prefilling saved data
-                            $val   = old($name, $oldData[$name] ?? ($oldData[$key] ?? ''));
+                            $val   = old($name,
+                                $oldData[$name]
+                                    ?? ($idx === 0 ? ($oldData[$base] ?? ($oldData[$key] ?? '')) : '')
+                            );
 
                             // If saved value is an object-like array, extract a usable scalar
                             if (is_array($val)) {
                                 $val = $val['value'] ?? $val['raw'] ?? $val['answer'] ?? $val['label'] ?? '';
                             }
 
-                            // Date inputs must be in Y-m-d for the browser; convert common formats if needed
+                            // Date inputs must be in Y-m-d for the browser; convert common formats if needed.
+                            // Do NOT auto-fill "expiry" fields with today's date.
                             if ($type === 'date') {
+                                $isExpiryField = (stripos((string) $key, 'expiry') !== false) || (stripos((string) ($label ?? ''), 'expiry') !== false);
                                 if ($val === '') {
-                                    // default to today only when nothing saved yet
-                                    $val = now()->format('Y-m-d');
+                                    // Only default to today for non-expiry date fields
+                                    if (! $isExpiryField) {
+                                        $val = now()->format('Y-m-d');
+                                    }
                                 } else {
                                     try {
                                         $val = \Carbon\Carbon::parse((string) $val)->format('Y-m-d');
@@ -483,9 +585,10 @@
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @endif
-                    @endforeach
-                </div>
-                </div>
+                        @endforeach
+                    </div>
+                    </div>
+                @endforeach
             @endforeach
 
         </div>
