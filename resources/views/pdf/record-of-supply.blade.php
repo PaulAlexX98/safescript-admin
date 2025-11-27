@@ -35,10 +35,27 @@
     table.items th { background:#e8f3e8; color:#000; text-align:left; font-weight:bold; border:1px solid #d0d0d0; padding:6px 8px; }
     table.items td { border:1px solid #d0d0d0; padding:6px 8px; }
     .right { text-align:right; }
+
+    /* Watermark */
+    .watermark {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-30deg);
+      font-size: 90px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #000;
+      opacity: 0.06; /* faint */
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 0;
+    }
   </style>
 </head>
 
 <body>
+  <div class="watermark">Do not dispense</div>
   @php
       // Resolve "Date Provided" before rendering the header
       // Will pull from the saved Record of Supply / Clinical Notes response, then session meta, then request meta.
@@ -190,7 +207,7 @@
       try { if ($sid) { $sess = \App\Models\ConsultationSession::find($sid); } } catch (\Throwable $e) {}
 
       // Helper for service/treatment slugs
-      $slugify = function ($v) { return $v ? Str::slug((string) $v) : null; };
+      $slugify = function ($v) { return $v ? \Illuminate\Support\Str::slug((string) $v) : null; };
       $svcSlug = $slugify($sess->service_slug ?? $sess->service ?? data_get($meta ?? [], 'service_slug'));
       $trtSlug = $slugify($sess->treatment_slug ?? data_get($meta ?? [], 'treatment_slug'));
 
@@ -208,9 +225,9 @@
 
           // Prefer template placed on the session
           if ($sess && isset($sess->templates)) {
-              $tpl = Arr::get($sess->templates, 'declaration')
-                  ?? Arr::get($sess->templates, 'pharmacist_declaration')
-                  ?? Arr::get($sess->templates, 'pharmacist-declaration');
+              $tpl = \Illuminate\Support\Arr::get($sess->templates, 'declaration')
+                  ?? \Illuminate\Support\Arr::get($sess->templates, 'pharmacist_declaration')
+                  ?? \Illuminate\Support\Arr::get($sess->templates, 'pharmacist-declaration');
               if ($tpl) {
                   if (is_array($tpl))       $declFormId = $tpl['id'] ?? $tpl['form_id'] ?? null;
                   elseif (is_numeric($tpl)) $declFormId = (int) $tpl;
@@ -391,10 +408,10 @@
           $rosFormId = null;
 
           if ($sess && isset($sess->templates)) {
-              $tpl = Arr::get($sess->templates, 'clinical_notes')
-                  ?? Arr::get($sess->templates, 'record_of_supply')
-                  ?? Arr::get($sess->templates, 'supply')
-                  ?? Arr::get($sess->templates, 'clinicalNotes');
+              $tpl = \Illuminate\Support\Arr::get($sess->templates, 'clinical_notes')
+                  ?? \Illuminate\Support\Arr::get($sess->templates, 'record_of_supply')
+                  ?? \Illuminate\Support\Arr::get($sess->templates, 'supply')
+                  ?? \Illuminate\Support\Arr::get($sess->templates, 'clinicalNotes');
               if ($tpl) {
                   if (is_array($tpl))       $rosFormId = $tpl['id'] ?? $tpl['form_id'] ?? null;
                   elseif (is_numeric($tpl)) $rosFormId = (int) $tpl;
@@ -608,14 +625,6 @@
 
       // Helper to coerce any answer value into a printable string
       $rosHuman = function ($v) {
-      $__slug = function ($v) { return $v ? \Illuminate\Support\Str::slug((string) $v) : null; };
-      $__prettify = function ($s) {
-          $s = trim((string) $s);
-          if ($s === '') return '';
-          $s = str_replace(['_', '-'], ' ', $s);
-          $s = preg_replace('/\s+/', ' ', $s);
-          return \Illuminate\Support\Str::title($s);
-      };
           if (is_bool($v)) return $v ? 'Yes' : 'No';
           if (is_array($v)) {
               // common shapes
@@ -643,6 +652,16 @@
               return implode(', ', $parts);
           }
           return trim((string) $v);
+      };
+
+      // --- helpers for label prettification and schema label lookup ---
+      $__slug = function ($v) { return $v ? \Illuminate\Support\Str::slug((string) $v) : null; };
+      $__prettify = function ($s) {
+          $s = trim((string) $s);
+          if ($s === '') return '';
+          $s = str_replace(['_', '-'], ' ', $s);
+          $s = preg_replace('/\s+/', ' ', $s);
+          return \Illuminate\Support\Str::title($s);
       };
 
       $rosRows = [];
@@ -687,8 +706,9 @@
                       ->first();
               }
               $rosFormId = $rosForm->id ?? null;
+          }
 
-          // Build key→label lookup from Clinical Notes schema
+          // --- Build a key→label lookup from schema so we can swap machine keys for real questions ---
           $labelMap = [];
           if (!isset($rosForm) && isset($rosFormId)) {
               $rosForm = \App\Models\ClinicForm::find($rosFormId);
@@ -696,20 +716,21 @@
           if (isset($rosForm)) {
               $schemaRaw = is_array($rosForm->schema) ? $rosForm->schema : (json_decode($rosForm->schema ?? '[]', true) ?: []);
               if (is_array($schemaRaw) && !empty($schemaRaw)) {
-                  // sectioned or block-based
+                  // Support both block-based and sections[fields] shapes
                   if (array_key_exists('fields', $schemaRaw[0] ?? [])) {
                       foreach ($schemaRaw as $sec) {
                           foreach ((array)($sec['fields'] ?? []) as $f) {
                               $k = $f['key'] ?? null; $lab = $f['label'] ?? null;
-                              if ($k && $lab) { $labelMap[$__slug($k)] = (string) $lab; }
+                              if ($k && $lab) { $labelMap[$__slug($k)] = (string)$lab; }
                           }
                       }
                   } else {
                       foreach ($schemaRaw as $blk) {
-                          if (($blk['type'] ?? null) === 'section') continue;
+                          $type = $blk['type'] ?? null;
+                          if ($type === 'section') continue;
                           $d = (array)($blk['data'] ?? []);
                           $k = $d['key'] ?? null; $lab = $d['label'] ?? null;
-                          if ($k && $lab) { $labelMap[$__slug($k)] = (string) $lab; }
+                          if ($k && $lab) { $labelMap[$__slug($k)] = (string)$lab; }
                       }
                   }
               }
@@ -718,12 +739,12 @@
               $lab = trim((string)($label ?? ''));
               $k = $key ? $__slug($key) : ($lab !== '' ? $__slug($lab) : null);
               if ($k && isset($labelMap[$k])) return (string) $labelMap[$k];
+              // If looks like a machine key, prettify
               if ($lab === '' || preg_match('~^[a-z0-9]+([\-_][a-z0-9]+)+$~', $lab)) {
                   return $key ? $__prettify($key) : $__prettify($lab);
               }
               return $lab;
           };
-          }
 
           if (!isset($resp) || !$resp) {
               if (isset($sess)) {
@@ -755,7 +776,8 @@
 
           // 1) Prefer list-shaped rows
           foreach ($candidates as $cand) {
-              if (array_keys($cand) === range(0, count($cand) - 1)) {
+              $looksList = is_array($cand) && (array_key_exists(0, $cand) || array_keys($cand) === range(0, count($cand) - 1));
+              if ($looksList) {
                   foreach ($cand as $row) {
                       if (!is_array($row)) continue;
                       $rawLabel = $row['label'] ?? $row['question'] ?? null;
@@ -767,6 +789,53 @@
                       }
                   }
                   break;
+              }
+          }
+
+          // 2.5) Recursive flatten fallback for associative shapes
+          if (empty($rosRows) && !empty($decoded)) {
+              $skipKey = function($k){
+                  if (!is_string($k)) return true;
+                  if ($k === '' || $k[0] === '_') return true;
+                  $bad = [
+                      'form_type','__step_slug','service','treatment','_token','schema','version','id',
+                      'clinic_form_id','consultation_session_id','created_at','updated_at','meta'
+                  ];
+                  return in_array($k, $bad, true);
+              };
+              $flatten = function($arr, $prefix = '') use (&$flatten, $skipKey) {
+                  $out = [];
+                  if (!is_array($arr)) return $out;
+                  foreach ($arr as $k => $v) {
+                      $kstr = is_string($k) ? $k : (string)$k;
+                      if ($skipKey($kstr)) continue;
+                      $key = $prefix ? $prefix.'.'.$kstr : $kstr;
+                      if (is_array($v)) {
+                          // common value wrappers
+                          foreach (['value','label','answer','raw'] as $inner) {
+                              if (array_key_exists($inner, $v)) { $v = $v[$inner]; break; }
+                          }
+                      }
+                      if (is_array($v)) {
+                          $out += $flatten($v, $key);
+                      } elseif (is_bool($v)) {
+                          $out[$key] = $v ? 'Yes' : 'No';
+                      } else {
+                          $sv = trim((string)$v);
+                          if ($sv !== '') $out[$key] = $sv;
+                      }
+                  }
+                  return $out;
+              };
+              $flat = $flatten($decoded);
+              if (empty($flat)) {
+                  $flat = $flatten((array) data_get($decoded, 'data', []));
+              }
+              if (empty($flat)) {
+                  $flat = $flatten((array) data_get($decoded, 'answers', []));
+              }
+              foreach ($flat as $k => $v) {
+                  $rosRows[] = [ (string) $__displayLabel(null, (string)$k), $rosHuman($v) ];
               }
           }
 
