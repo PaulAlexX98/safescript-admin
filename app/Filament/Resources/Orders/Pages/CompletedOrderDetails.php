@@ -251,7 +251,7 @@ class CompletedOrderDetails extends ViewRecord
         $meta = is_array($rec->meta) ? $rec->meta : (json_decode($rec->meta ?? '[]', true) ?: []);
         $sessionId = data_get($meta, 'consultation_session_id');
 
-        // Submitted forms
+        // Submitted forms collapsed so only latest per type is shown
         $forms = [];
         $formQuickActions = [];
         if ($sessionId) {
@@ -259,10 +259,10 @@ class CompletedOrderDetails extends ViewRecord
             $formUrl = function (int|string $sessionId, int|string $formId, string $action = 'view'): string {
                 $action = in_array($action, ['view', 'edit', 'history'], true) ? $action : 'view';
                 $candidates = [
-                    "admin.consultations.forms.$action",
-                    "admin.consultations.form.$action",
-                    "consultations.forms.$action",
-                    "consultations.form.$action",
+                    'admin.consultations.forms.' . $action,
+                    'admin.consultations.form.' . $action,
+                    'consultations.forms.' . $action,
+                    'consultations.form.' . $action,
                 ];
                 foreach ($candidates as $name) {
                     if (Route::has($name)) {
@@ -273,110 +273,108 @@ class CompletedOrderDetails extends ViewRecord
                 }
                 return "/admin/consultations/{$sessionId}/forms/{$formId}/{$action}";
             };
-            $forms = ConsultationFormResponse::query()
+            $rows = ConsultationFormResponse::query()
                 ->where('consultation_session_id', $sessionId)
-                ->orderByDesc('created_at')
-                ->get()
-                ->map(function ($f) {
-                    // Normalise a friendly consistent title and assign a display order
-                    $rawType = strtolower((string) ($f->form_type ?? ''));
-                    $rawTitle = strtolower((string) ($f->title ?? ''));
-                    $isRAF = str_contains($rawType, 'raf') || str_contains($rawTitle, 'raf');
-                    if ($isRAF) {
-                        return null; // exclude RAF from Submitted Forms
-                    }
+                ->orderByDesc('id')
+                ->get();
 
-                    // heuristics flags
-                    $metaArr = is_array($f->meta) ? $f->meta : (json_decode($f->meta ?? '[]', true) ?: []);
-                    $hasPharmacist = str_contains($rawTitle, 'pharmacist') || str_contains($rawType, 'pharmacist') || str_contains(strtolower((string) data_get($metaArr, 'role', '')), 'pharmacist');
-                    $hasPatient    = str_contains($rawTitle, 'patient') || str_contains($rawType, 'patient');
-                    $hasDecl       = str_contains($rawTitle, 'declaration') || $rawTitle === 'declaration' || str_contains($rawType, 'declaration');
-                    $isROS         = $rawType === 'ros' || str_contains($rawType, 'record_of_supply') || str_contains($rawType, 'record-of-supply') || str_contains($rawTitle, 'record of supply');
-                    $isAdvice      = str_contains($rawTitle, 'advice') || str_contains($rawTitle, 'consultation') || str_contains($rawType, 'advice');
-                    $isRisk        = (str_contains($rawTitle, 'risk') && str_contains($rawTitle, 'assessment')) || (str_contains($rawType, 'risk') && str_contains($rawType, 'assessment'));
+            $canonical = function (ConsultationFormResponse $f): ?string {
+                $t = strtolower((string) ($f->form_type ?? ''));
+                $title = strtolower((string) ($f->title ?? ''));
 
-                    if ($isROS) {
-                        $label = 'Record of Supply';
-                        $order = 30;
-                    } elseif ($isAdvice) {
-                        $label = 'Pharmacist Advice';
-                        $order = 10;
-                    } elseif ($isRisk) {
-                        $label = 'Risk Assessment';
-                        $order = 1; // put Risk Assessment at the top
-                    } elseif ($hasDecl) {
-                        // Default ambiguous "Declaration" to Pharmacist unless explicitly Patient
-                        if ($hasPatient && !$hasPharmacist) {
-                            $label = 'Patient Declaration';
-                            $order = 40;
-                        } else {
-                            $label = 'Pharmacist Declaration';
-                            $order = 20;
-                        }
-                    } else {
-                        $label = $f->title ? (string) $f->title : ucwords(str_replace(['_', '-'], ' ', (string) ($f->form_type ?? '')));
-                        $order = 99;
-                    }
+                // normalise separators
+                $t = str_replace(['-', ' '], '_', $t);
+                $title = str_replace(['-', '  '], ['_', ' '], $title);
 
-                    // Item/product name best-effort
-                    $meta = is_array($f->meta) ? $f->meta : (json_decode($f->meta ?? '[]', true) ?: []);
-                    $item = data_get($meta, 'product_name')
-                         ?? data_get($meta, 'treatment')
-                         ?? data_get($meta, 'item.name')
-                         ?? data_get($meta, 'selectedProduct.name')
-                         ?? '—';
+                // Clinical Notes is Record of Supply
+                if (str_contains($t, 'clinical_notes') || str_contains($title, 'clinical notes')) {
+                    return 'record_of_supply';
+                }
+
+                // Record of Supply explicit matches
+                if ($t === 'ros' || $t === 'record_of_supply' || str_contains($title, 'record of supply')) {
+                    return 'record_of_supply';
+                }
+
+                // Risk Assessment including RAF
+                if ($t === 'raf' || $t === 'risk_assessment' || str_contains($title, 'risk assessment')) {
+                    return 'risk_assessment';
+                }
+
+                // Pharmacist Advice variants
+                if (
+                    str_contains($t, 'pharmacist_advice')
+                    || str_contains($t, 'advice')
+                    || str_contains($t, 'consultation')
+                    || str_contains($title, 'advice')
+                    || str_contains($title, 'consultation')
+                ) {
+                    return 'pharmacist_advice';
+                }
+
+                // Pharmacist Declaration
+                if (str_contains($t, 'pharmacist_declaration') || str_contains($title, 'declaration')) {
+                    return 'pharmacist_declaration';
+                }
+
+                // Reorder
+                if ($t === 'reorder' || $t === 're_order') {
+                    return 'reorder';
+                }
+
+                // Ignore other assessments that are not the above
+                if (str_contains($t, 'assessment') || str_contains($title, 'assessment')) {
+                    return null;
+                }
+
+                return null;
+            };
+
+            $latest = [];
+            foreach ($rows as $r) {
+                $key = $canonical($r);
+                if ($key === null) continue;
+                // Always let the most recent matching form win so Record of Supply doesn't point at Risk Assessment
+                $latest[$key] = $r;
+            }
+
+
+            $labelOf = [
+                'risk_assessment'        => ['Risk Assessment', 1],
+                'reorder'                => ['Reorder', 1],
+                'pharmacist_advice'      => ['Pharmacist Advice', 10],
+                'pharmacist_declaration' => ['Pharmacist Declaration', 20],
+                'record_of_supply'       => ['Record of Supply', 30],
+            ];
+
+            $forms = collect($latest)
+                ->map(function ($f, $key) use ($labelOf) {
+                    [$label, $ord] = $labelOf[$key] ?? [ucwords(str_replace('_', ' ', $key)), 99];
+
+                    $metaArr = is_array($f->meta)
+                        ? $f->meta
+                        : (json_decode($f->meta ?? '[]', true) ?: []);
+
+                    $item = data_get($metaArr, 'product_name')
+                        ?? data_get($metaArr, 'treatment')
+                        ?? data_get($metaArr, 'item.name')
+                        ?? data_get($metaArr, 'selectedProduct.name')
+                        ?? '—';
 
                     return [
                         'id'      => $f->id,
                         'title'   => $label,
-                        'type'    => $rawType ? ucfirst($rawType) : $label,
+                        'type'    => $key,
                         'item'    => $item,
                         'created' => optional($f->created_at)->format('d-m-Y H:i'),
-                        'order'   => $order,
+                        'order'   => $ord,
                     ];
                 })
-                ->filter()
+                ->sortBy(fn ($x) => [$x['order'], -$x['id']])
                 ->values()
                 ->toArray();
 
-            usort($forms, function ($a, $b) {
-                $cmp = ($a['order'] ?? 99) <=> ($b['order'] ?? 99);
-                if ($cmp !== 0) return $cmp;
-                return ($b['id'] ?? 0) <=> ($a['id'] ?? 0);
-            });
-
-            // Build quick actions for each form to render as dropdown buttons
-            $formQuickActions = [];
-            foreach ($forms as $f) {
-                $id    = $f['id'];
-                $title = $f['title'];
-
-                $viewUrl    = url("/admin/consultations/{$sessionId}/forms/{$id}/view");
-                $editUrl    = url("/admin/consultations/{$sessionId}/forms/{$id}/edit");
-                $historyUrl = url("/admin/consultations/{$sessionId}/forms/{$id}/history");
-
-                $formQuickActions[] = ActionGroup::make([
-                    Action::make("view_{$id}")
-                        ->label('View')
-                        ->url($viewUrl . (str_contains($viewUrl, '?') ? '&' : '?') . 'inline=1')
-                        ->extraAttributes(['data-inline-modal' => true, 'data-title' => $title . ' – View']),
-                    Action::make("edit_{$id}")
-                        ->label('Edit')
-                        ->url($editUrl . (str_contains($editUrl, '?') ? '&' : '?') . 'inline=1')
-                        ->extraAttributes(['data-inline-modal' => true, 'data-title' => $title . ' – Edit']),
-                    Action::make("history_{$id}")
-                        ->label('History')
-                        ->url($historyUrl . (str_contains($historyUrl, '?') ? '&' : '?') . 'inline=1')
-                        ->extraAttributes(['data-inline-modal' => true, 'data-title' => $title . ' – History']),
-                ])
-                    ->label($title)
-                    ->icon('heroicon-o-document-text')
-                    ->color('gray')
-                    ->button();
-            }
-            if (empty($formQuickActions)) {
-                $formQuickActions = [];
-            }
+            $formQuickActions = $forms;
         }
 
         $items = Arr::wrap(
