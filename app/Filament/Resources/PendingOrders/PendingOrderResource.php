@@ -53,7 +53,7 @@ class PendingOrderResource extends Resource
     protected static ?string $pluralLabel = 'Pending Approval';
     protected static ?string $modelLabel = 'Pending Approval';
 
-    protected static ?int $navigationSort = 1;
+    protected static ?int $navigationSort = 2;
 
     protected static ?string $recordTitleAttribute = 'title';
 
@@ -1222,21 +1222,29 @@ class PendingOrderResource extends Resource
                                             if (in_array($v, [false, 0, '0', 'false', 'no', 'NO', 'No'], true)) return 'no';
                                             return null;
                                         };
+
+                                        // 1 current pending order meta
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                         $v = $norm(data_get($meta, 'id_verified'));
                                         if ($v !== null) return $v;
+
+                                        // 2 user meta or flat
                                         try {
                                             $u = $record->user ?? null;
-                                            if ($u && \Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
-                                                $um = is_array($u->meta) ? $u->meta : (json_decode($u->meta ?? '[]', true) ?: []);
-                                                $uv = $norm(data_get($um, 'id_verified'));
-                                                if ($uv !== null) return $uv;
-                                            }
-                                            if ($u && \Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified')) {
-                                                $flat = $norm($u->id_verified ?? null);
-                                                if ($flat !== null) return $flat;
+                                            if ($u) {
+                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                                    $um = is_array($u->meta) ? $u->meta : (json_decode($u->meta ?? '[]', true) ?: []);
+                                                    $uv = $norm(data_get($um, 'id_verified'));
+                                                    if ($uv !== null) return $uv;
+                                                }
+                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified')) {
+                                                    $flat = $norm($u->id_verified ?? null);
+                                                    if ($flat !== null) return $flat;
+                                                }
                                             }
                                         } catch (\Throwable $e) {}
+
+                                        // 3 linked order by reference
                                         try {
                                             $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
                                             if ($ord) {
@@ -1245,6 +1253,29 @@ class PendingOrderResource extends Resource
                                                 if ($ov !== null) return $ov;
                                             }
                                         } catch (\Throwable $e) {}
+
+                                        // 4 history by same email across Orders then PendingOrders
+                                        try {
+                                            $email = data_get($meta, 'email')
+                                                ?: data_get($meta, 'customer.email')
+                                                ?: optional($record->user)->email;
+                                            if ($email) {
+                                                $ord2 = \App\Models\Order::where('email', $email)->latest()->first();
+                                                if ($ord2) {
+                                                    $om2 = is_array($ord2->meta) ? $ord2->meta : (json_decode($ord2->meta ?? '[]', true) ?: []);
+                                                    $ov2 = $norm(data_get($om2, 'id_verified'));
+                                                    if ($ov2 !== null) return $ov2;
+                                                }
+                                                $po = \App\Models\PendingOrder::whereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email')) = ?", [$email])
+                                                    ->latest()->first();
+                                                if ($po) {
+                                                    $pm = is_array($po->meta) ? $po->meta : (json_decode($po->meta ?? '[]', true) ?: []);
+                                                    $pv = $norm(data_get($pm, 'id_verified'));
+                                                    if ($pv !== null) return $pv;
+                                                }
+                                            }
+                                        } catch (\Throwable $e) {}
+
                                         return null;
                                     }),
                             ])

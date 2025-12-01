@@ -1292,17 +1292,14 @@ class ConsultationFormController extends Controller
             ]);
         }
 
-        // Prefer redirecting to the order if present, otherwise back to the consultation
+        // Prefer redirecting to the order if present, and trigger the PDF download on the destination page
         $order = $session->order ?? null;
         if ($order) {
-            return redirect()
-                ->to(url('/admin/orders/completed-orders/' . $order->getKey() . '/details'))
-                ->with('success', 'Consultation completed');
+            $url = url('/admin/orders/completed-orders/' . $order->getKey() . '/details?download=pre');
+            return redirect()->to($url)->with('success', 'Consultation completed');
         }
 
-        return redirect()
-            ->to(url('/admin/consultations/' . $session->id))
-            ->with('success', 'Consultation completed');
+        return redirect()->to(url('/admin/consultations/' . $session->id))->with('success', 'Consultation completed');
     }
 
     /**
@@ -1342,6 +1339,32 @@ class ConsultationFormController extends Controller
         // Optional PDF attachments (Record of Supply and Invoice)
         // Expecting file paths or public URLs to be stored in order meta under pdfs.record_of_supply and pdfs.invoice
         $attachments = [];
+
+        // Attach static GLP-1 guides for weight management services
+        try {
+            $svc = $session->service_slug ?: \Illuminate\Support\Str::slug((string) $session->service);
+            if (in_array($svc, ['weight-management', 'weight-loss', 'mounjaro', 'wegovy'], true)) {
+                $guideDir = storage_path('app/public/guides/weight-management');
+                $files = [
+                    $guideDir . '/GLP-1 WEIGHT MANAGEMENT_ CLINICAL LIFESTYLE, NUTRITION & MOVEMENT GUIDE.docx.pdf' => 'GLP-1 Lifestyle Nutrition Movement.pdf',
+                    $guideDir . '/YOUR WEIGHT LOSS JOURNEY WITH GLP-1 MEDICATIONS – PATIENT GUIDE ON WHAT TO EXPECT.docx.pdf' => 'GLP-1 What To Expect.pdf',
+                    $guideDir . '/GLP-1 WEIGHT LOSS PROGRAMME_ PATIENT STARTER PACK & INFORMATION GUIDE ON HOW THE MEDICATION WORKS.docx.pdf' => 'GLP-1 Starter Pack.pdf',
+                ];
+                foreach ($files as $abs => $downloadName) {
+                    if (is_file($abs)) {
+                        $attachments[] = [
+                            'path' => $abs,
+                            'name' => $downloadName,
+                        ];
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('consultation.email.glp1_guides_attach_failed', [
+                'session' => $session->id,
+                'error'   => $e->getMessage(),
+            ]);
+        }
 
         // Also look directly in storage/app/public/consultations/{session_id} for generated PDFs
         $sessionId = $session->id ?? null;

@@ -23,10 +23,48 @@ use Filament\Notifications\Notification;
 use Illuminate\Http\Request;
 use App\Support\ZplLabelBuilder;
 use Illuminate\Support\Facades\Log;
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\FileUpload;
 
 class CompletedOrderDetails extends ViewRecord
 {
     protected static string $resource = CompletedOrderResource::class;
+
+    public function mount($record): void
+    {
+        parent::mount($record);
+
+        if (request()->query('download') === 'pre') {
+            $sessionId = data_get($this->record->meta ?? [], 'consultation_session_id');
+
+            // optional fallback if meta is missing
+            if (!$sessionId) {
+                try {
+                    $sessionId = \Illuminate\Support\Facades\DB::table('consultations')
+                        ->where('order_reference', $this->record->reference)
+                        ->orderByDesc('id')
+                        ->value('session_id');
+                } catch (\Throwable $e) {}
+            }
+
+            if ($sessionId && Route::has('admin.consultations.pdf.pre')) {
+                $url = route('admin.consultations.pdf.pre', ['session' => $sessionId]);
+                $this->js("
+                    (function(u){
+                        try {
+                            var f = document.createElement('iframe');
+                            f.style.display = 'none';
+                            f.setAttribute('aria-hidden', 'true');
+                            f.src = u;
+                            document.body.appendChild(f);
+                            setTimeout(function(){ try { document.body.removeChild(f); } catch(e){} }, 10000);
+                        } catch(e) {}
+                    })('{$url}');
+                ");
+            }
+        }
+    }
 
     public function getTitle(): string
     {
@@ -163,6 +201,31 @@ class CompletedOrderDetails extends ViewRecord
                             : url("/admin/consultations/{$sessionId}/pdf/private-prescription");
                     })
                     ->openUrlInNewTab(),
+                Action::make('pdf_pre_patient')
+                    ->label('Private Prescription Patient')
+                    ->icon('heroicon-o-clipboard-document-check')
+                    ->url(function () use ($sessionId) {
+                        if (!$sessionId) return null;
+                        // Try named route first then fallback to controller url
+                        $name = 'admin.consultations.pdf.pre.patient';
+                        if (\Illuminate\Support\Facades\Route::has($name)) {
+                            return route($name, ['session' => $sessionId]);
+                        }
+                        return url("/admin/consultations/{$sessionId}/pdf/private-prescription-patient");
+                    })
+                    ->openUrlInNewTab(),
+                Action::make('pdf_notification')
+                    ->label('Notification of Treatment Issued')
+                    ->icon('heroicon-o-clipboard-document')
+                    ->url(function () use ($sessionId) {
+                        if (!$sessionId) return null;
+                        $name = 'admin.consultations.pdf.notification';
+                        if (\Illuminate\Support\Facades\Route::has($name)) {
+                            return route($name, ['session' => $sessionId]);
+                        }
+                        return url("/admin/consultations/{$sessionId}/pdf/notification-of-treatment-issued");
+                    })
+                    ->openUrlInNewTab(),
                 Action::make('pdf_ros')
                     ->label('Record of Supply')
                     ->icon('heroicon-o-clipboard-document')
@@ -205,6 +268,20 @@ class CompletedOrderDetails extends ViewRecord
                         if (!$sessionId) { Notification::make()->danger()->title('No consultation session.')->send(); return; }
                         $this->sendPdfEmail('pre', $sessionId);
                     }),
+                Action::make('email_pre_patient')
+                    ->label('Private Prescription Patient')
+                    ->icon('heroicon-o-clipboard-document-check')
+                    ->action(function () use ($sessionId) {
+                        if (!$sessionId) { Notification::make()->danger()->title('No consultation session.')->send(); return; }
+                        $this->sendPdfEmail('pre_patient', $sessionId);
+                    }),
+                Action::make('email_notification')
+                    ->label('Notification of Treatment Issued')
+                    ->icon('heroicon-o-clipboard-document')
+                    ->action(function () use ($sessionId) {
+                        if (!$sessionId) { Notification::make()->danger()->title('No consultation session.')->send(); return; }
+                        $this->sendPdfEmail('notification', $sessionId);
+                    }),
                 Action::make('email_ros')
                     ->label('Record of Supply')
                     ->icon('heroicon-o-clipboard-document')
@@ -226,22 +303,126 @@ class CompletedOrderDetails extends ViewRecord
                 ->button()
                 ->visible($hasSession),
 
-            Action::make('follow_up')
-                ->label('Create Follow-up')
-                ->icon('heroicon-o-plus-circle')
-                ->url(fn () => $hasSession ? url("/admin/follow-ups/create?order={$this->record->getKey()}") : null)
-                ->openUrlInNewTab()
-                ->visible($hasSession),
+            Action::make('email_people')
+                ->label('Email People')
+                ->icon('heroicon-o-envelope')
+                ->color('info')
+                ->modalHeading('Send Email')
+                ->form([
+                    TextInput::make('to')
+                        ->label('To')
+                        ->placeholder('name@example.com, other@example.com')
+                        ->helperText('Separate multiple emails with commas or new lines')
+                        ->required(),
+                    TextInput::make('cc')
+                        ->label('CC')
+                        ->placeholder('optional'),
+                    TextInput::make('bcc')
+                        ->label('BCC')
+                        ->placeholder('optional'),
+                    TextInput::make('subject')
+                        ->label('Subject')
+                        ->required(),
+                    FileUpload::make('attachments')
+                        ->label('Attachments')
+                        ->helperText('Optional. Up to 5 files max 5 MB each')
+                        ->multiple()
+                        ->maxFiles(5)
+                        ->maxSize(5120)
+                        ->downloadable()
+                        ->openable()
+                        ->storeFiles(false),
+                    Textarea::make('message')
+                        ->label('Message')
+                        ->rows(10)
+                        ->required(),
+                ])
+                ->action(function (array $data) {
+                    $parseList = function ($input) {
+                        $s = (string) ($input ?? '');
+                        if ($s === '') return [];
+                        $parts = preg_split('/[,\n;]/', $s);
+                        $parts = array_map('trim', $parts);
+                        $parts = array_filter($parts, fn ($e) => $e !== '');
+                        // keep only valid email addresses
+                        $parts = array_values(array_filter($parts, fn ($e) => filter_var($e, FILTER_VALIDATE_EMAIL)));
+                        // de-duplicate
+                        return array_values(array_unique($parts));
+                    };
 
-            Action::make('archive')
-                ->label('Archive')
-                ->icon('heroicon-o-archive-box')
-                ->requiresConfirmation()
-                ->color('gray')
-                ->action(function () {
-                    $this->record->update(['archived_at' => now()]);
-                    Notification::make()->success()->title('Order archived.')->send();
-                }),
+                    $to   = $parseList($data['to'] ?? '');
+                    $cc   = $parseList($data['cc'] ?? '');
+                    $bcc  = $parseList($data['bcc'] ?? '');
+                    $subj = trim((string) ($data['subject'] ?? ''));
+                    $body = (string) ($data['message'] ?? '');
+                    $files = is_array($data['attachments'] ?? null) ? $data['attachments'] : [];
+
+                    if (empty($to)) {
+                        Notification::make()->danger()->title('No valid recipient email addresses')->send();
+                        return;
+                    }
+                    if ($subj === '') {
+                        Notification::make()->danger()->title('Subject is required')->send();
+                        return;
+                    }
+                    if ($body === '') {
+                        Notification::make()->danger()->title('Message is required')->send();
+                        return;
+                    }
+
+                    try {
+                        $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
+                        $fromName    = config('mail.from.name') ?: 'Safescript Pharmacy';
+
+                        \Illuminate\Support\Facades\Mail::send([], [], function ($m) use ($to, $cc, $bcc, $subj, $body, $fromAddress, $fromName, $files) {
+                            $m->from($fromAddress, $fromName)
+                              ->subject($subj);
+                            
+                            // Symfony Mailer expects an AbstractPart. Use html() or text() instead of setBody()
+                            $hasHtml = is_string($body) && ($body !== strip_tags($body) || str_contains($body, '<') || str_contains($body, '>'));
+                            if ($hasHtml) {
+                                $m->html($body);
+                            } else {
+                                $m->text($body);
+                            }
+
+                            // add recipients
+                            foreach ($to as $addr) { $m->to($addr); }
+                            if (!empty($cc))  { $m->cc($cc); }
+                            if (!empty($bcc)) { $m->bcc($bcc); }
+
+                            if (!empty($files)) {
+                                foreach ($files as $file) {
+                                    try {
+                                        // Support both TemporaryUploadedFile and Symfony UploadedFile
+                                        $path = method_exists($file, 'getRealPath') ? $file->getRealPath() : (string) ($file->path() ?? '');
+                                        $name = method_exists($file, 'getClientOriginalName') ? $file->getClientOriginalName() : basename((string) ($file->getFilename() ?? 'attachment'));
+                                        $mime = method_exists($file, 'getMimeType') ? ($file->getMimeType() ?: 'application/octet-stream') : 'application/octet-stream';
+                                        if ($path && is_readable($path)) {
+                                            $m->attach($path, ['as' => $name, 'mime' => $mime]);
+                                        } elseif (method_exists($file, 'getContent')) {
+                                            $content = $file->getContent();
+                                            if (is_string($content) && $content !== '') {
+                                                $m->attachData($content, $name, ['mime' => $mime]);
+                                            }
+                                        }
+                                    } catch (\Throwable $e) {
+                                        // continue attaching others
+                                    }
+                                }
+                            }
+                        });
+
+                        Notification::make()->success()->title('Email sent successfully')->send();
+                    } catch (\Throwable $e) {
+                        report($e);
+                        Notification::make()->danger()
+                            ->title('Could not send email')
+                            ->body(substr($e->getMessage(), 0, 200))
+                            ->send();
+                    }
+                })
+                ->button(),
         ];
     }
 
@@ -1041,6 +1222,20 @@ class CompletedOrderDetails extends ViewRecord
                     ? 'admin.consultations.pdf.pre'
                     : null;
                 $fallbackPath = "/admin/consultations/{$sessionId}/pdf/private-prescription";
+                break;
+            case 'pre_patient':
+                $label = 'Private Prescription Patient';
+                $routeName = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.pre.patient')
+                    ? 'admin.consultations.pdf.pre.patient'
+                    : null;
+                $fallbackPath = "/admin/consultations/{$sessionId}/pdf/private-prescription-patient";
+                break;
+            case 'notification':
+                $label = 'Notification of Treatment Issued';
+                $routeName = \Illuminate\Support\Facades\Route::has('admin.consultations.pdf.notification')
+                    ? 'admin.consultations.pdf.notification'
+                    : null;
+                $fallbackPath = "/admin/consultations/{$sessionId}/pdf/notification-of-treatment-issued";
                 break;
             case 'ros':
                 $label = 'Record of Supply';

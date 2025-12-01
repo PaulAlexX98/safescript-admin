@@ -271,4 +271,19 @@ class ConsultationPdfController extends Controller
             ->setPaper('a4')
             ->download("{$data['ref']}_private-prescription.pdf");
     }
+    public function prePatient(ConsultationSession $session)
+    {
+        $data = $this->baseData($session);
+        return Pdf::loadView('pdf.private-prescription-for patients', $data)
+            ->setPaper('a4')
+            ->download("{$data['ref']}_private-prescription-patient.pdf");
+    }
+    
+    public function notificationOfTreatmentIssued(ConsultationSession $session)
+    {
+        $data = $this->baseData($session);
+        return Pdf::loadView('pdf.notification-of-treatment', $data)
+            ->setPaper('a4')
+            ->download("{$data['ref']}_notification-of-treatment-issued.pdf");
+    }
 }

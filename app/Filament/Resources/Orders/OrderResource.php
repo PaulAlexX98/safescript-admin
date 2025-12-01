@@ -24,6 +24,7 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Filament\Forms\Components\Textarea;
 use App\Filament\Resources\Orders\CompletedOrderResource as CompletedOrders;
+use Illuminate\Support\Facades\DB;
 
 class OrderResource extends Resource
 {
@@ -69,11 +70,10 @@ class OrderResource extends Resource
         return $table
             ->defaultSort('created_at', 'desc')
             ->columns([
-                TextColumn::make('created_at')
-                    ->label('Order Created')
+                TextColumn::make('completed_at')
+                    ->label('Completed')
                     ->dateTime('d M Y, H:i')
-                    ->sortable()
-                    ->toggleable(),
+                    ->sortable(),
 
                 TextColumn::make('reference')
                     ->label('Reference')

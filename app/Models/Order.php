@@ -10,6 +10,7 @@ class Order extends Model
         'meta' => 'array',
         'paid_at' => 'datetime',
         'approved_at' => 'datetime',
+        'completed_at' => 'datetime',
     ];
 
     protected $table = 'orders';
@@ -68,6 +69,16 @@ class Order extends Model
     public function booking()
     {
         return $this->appointment();
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $order) {
+            $status = strtolower((string) $order->status);
+            if ($status === 'completed' && empty($order->completed_at)) {
+                $order->completed_at = now();
+            }
+        });
     }
 
     /**

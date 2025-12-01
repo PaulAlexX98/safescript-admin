@@ -11,6 +11,7 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Toggle;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use Filament\Forms\Components\Slider;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms;
 use Filament\Schemas\Schema;
 use Filament\Schemas\Components\Section;
@@ -132,6 +133,442 @@ class PageForm
                             ->reorderable()
                             ->directory('clinic-forms/gallery')
                             ->helperText('Optional image gallery.')
+                            ->columnSpanFull(),
+
+                        Section::make('Service Sections')
+                            ->collapsible()
+                            ->schema([
+                                Section::make('Top banner')
+                                    ->statePath('meta.sections.topbar')
+                                    ->schema([
+                                        Toggle::make('enabled')
+                                            ->label('Show top banner')
+                                            ->default(true)
+                                            ->columnSpan(3),
+                                        TextInput::make('heading')
+                                            ->label('Heading text')
+                                            ->helperText('Shown in the rounded chip row above the hero')
+                                            ->columnSpan(9),
+
+                                        Repeater::make('items')
+                                            ->label('Badges')
+                                            ->schema([
+                                                TextInput::make('value')
+                                                    ->label('Text')
+                                                    ->required(),
+                                            ])
+                                            ->columns(1)
+                                            ->reorderable()
+                                            ->collapsible()
+                                            ->columnSpanFull(),
+
+                                        Section::make('Primary button')
+                                            ->schema([
+                                                TextInput::make('primary.label')
+                                                    ->label('Button label')
+                                                    ->maxLength(80)
+                                                    ->columnSpan(5),
+                                                TextInput::make('primary.href')
+                                                    ->label('Button link')
+                                                    ->helperText('Paste a URL. If you upload a file below we will auto-fill this field.')
+                                                    ->columnSpan(7),
+                                                FileUpload::make('primary.upload')
+                                                    ->label('Upload file for primary button')
+                                                    ->disk('public')
+                                                    ->directory('pages/topbar')
+                                                    ->visibility('public')
+                                                    ->openable()
+                                                    ->downloadable()
+                                                    ->afterStateUpdated(function (Get $get, Set $set, $state) {
+                                                        $path = is_array($state) ? ($state['path'] ?? $state['url'] ?? $state['name'] ?? '') : (string) $state;
+                                                        if ($path) {
+                                                            $path = ltrim($path, '/');
+                                                            if (! str_starts_with($path, 'storage/')) {
+                                                                $path = 'storage/' . $path;
+                                                            }
+                                                            $set('primary.href', '/' . $path);
+                                                        }
+                                                    })
+                                                    ->columnSpanFull(),
+                                            ])
+                                            ->columns(12)
+                                            ->columnSpan(6)
+                                            ->collapsible(),
+
+                                        Section::make('Secondary button')
+                                            ->schema([
+                                                TextInput::make('secondary.label')
+                                                    ->label('Button label')
+                                                    ->maxLength(80)
+                                                    ->columnSpan(5),
+                                                TextInput::make('secondary.href')
+                                                    ->label('Button link')
+                                                    ->helperText('Paste a URL. If you upload a file below we will auto-fill this field.')
+                                                    ->columnSpan(7),
+                                                FileUpload::make('secondary.upload')
+                                                    ->label('Upload file for secondary button')
+                                                    ->disk('public')
+                                                    ->directory('pages/topbar')
+                                                    ->visibility('public')
+                                                    ->openable()
+                                                    ->downloadable()
+                                                    ->afterStateUpdated(function (Get $get, Set $set, $state) {
+                                                        $path = is_array($state) ? ($state['path'] ?? $state['url'] ?? $state['name'] ?? '') : (string) $state;
+                                                        if ($path) {
+                                                            $path = ltrim($path, '/');
+                                                            if (! str_starts_with($path, 'storage/')) {
+                                                                $path = 'storage/' . $path;
+                                                            }
+                                                            $set('secondary.href', '/' . $path);
+                                                        }
+                                                    })
+                                                    ->columnSpanFull(),
+                                            ])
+                                            ->columns(12)
+                                            ->columnSpan(6)
+                                            ->collapsible(),
+                                    ])
+                                    ->columns(12)
+                                    ->columnSpanFull()
+                                    ->collapsible(),
+                                Section::make('Hero')
+                                    ->statePath('meta.sections.hero')
+                                    ->schema([
+                                        Toggle::make('enabled')->default(true)->label('Show hero'),
+
+                                        TextInput::make('kicker')
+                                            ->label('Kicker eg NHS repeat prescriptions')
+                                            ->columnSpan(4),
+
+                                        TextInput::make('title')
+                                            ->label('Hero title')
+                                            ->maxLength(190)
+                                            ->required()
+                                            ->columnSpan(8),
+
+                                        TextInput::make('subtext')
+                                            ->label('Hero strapline')
+                                            ->maxLength(190)
+                                            ->columnSpanFull(),
+
+                                        // primary button
+                                        TextInput::make('primary.label')
+                                            ->label('Primary button label')
+                                            ->maxLength(80)
+                                            ->columnSpan(5),
+                                        TextInput::make('primary.href')
+                                            ->label('Primary button link')
+                                            ->helperText('Optional. If set, button will open the link; otherwise it opens the NHS modal.')
+                                            ->columnSpan(7),
+
+                                        // secondary button
+                                        TextInput::make('secondary.label')
+                                            ->label('Secondary button label')
+                                            ->maxLength(80)
+                                            ->columnSpan(5),
+                                        TextInput::make('secondary.href')
+                                            ->label('Secondary button link')
+                                            ->helperText('Optional. If set, button will open the link; otherwise it opens the NHS modal.')
+                                            ->columnSpan(7),
+
+                                        // hero image
+                                        FileUpload::make('hero_upload')
+                                            ->label('Hero image')
+                                            ->image()
+                                            ->disk('public')
+                                            ->directory('pages/hero')
+                                            ->visibility('public')
+                                            ->imageEditor()
+                                            ->afterStateUpdated(function (Get $get, Set $set, $state) {
+                                                $path = is_array($state) ? ($state['path'] ?? $state['url'] ?? $state['name'] ?? '') : (string) $state;
+                                                if ($path) {
+                                                    $path = ltrim($path, '/');
+                                                    if (! str_starts_with($path, 'storage/')) {
+                                                        $path = 'storage/' . $path;
+                                                    }
+                                                    // frontend reads image_url
+                                                    $set('image_url', '/' . $path);
+                                                }
+                                            })
+                                            ->columnSpan(6),
+                                        TextInput::make('image_url')
+                                            ->label('Image URL')
+                                            ->placeholder('/storage/pages/hero/your-image.webp')
+                                            ->dehydrated(true)
+                                            ->columnSpan(6),
+
+                                        // badges row
+                                        Repeater::make('badges')
+                                            ->label('Badges')
+                                            ->schema([
+                                                TextInput::make('value')
+                                                    ->label('Text')
+                                                    ->required(),
+                                            ])
+                                            ->collapsible()
+                                            ->reorderable()
+                                            ->columns(1)
+                                            ->columnSpanFull(),
+                                    ])
+                                    ->columns(12)
+                                    ->collapsible(),
+
+                                Section::make('About section')
+                                    ->statePath('meta.sections.about')
+                                    ->schema([
+                                        Toggle::make('enabled')->default(true),
+                                        TextInput::make('title')->label('Heading')->maxLength(190),
+                                        Textarea::make('paragraph')->label('Paragraph')->rows(4),
+                                        Repeater::make('bullets')
+                                            ->label('Bullets')
+                                            ->schema([
+                                                TextInput::make('value')->label('Text')->required(),
+                                            ])
+                                            ->columns(1)
+                                            ->reorderable()
+                                            ->collapsible()
+                                            ->columnSpanFull(),
+                                        RichEditor::make('html')
+                                            ->label('Extra details rich text')
+                                            ->helperText('Optional extra copy shown below the bullets')
+                                            ->columnSpanFull(),
+                                        // Optional image (not currently used by frontend, but kept for future)
+                                        FileUpload::make('image_upload')
+                                            ->label('Side image')
+                                            ->image()
+                                            ->disk('public')
+                                            ->directory('pages/about')
+                                            ->visibility('public')
+                                            ->imageEditor()
+                                            ->afterStateUpdated(function (Get $get, Set $set, $state) {
+                                                $path = is_array($state) ? ($state['path'] ?? $state['url'] ?? $state['name'] ?? '') : (string) $state;
+                                                if ($path) {
+                                                    $path = ltrim($path, '/');
+                                                    if (! str_starts_with($path, 'storage/')) {
+                                                        $path = 'storage/' . $path;
+                                                    }
+                                                    $set('image_url', '/' . $path);
+                                                }
+                                            }),
+                                        TextInput::make('image_url')->label('Image URL'),
+                                    ])
+                                    ->columns(2)
+                                    ->collapsible(),
+
+                                Section::make('Pricing table')
+                                    ->statePath('meta.sections.prices')
+                                    ->schema([
+                                        Toggle::make('enabled')
+                                            ->default(true)
+                                            ->label('Enabled'),
+
+                                        TextInput::make('title')
+                                            ->label('Heading')
+                                            ->maxLength(190),
+
+                                        Toggle::make('has_col_header')
+                                            ->label('Show column header row')
+                                            ->default(true),
+
+                                        Toggle::make('has_row_header')
+                                            ->label('Show row header column')
+                                            ->default(false),
+
+                                        Repeater::make('columns')
+                                            ->label('Column headers')
+                                            ->schema([
+                                                TextInput::make('label')
+                                                    ->label('Header label')
+                                                    ->required(),
+                                            ])
+                                            ->columns(1)
+                                            ->reorderable()
+                                            ->collapsible()
+                                            ->visible(fn (Get $get) => (bool) $get('has_col_header'))
+                                            ->columnSpanFull(),
+
+                                        Repeater::make('rows')
+                                            ->label('Rows')
+                                            ->schema([
+                                                TextInput::make('label')
+                                                    ->label('Row header')
+                                                    ->helperText('Only used when Show row header column is on.'),
+
+                                                Repeater::make('cells')
+                                                    ->label('Cells')
+                                                    ->schema([
+                                                        TextInput::make('value')
+                                                            ->label('Cell text')
+                                                            ->required(),
+                                                    ])
+                                                    ->columns(1)
+                                                    ->reorderable()
+                                                    ->collapsible()
+                                                    ->columnSpanFull(),
+                                            ])
+                                            ->columns(1)
+                                            ->reorderable()
+                                            ->addActionLabel('Add row')
+                                            ->columnSpanFull(),
+                                    ])
+                                    ->columns(1)
+                                    ->columnSpanFull()
+                                    ->collapsible(),
+
+                                Section::make('Why choose us')
+                                    ->statePath('meta.sections.why')
+                                    ->schema([
+                                        Toggle::make('enabled')->default(true)->label('Enabled'),
+                                        TextInput::make('title')->label('Heading')->maxLength(190)->default('Why choose our NHS service'),
+
+                                        // Left column bullet list
+                                        Repeater::make('bullets')
+                                            ->label('Bullet points')
+                                            ->schema([
+                                                TextInput::make('value')
+                                                    ->label('Text')
+                                                    ->required()
+                                                    ->columnSpanFull(),
+                                            ])
+                                            ->columns(1)
+                                            ->reorderable()
+                                            ->addActionLabel('Add bullet')
+                                            ->columnSpanFull(),
+
+                                        // Right column feature cards
+                                        Repeater::make('features')
+                                            ->label('Feature cards')
+                                            ->schema([
+                                            
+
+                                                FileUpload::make('icon_upload')
+                                                    ->label('Custom icon upload')
+                                                    ->image()
+                                                    ->disk('public')
+                                                    ->directory('pages/features')
+                                                    ->visibility('public')
+                                                    ->imageEditor()
+                                                    ->openable()
+                                                    ->downloadable()
+                                                    ->helperText('Optional. If set, this image is used instead of the selected icon.')
+                                                    ->afterStateUpdated(function (Get $get, Set $set, $state) {
+                                                        $path = is_array($state) ? ($state['path'] ?? $state['url'] ?? $state['name'] ?? '') : (string) $state;
+                                                        if ($path) {
+                                                            $path = ltrim($path, '/');
+                                                            if (! str_starts_with($path, 'storage/')) $path = 'storage/'.$path;
+                                                            $set('icon_url', '/'.$path);
+                                                        }
+                                                    })
+                                                    ->columnSpanFull(),
+
+                                                TextInput::make('icon_url')
+                                                    ->label('Icon URL')
+                                                    ->helperText('Filled automatically on upload or paste a /storage path')
+                                                    ->columnSpanFull(),
+
+                                                TextInput::make('title')
+                                                    ->label('Title')
+                                                    ->required()
+                                                    ->maxLength(120)
+                                                    ->columnSpanFull(),
+                                            ])
+                                            ->columns(1)
+                                            ->reorderable()
+                                            ->addActionLabel('Add feature')
+                                            ->columnSpanFull(),
+                                    ])
+                                    ->columns(1)
+                                    ->columnSpanFull()
+                                    ->extraAttributes(['class' => 'fi-w-full'])
+                                    ->collapsible(),
+
+                                Section::make('How it works')
+                                    ->statePath('meta.sections.how')
+                                    ->schema([
+                                        Toggle::make('enabled')->default(true),
+                                        TextInput::make('title')->label('Heading')->maxLength(190)->default('How it works'),
+                                        Repeater::make('steps')
+                                            ->label('Steps')
+                                            ->schema([
+                                                TextInput::make('title')
+                                                    ->label('Step title')
+                                                    ->required()
+                                                    ->maxLength(150)
+                                                    ->columnSpanFull(),
+                                                Textarea::make('text')
+                                                    ->label('Step text')
+                                                    ->rows(3)
+                                                    ->columnSpanFull(),
+                                                FileUpload::make('image_upload')
+                                                    ->label('Step image')
+                                                    ->image()
+                                                    ->disk('public')
+                                                    ->directory('pages/steps')
+                                                    ->visibility('public')
+                                                    ->imageEditor()
+                                                    ->afterStateUpdated(function (Get $get, Set $set, $state) {
+                                                        $path = is_array($state) ? ($state['path'] ?? $state['name'] ?? '') : (string) $state;
+                                                        if ($path) {
+                                                            $path = ltrim($path, '/');
+                                                            if (! str_starts_with($path, 'storage/')) {
+                                                                $path = 'storage/' . $path;
+                                                            }
+                                                            $set('image_url', '/' . $path);
+                                                        }
+                                                    })
+                                                    ->columnSpanFull(),
+                                                TextInput::make('image_url')
+                                                    ->label('Image URL')
+                                                    ->columnSpanFull(),
+                                            ])
+                                            ->columns(1)
+                                            ->reorderable()
+                                            ->addActionLabel('Add step')
+                                            ->columnSpanFull(),
+                                    ])
+                                    ->collapsible(),
+
+                                Section::make('FAQs')
+                                    ->statePath('meta.sections.faqs')
+                                    ->schema([
+                                        Toggle::make('enabled')->default(true),
+                                        TextInput::make('title')->label('Heading')->maxLength(190)->default('Frequently asked questions'),
+                                        Repeater::make('items')
+                                            ->schema([
+                                                TextInput::make('q')->label('Question')->required()->maxLength(190),
+                                                Textarea::make('a')->label('Answer')->rows(4)->required(),
+                                            ])
+                                            ->columnSpanFull()
+                                            ->reorderable(),
+                                    ])
+                                    ->collapsible(),
+
+                                Section::make('Videos')
+                                    ->statePath('meta.sections.videos')
+                                    ->schema([
+                                        Toggle::make('enabled')->default(true),
+                                        TextInput::make('title')->label('Heading')->maxLength(190)->default('Watch how NHS nomination works'),
+                                        Repeater::make('items')
+                                            ->schema([
+                                                TextInput::make('url')
+                                                    ->label('YouTube URL')
+                                                    ->helperText('Paste a YouTube link. We will store both url and id.')
+                                                    ->afterStateUpdated(function (Get $get, Set $set, $state) {
+                                                        $u = (string) $state;
+                                                        $id = null;
+                                                        if (preg_match('~(?:youtu\.be/|v=|embed/)([A-Za-z0-9_-]{6,})~', $u, $m)) {
+                                                            $id = $m[1] ?? null;
+                                                        }
+                                                        if ($id) $set('id', $id);
+                                                    }),
+                                                TextInput::make('id')->label('Video ID')->helperText('Autofilled from URL if possible.'),
+                                                TextInput::make('title')->label('Video title')->maxLength(190),
+                                            ])
+                                            ->columnSpanFull()
+                                            ->reorderable(),
+                                    ])
+                                    ->collapsible(),
+                            ])
                             ->columnSpanFull(),
 
                     ])

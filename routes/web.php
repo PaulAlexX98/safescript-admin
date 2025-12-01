@@ -99,6 +99,8 @@ Route::middleware([
     Route::get('pdf/private-prescription',[ConsultationPdfController::class, 'pre'])->name('pdf.pre');
     Route::get('pdf/record-of-supply',[ConsultationPdfController::class, 'ros'])->name('pdf.ros');
     Route::get('pdf/invoice',         [ConsultationPdfController::class, 'invoice'])->name('pdf.invoice');
+    Route::get('pdf/private-prescription-patient',[ConsultationPdfController::class, 'prePatient'])->name('pdf.pre.patient');
+    Route::get('pdf/notification-of-treatment-issued',[ConsultationPdfController::class, 'notificationOfTreatmentIssued'])->name('pdf.notification');
 });
 
 // Allow {form} route parameter to resolve from either a ClinicForm id
