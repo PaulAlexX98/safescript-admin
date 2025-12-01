@@ -6,6 +6,10 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration {
     public function up(): void {
+        if (Schema::hasTable('nhs_applications')) {
+            // Table already exists in this database, so do not try to recreate it.
+            return;
+        }
         Schema::create('nhs_applications', function (Blueprint $t) {
             $t->id();
 
