@@ -35,26 +35,15 @@
     table.items th { background:#e8f3e8; color:#000; text-align:left; font-weight:bold; border:1px solid #d0d0d0; padding:6px 8px; }
     table.items td { border:1px solid #d0d0d0; padding:6px 8px; }
     .right { text-align:right; }
-
-    /* Watermark */
-    .watermark {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%) rotate(-30deg);
-      font-size: 90px;
-      font-weight: 700;
-      text-transform: uppercase;
-      color: #000;
-      opacity: 0.06; /* faint */
-      white-space: nowrap;
-      pointer-events: none;
-      z-index: 0;
-    }
+    
   </style>
 </head>
 
 <body>
+  @php
+    // Normalise meta to an array early so production text/json cast differences don't break lookups
+    $meta = is_array($meta ?? null) ? $meta : (json_decode($meta ?? '[]', true) ?: []);
+  @endphp
   @php
       // Resolve "Date Provided" before rendering the header
       // Will pull from the saved Record of Supply / Clinical Notes response, then session meta, then request meta.
@@ -100,7 +89,9 @@
                   ->where('consultation_session_id', $sess->id)
                   ->where(function ($q) {
                       $q->where('data->__step_slug', 'record-of-supply')
-                        ->orWhere('form_type', 'clinical_notes');
+                        ->orWhere('form_type', 'clinical_notes')
+                        ->orWhere('form_type', 'clinical-notes')
+                        ->orWhere('data', 'like', '%"__step_slug":"record-of-supply"%');
                   })
                   ->latest('id')
                   ->first();
@@ -197,10 +188,18 @@
 
   @php
 
-      // Locate the ConsultationSession if present
+      // Try to resolve the consultation session id from multiple sources
       $sid = data_get($meta ?? [], 'consultation_session_id')
           ?? data_get($meta ?? [], 'session_id')
           ?? data_get($meta ?? [], 'consultation_id');
+
+      // Fallback: some environments only store it under order meta or flat column
+      try {
+          if (!$sid && isset($order)) {
+              $oMeta = is_array($order->meta ?? null) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+              $sid = data_get($oMeta, 'consultation_session_id') ?: ($order->consultation_session_id ?? null);
+          }
+      } catch (\Throwable $e) {}
 
       $sess = null;
       try { if ($sid) { $sess = \App\Models\ConsultationSession::find($sid); } } catch (\Throwable $e) {}
@@ -447,7 +446,15 @@
           if ($rosFormId && $sess) {
               $resp = \App\Models\ConsultationFormResponse::query()
                   ->where('consultation_session_id', $sess->id)
-                  ->where('clinic_form_id', $rosFormId)
+                  ->where(function ($q) use ($rosFormId) {
+                      // primary match by exact form id
+                      $q->where('clinic_form_id', $rosFormId)
+                        // accept either spelling of form_type
+                        ->orWhere('form_type', 'clinical_notes')
+                        ->orWhere('form_type', 'clinical-notes')
+                        // production fallback when JSON column is stored as TEXT
+                        ->orWhere('data', 'like', '%"__step_slug":"record-of-supply"%');
+                  })
                   ->latest('id')
                   ->first();
 
@@ -750,8 +757,34 @@
                   $resp = \App\Models\ConsultationFormResponse::query()
                       ->where('consultation_session_id', $sess->id)
                       ->where(function ($q) use ($rosFormId) {
-                          if ($rosFormId) $q->where('clinic_form_id', $rosFormId);
-                          $q->orWhere('data->__step_slug', 'record-of-supply');
+                          if ($rosFormId) {
+                              $q->where('clinic_form_id', $rosFormId);
+                          }
+                          // Support JSON path and text JSON
+                          $q->orWhere('form_type', 'clinical_notes')
+                            ->orWhere('form_type', 'clinical-notes')
+                            ->orWhere('data->__step_slug', 'record-of-supply')
+                            ->orWhere('data', 'like', '%"__step_slug":"record-of-supply"%');
+                      })
+                      ->latest('id')
+                      ->first();
+              }
+
+              // Production fallback: resolve by order reference if session is unavailable
+              if ((!isset($resp) || !$resp) && isset($ref) && is_string($ref) && $ref !== '') {
+                  $resp = \App\Models\ConsultationFormResponse::query()
+                      ->where(function ($q) use ($ref) {
+                          // If a column exists, this will hit; else try JSON/text meta
+                          if (\Illuminate\Support\Facades\Schema::hasColumn('consultation_form_responses', 'order_reference')) {
+                              $q->where('order_reference', $ref);
+                          }
+                          $q->orWhere('data->order_reference', $ref)
+                            ->orWhere('data', 'like', '%"order_reference":"'.addslashes($ref).'"%');
+                      })
+                      ->where(function ($q) {
+                          $q->where('form_type', 'clinical_notes')
+                            ->orWhere('form_type', 'clinical-notes')
+                            ->orWhere('data', 'like', '%"__step_slug":"record-of-supply"%');
                       })
                       ->latest('id')
                       ->first();
