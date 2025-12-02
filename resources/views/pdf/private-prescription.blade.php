@@ -41,6 +41,13 @@
 <body>
   
   @php
+    // Normalise incoming meta payloads so data_get works reliably in prod
+    $meta = is_array($meta) ? $meta : (json_decode($meta ?? '[]', true) ?: []);
+    if (isset($order) && isset($order->meta) && !is_array($order->meta)) {
+        $order->meta = json_decode($order->meta ?? '[]', true) ?: [];
+    }
+  @endphp
+  @php
       // Resolve "Date Provided" before rendering the header
       // Will pull from the saved Record of Supply / Clinical Notes response, then session meta, then request meta.
       if (!isset($dateProvided) || !is_string($dateProvided)) { $dateProvided = ''; }
@@ -76,8 +83,34 @@
       try {
           $sid = data_get($meta ?? [], 'consultation_session_id')
               ?? data_get($meta ?? [], 'session_id')
-              ?? data_get($meta ?? [], 'consultation_id');
+              ?? data_get($meta ?? [], 'consultation_id')
+              // fallback to order meta if present
+              ?? data_get(($order->meta ?? []), 'consultation_session_id');
+
           $sess = $sid ? \App\Models\ConsultationSession::find($sid) : null;
+
+          // if still not found, try to resolve by order id/reference
+          if (!$sess) {
+              try {
+                  if (!empty($order?->id)) {
+                      $sid2 = \App\Models\ConsultationSession::query()
+                          ->where('order_id', $order->id)
+                          ->value('id');
+                      if ($sid2) $sess = \App\Models\ConsultationSession::find($sid2);
+                  }
+                  if (!$sess && !empty($ref ?? null)) {
+                      $sid3 = \App\Models\ConsultationSession::query()
+                          ->where('reference', $ref)
+                          ->value('id');
+                      if ($sid3) $sess = \App\Models\ConsultationSession::find($sid3);
+                  }
+              } catch (\Throwable $e) {}
+          }
+
+          // normalise session meta shape
+          if ($sess && isset($sess->meta) && !is_array($sess->meta)) {
+              $sess->meta = json_decode($sess->meta ?? '[]', true) ?: [];
+          }
 
           if ($sess) {
               // Prefer a response that posted with __step_slug = record-of-supply, else any clinical_notes latest
@@ -185,10 +218,34 @@
       // Locate the ConsultationSession if present
       $sid = data_get($meta ?? [], 'consultation_session_id')
           ?? data_get($meta ?? [], 'session_id')
-          ?? data_get($meta ?? [], 'consultation_id');
+          ?? data_get($meta ?? [], 'consultation_id')
+          ?? data_get(($order->meta ?? []), 'consultation_session_id');
 
       $sess = null;
       try { if ($sid) { $sess = \App\Models\ConsultationSession::find($sid); } } catch (\Throwable $e) {}
+
+      // Fallback lookups by order
+      if (!$sess) {
+          try {
+              if (!empty($order?->id)) {
+                  $sid2 = \App\Models\ConsultationSession::query()
+                      ->where('order_id', $order->id)
+                      ->value('id');
+                  if ($sid2) $sess = \App\Models\ConsultationSession::find($sid2);
+              }
+              if (!$sess && !empty($ref ?? null)) {
+                  $sid3 = \App\Models\ConsultationSession::query()
+                      ->where('reference', $ref)
+                      ->value('id');
+                  if ($sid3) $sess = \App\Models\ConsultationSession::find($sid3);
+              }
+          } catch (\Throwable $e) {}
+      }
+
+      // Ensure session meta is an array
+      if ($sess && isset($sess->meta) && !is_array($sess->meta)) {
+          $sess->meta = json_decode($sess->meta ?? '[]', true) ?: [];
+      }
 
       // Helper for service/treatment slugs
       $slugify = function ($v) { return $v ? \Illuminate\Support\Str::slug((string) $v) : null; };
