@@ -884,6 +884,8 @@ class ConsultationFormController extends Controller
                                 $appointment->status = 'completed';
                                 $appointment->save();
                                 // If this is a weight management service create a Zoom meeting
+                                // Zoom creation disabled at request — keeping previous logic commented for reference.
+                                /*
                                 try {
                                     $serviceSlug = $session->service_slug
                                         ?: \Illuminate\Support\Str::slug((string) $session->service);
@@ -925,6 +927,7 @@ class ConsultationFormController extends Controller
                                         'error'   => $ze->getMessage(),
                                     ]);
                                 }
+                                */
                             }
                         }
                     } catch (\Throwable $ae) {
