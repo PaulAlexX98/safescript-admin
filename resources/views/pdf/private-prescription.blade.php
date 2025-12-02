@@ -48,6 +48,25 @@
     }
   @endphp
   @php
+      // Robust JSON decode that survives utf8 issues and double-encoded payloads
+      $__safeDecode = function ($raw) {
+          if (is_array($raw)) return $raw;
+          if (!is_string($raw) || $raw === '') return [];
+          $try = json_decode($raw, true);
+          if (is_array($try)) return $try;
+          // try utf8 encode
+          $try = json_decode(@utf8_encode($raw), true);
+          if (is_array($try)) return $try;
+          // handle JSON string that itself contains JSON
+          $inner = json_decode($raw, true);
+          if (is_string($inner)) {
+              $try = json_decode($inner, true);
+              if (is_array($try)) return $try;
+          }
+          return [];
+      };
+  @endphp
+  @php
       // Resolve "Date Provided" before rendering the header
       // Will pull from the saved Record of Supply / Clinical Notes response, then session meta, then request meta.
       if (!isset($dateProvided) || !is_string($dateProvided)) { $dateProvided = ''; }
@@ -125,7 +144,7 @@
 
               if ($resp) {
                   $raw = $resp->data ?? [];
-                  $data = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
+                  $data = $__safeDecode($raw);
                   $answers = (array) data_get($data, 'data', []) + (array) data_get($data, 'answers', []) + (array) $data;
 
                   $dateProvided = $fmtDate($pick($answers, [
@@ -310,8 +329,7 @@
                   ->latest('id')
                   ->first();
 
-              $data = $resp?->data ?? [];
-              $data = is_array($data) ? $data : (json_decode($data ?? '[]', true) ?: []);
+              $data = $__safeDecode($resp?->data ?? []);
 
               $pick = function (array $keys) use ($data) {
                   foreach ($keys as $k) {
@@ -493,8 +511,7 @@
                   ->latest('id')
                   ->first();
 
-              $data = $resp?->data ?? [];
-              $data = is_array($data) ? $data : (json_decode($data ?? '[]', true) ?: []);
+              $data = $__safeDecode($resp?->data ?? []);
               $extraNotes = (string) (
                   data_get($data, 'other_clinical_notes')
                   ?? data_get($data, 'other-clinical-notes')
@@ -600,7 +617,7 @@
                   ->limit(6)
                   ->get();
               foreach ($resps as $r) {
-                  $d = is_array($r->data) ? $r->data : (json_decode($r->data ?? '[]', true) ?: []);
+                  $d = $__safeDecode($r->data ?? []);
                   $val = data_get($d, 'other_clinical_notes');
                   if (is_string($val) && trim($val) !== '') { $extraNotes = (string) $val; break; }
                   if ($adminSite === '') {
@@ -672,6 +689,7 @@
               data_get($meta ?? [], 'expiry_date') ?? data_get($meta ?? [], 'expiry') ?? data_get($meta ?? [], 'exp_date')
               ?? data_get($meta ?? [], 'expiry-date') ?? data_get($meta ?? [], 'exp-date')
           );
+          
       }
       if ($dateProvided === '') {
           $dateProvided = $__fmtDate(
@@ -793,7 +811,7 @@
               $rosForm = \App\Models\ClinicForm::find($rosFormId);
           }
           if (isset($rosForm)) {
-              $schemaRaw = is_array($rosForm->schema) ? $rosForm->schema : (json_decode($rosForm->schema ?? '[]', true) ?: []);
+              $schemaRaw = is_array($rosForm->schema) ? $rosForm->schema : ($__safeDecode($rosForm->schema ?? []) ?: []);
               if (is_array($schemaRaw) && !empty($schemaRaw)) {
                   // Support both block-based and sections[fields] shapes
                   if (array_key_exists('fields', $schemaRaw[0] ?? [])) {
@@ -840,7 +858,7 @@
 
           if (isset($resp) && $resp) {
               $raw = $resp->data ?? [];
-              $decoded = is_array($raw) ? $raw : (json_decode($raw ?? '[]', true) ?: []);
+              $decoded = $__safeDecode($raw);
           }
 
           // Candidate sources in order
@@ -950,7 +968,7 @@
                   $rosForm = \App\Models\ClinicForm::find($rosFormId);
               }
               if (isset($rosForm)) {
-                  $schemaRaw = is_array($rosForm->schema) ? $rosForm->schema : (json_decode($rosForm->schema ?? '[]', true) ?: []);
+                  $schemaRaw = is_array($rosForm->schema) ? $rosForm->schema : ($__safeDecode($rosForm->schema ?? []) ?: []);
                   if (is_array($schemaRaw) && !empty($schemaRaw)) {
                       if (array_key_exists('fields', $schemaRaw[0] ?? [])) {
                           foreach ($schemaRaw as $sec) {
@@ -1032,7 +1050,8 @@
       } catch (\Throwable $e) {
           // As a last resort, if we captured decoded data, try to render it raw
           if (!empty($decoded)) {
-              foreach ((array) ($decoded['data'] ?? $decoded['answers'] ?? $decoded) as $k => $v) {
+              $fallbackMap = (array) ($decoded['data'] ?? $decoded['answers'] ?? $decoded);
+              foreach ($fallbackMap as $k => $v) {
                   if (!is_string($k)) continue;
                   if (str_starts_with($k, '_')) continue;
                   $rosRows[] = [ (string) $__displayLabel(null, (string)$k), $rosHuman($v) ];
