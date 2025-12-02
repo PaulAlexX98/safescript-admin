@@ -1135,6 +1135,52 @@ class PendingOrderResource extends Resource
                                 }
                                 $record->meta = $meta;
                                 $record->save();
+                                
+                                // propagate to all of this patient's orders and pending orders
+                                try {
+                                    $userId = $record->user_id ?? null;
+                                    if ($userId) {
+                                        $flag   = 'scr_verified';   // change to 'id_verified' inside the ID action
+                                        $setYes = ($data['value'] ?? null) === 'yes';
+                                        $ts     = now()->toIso8601String();
+
+                                        // Update all PendingOrders for this user
+                                        \App\Models\PendingOrder::query()
+                                            ->where('user_id', $userId)
+                                            ->chunkById(200, function ($rows) use ($flag, $setYes, $ts) {
+                                                foreach ($rows as $row) {
+                                                    $m = is_array($row->meta) ? $row->meta : (json_decode($row->meta ?? '[]', true) ?: []);
+                                                    data_set($m, $flag, $setYes);
+                                                    if ($setYes) {
+                                                        data_set($m, "{$flag}_at", $ts);
+                                                    } else {
+                                                        data_forget($m, "{$flag}_at");
+                                                    }
+                                                    $row->meta = $m;
+                                                    $row->save();
+                                                }
+                                            });
+
+                                        // Update all Orders for this user
+                                        \App\Models\Order::query()
+                                            ->where('user_id', $userId)
+                                            ->chunkById(200, function ($rows) use ($flag, $setYes, $ts) {
+                                                foreach ($rows as $row) {
+                                                    $m = is_array($row->meta) ? $row->meta : (json_decode($row->meta ?? '[]', true) ?: []);
+                                                    data_set($m, $flag, $setYes);
+                                                    if ($setYes) {
+                                                        data_set($m, "{$flag}_at", $ts);
+                                                    } else {
+                                                        data_forget($m, "{$flag}_at");
+                                                    }
+                                                    $row->meta = $m;
+                                                    $row->save();
+                                                }
+                                            });
+                                    }
+                                } catch (\Throwable $e) {
+                                    // keep UX smooth
+                                }
 
                                 // Mirror to the corresponding Order, if found by reference
                                 try {
@@ -1223,12 +1269,12 @@ class PendingOrderResource extends Resource
                                             return null;
                                         };
 
-                                        // 1 current pending order meta
+                                        // 1 pending order meta
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                         $v = $norm(data_get($meta, 'id_verified'));
                                         if ($v !== null) return $v;
 
-                                        // 2 user meta or flat
+                                        // 2 attached user
                                         try {
                                             $u = $record->user ?? null;
                                             if ($u) {
@@ -1244,7 +1290,29 @@ class PendingOrderResource extends Resource
                                             }
                                         } catch (\Throwable $e) {}
 
-                                        // 3 linked order by reference
+                                        // 3 resolve user by email in meta
+                                        try {
+                                            $email = null;
+                                            foreach (['email','patient.email','customer.email','contact.email'] as $k) {
+                                                $email = $email ?: data_get($meta, $k);
+                                            }
+                                            if (is_string($email) && trim($email) !== '') {
+                                                $guess = \App\Models\User::where('email', trim($email))->first();
+                                                if ($guess) {
+                                                    if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                                        $gm = is_array($guess->meta) ? $guess->meta : (json_decode($guess->meta ?? '[]', true) ?: []);
+                                                        $gv = $norm(data_get($gm, 'id_verified'));
+                                                        if ($gv !== null) return $gv;
+                                                    }
+                                                    if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified')) {
+                                                        $flat = $norm($guess->id_verified ?? null);
+                                                        if ($flat !== null) return $flat;
+                                                    }
+                                                }
+                                            }
+                                        } catch (\Throwable $e) {}
+
+                                        // 4 linked order by reference
                                         try {
                                             $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
                                             if ($ord) {
@@ -1254,60 +1322,153 @@ class PendingOrderResource extends Resource
                                             }
                                         } catch (\Throwable $e) {}
 
-                                        // 4 history by same email across Orders then PendingOrders
-                                        try {
-                                            $email = data_get($meta, 'email')
-                                                ?: data_get($meta, 'customer.email')
-                                                ?: optional($record->user)->email;
-                                            if ($email) {
-                                                $ord2 = \App\Models\Order::where('email', $email)->latest()->first();
-                                                if ($ord2) {
-                                                    $om2 = is_array($ord2->meta) ? $ord2->meta : (json_decode($ord2->meta ?? '[]', true) ?: []);
-                                                    $ov2 = $norm(data_get($om2, 'id_verified'));
-                                                    if ($ov2 !== null) return $ov2;
-                                                }
-                                                $po = \App\Models\PendingOrder::whereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email')) = ?", [$email])
-                                                    ->latest()->first();
-                                                if ($po) {
-                                                    $pm = is_array($po->meta) ? $po->meta : (json_decode($po->meta ?? '[]', true) ?: []);
-                                                    $pv = $norm(data_get($pm, 'id_verified'));
-                                                    if ($pv !== null) return $pv;
-                                                }
-                                            }
-                                        } catch (\Throwable $e) {}
-
                                         return null;
                                     }),
                             ])
                             ->action(function (\App\Models\PendingOrder $record, \Filament\Actions\Action $action, array $data) {
                                 $setYes = ($data['value'] ?? null) === 'yes';
+
+                                // pending order
                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                 data_set($meta, 'id_verified', $setYes);
+                                if ($setYes) {
+                                    data_set($meta, 'id_verified_at', now()->toIso8601String());
+                                } else {
+                                    data_forget($meta, 'id_verified_at');
+                                }
                                 $record->meta = $meta;
                                 $record->save();
+
+                                // propagate to all of this patient's orders and pending orders by user_id
+                                try {
+                                    $userId = $record->user_id ?? null;
+                                    if ($userId) {
+                                        $flag   = 'id_verified';
+                                        $setYes = ($data['value'] ?? null) === 'yes';
+                                        $ts     = now()->toIso8601String();
+
+                                        \App\Models\PendingOrder::query()
+                                            ->where('user_id', $userId)
+                                            ->chunkById(200, function ($rows) use ($flag, $setYes, $ts) {
+                                                foreach ($rows as $row) {
+                                                    $m = is_array($row->meta) ? $row->meta : (json_decode($row->meta ?? '[]', true) ?: []);
+                                                    data_set($m, $flag, $setYes);
+                                                    if ($setYes) data_set($m, "{$flag}_at", $ts); else data_forget($m, "{$flag}_at");
+                                                    $row->meta = $m;
+                                                    $row->save();
+                                                }
+                                            });
+
+                                        \App\Models\Order::query()
+                                            ->where('user_id', $userId)
+                                            ->chunkById(200, function ($rows) use ($flag, $setYes, $ts) {
+                                                foreach ($rows as $row) {
+                                                    $m = is_array($row->meta) ? $row->meta : (json_decode($row->meta ?? '[]', true) ?: []);
+                                                    data_set($m, $flag, $setYes);
+                                                    if ($setYes) data_set($m, "{$flag}_at", $ts); else data_forget($m, "{$flag}_at");
+                                                    $row->meta = $m;
+                                                    $row->save();
+                                                }
+                                            });
+                                    }
+                                } catch (\Throwable $e) {}
+
+                                // also propagate by email for records without user_id
+                                try {
+                                    $metaForEmail = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                    $email = data_get($metaForEmail, 'email')
+                                        ?? data_get($metaForEmail, 'patient.email')
+                                        ?? data_get($metaForEmail, 'customer.email')
+                                        ?? data_get($metaForEmail, 'contact.email')
+                                        ?? optional($record->user)->email;
+
+                                    if (is_string($email) && trim($email) !== '') {
+                                        $email = trim($email);
+                                        $flag   = 'id_verified';
+                                        $setYes = ($data['value'] ?? null) === 'yes';
+                                        $ts     = now()->toIso8601String();
+
+                                        \App\Models\PendingOrder::query()
+                                            ->where(function ($q) use ($email) {
+                                                $q->where('email', $email)
+                                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email')) = ?", [$email])
+                                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.email')) = ?", [$email])
+                                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.email')) = ?", [$email])
+                                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.contact.email')) = ?", [$email]);
+                                            })
+                                            ->chunkById(200, function ($rows) use ($flag, $setYes, $ts) {
+                                                foreach ($rows as $row) {
+                                                    $m = is_array($row->meta) ? $row->meta : (json_decode($row->meta ?? '[]', true) ?: []);
+                                                    data_set($m, $flag, $setYes);
+                                                    if ($setYes) data_set($m, "{$flag}_at", $ts); else data_forget($m, "{$flag}_at");
+                                                    $row->meta = $m;
+                                                    $row->save();
+                                                }
+                                            });
+
+                                        \App\Models\Order::query()
+                                            ->where(function ($q) use ($email) {
+                                                $q->where('email', $email)
+                                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email')) = ?", [$email])
+                                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.email')) = ?", [$email])
+                                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.email')) = ?", [$email])
+                                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.contact.email')) = ?", [$email]);
+                                            })
+                                            ->chunkById(200, function ($rows) use ($flag, $setYes, $ts) {
+                                                foreach ($rows as $row) {
+                                                    $m = is_array($row->meta) ? $row->meta : (json_decode($row->meta ?? '[]', true) ?: []);
+                                                    data_set($m, $flag, $setYes);
+                                                    if ($setYes) data_set($m, "{$flag}_at", $ts); else data_forget($m, "{$flag}_at");
+                                                    $row->meta = $m;
+                                                    $row->save();
+                                                }
+                                            });
+                                    }
+                                } catch (\Throwable $e) {}
+
+                                // order mirror by reference
                                 try {
                                     $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
                                     if ($order) {
                                         $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
                                         data_set($om, 'id_verified', $setYes);
+                                        if ($setYes) {
+                                            data_set($om, 'id_verified_at', now()->toIso8601String());
+                                        } else {
+                                            data_forget($om, 'id_verified_at');
+                                        }
                                         $order->meta = $om;
                                         $order->save();
                                     }
                                 } catch (\Throwable $e) {}
+
+                                // persist on patient profile
                                 try {
                                     $user = $record->user ?? null;
-                                    if ($user && \Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
-                                        $um = is_array($user->meta) ? $user->meta : (json_decode($user->meta ?? '[]', true) ?: []);
-                                        data_set($um, 'id_verified', $setYes);
-                                        $user->meta = $um;
-                                        $user->save();
-                                    } elseif ($user && \Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified')) {
-                                        $user->id_verified = $setYes ? 1 : 0;
-                                        $user->save();
+                                    if ($user) {
+                                        if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                            $um = is_array($user->meta) ? $user->meta : (json_decode($user->meta ?? '[]', true) ?: []);
+                                            data_set($um, 'id_verified', $setYes);
+                                            if ($setYes) {
+                                                data_set($um, 'id_verified_at', now()->toIso8601String());
+                                            } else {
+                                                data_forget($um, 'id_verified_at');
+                                            }
+                                            $user->meta = $um;
+                                            $user->save();
+                                        } elseif (\Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified')) {
+                                            $user->id_verified = $setYes ? 1 : 0;
+                                            if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified_at')) {
+                                                $user->id_verified_at = $setYes ? now() : null;
+                                            }
+                                            $user->save();
+                                        }
                                     }
                                 } catch (\Throwable $e) {}
+
                                 $action->success();
-                                try { $action->getLivewire()->dispatch('$refresh'); $action->getLivewire()->dispatch('refreshTable'); } catch (\Throwable $e) {}
+                                $action->getLivewire()->dispatch('$refresh');
+                                $action->getLivewire()->dispatch('refreshTable');
                             }),
                         Action::make('approve')
                             ->label('Approve')

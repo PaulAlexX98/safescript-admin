@@ -620,14 +620,12 @@
                             $req   = (bool) ($field['required'] ?? false);
                             $ph    = $field['placeholder'] ?? null;
 
-                            // Heuristic: if something was marked as checkbox but clearly looks like free text, treat as text input
+                            // Normalise checkbox safely without coercion
                             if ($type === 'checkbox') {
+                                // Determine if this is a multi-choice checkbox group or a single tick
                                 $hasOptions = isset($field['options']) && is_array($field['options']) && count($field['options']) > 0;
-                                $labelText  = (string) ($label ?? '');
-                                $looksLikeBoolean = (bool) preg_match('/\b(confirm|agree|consent|accept|acknowledge|declaration|i\s+confirm|i\s+agree)\b/i', $labelText);
-                                if (! $hasOptions && ! $looksLikeBoolean) {
-                                    $type = 'text_input';
-                                }
+                                // No type change here: when schema says checkbox we always render a checkbox.
+                                // Rendering logic later will handle single vs multi appropriately.
                             }
 
                             $valRaw = $answerFor($name, $label);
