@@ -44,14 +44,21 @@
     // Normalise incoming meta payloads so data_get works reliably in prod
     $meta = is_array($meta) ? $meta : (json_decode($meta ?? '[]', true) ?: []);
     if (isset($order) && isset($order->meta) && !is_array($order->meta)) {
-        $order->meta = json_decode($order->meta ?? '[]', true) ?: [];
+        $order->meta = $__safeDecode($order->meta ?? []);
     }
   @endphp
   @php
-      // Robust JSON decode that survives utf8 issues and double-encoded payloads
+      // Robust JSON decode that survives utf8 issues, objects and double-encoded payloads
       $__safeDecode = function ($raw) {
           if (is_array($raw)) return $raw;
+          if (is_object($raw)) {
+              // cast stdClass / nested objects to array safely
+              $asArray = json_decode(json_encode($raw), true);
+              if (is_array($asArray)) return $asArray;
+              return (array) $raw;
+          }
           if (!is_string($raw) || $raw === '') return [];
+          // straight decode
           $try = json_decode($raw, true);
           if (is_array($try)) return $try;
           // try utf8 encode
@@ -128,7 +135,7 @@
 
           // normalise session meta shape
           if ($sess && isset($sess->meta) && !is_array($sess->meta)) {
-              $sess->meta = json_decode($sess->meta ?? '[]', true) ?: [];
+              $sess->meta = $__safeDecode($sess->meta ?? []);
           }
 
           if ($sess) {
@@ -263,7 +270,7 @@
 
       // Ensure session meta is an array
       if ($sess && isset($sess->meta) && !is_array($sess->meta)) {
-          $sess->meta = json_decode($sess->meta ?? '[]', true) ?: [];
+          $sess->meta = $__safeDecode($sess->meta ?? []);
       }
 
       // Helper for service/treatment slugs
@@ -562,7 +569,7 @@
       // If still empty, try session meta directly
       if (($extraNotes === null || $extraNotes === '') && isset($sess) && isset($sess->meta)) {
           try {
-              $smeta = is_array($sess->meta) ? $sess->meta : (json_decode($sess->meta ?? '[]', true) ?: []);
+              $smeta = is_array($sess->meta) ? $sess->meta : ($__safeDecode($sess->meta ?? []) ?: []);
               $val = data_get($smeta, 'other_clinical_notes')
                   ?? data_get($smeta, 'other-clinical-notes')
                   ?? data_get($smeta, 'other clinical notes')
