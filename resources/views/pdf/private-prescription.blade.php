@@ -495,33 +495,45 @@
 
               $data = $resp?->data ?? [];
               $data = is_array($data) ? $data : (json_decode($data ?? '[]', true) ?: []);
-              $extraNotes = (string) ($data['other_clinical_notes'] ?? '');
+              $extraNotes = (string) (
+                  data_get($data, 'other_clinical_notes')
+                  ?? data_get($data, 'other-clinical-notes')
+                  ?? data_get($data, 'other clinical notes')
+                  ?? data_get($data, 'clinical_notes')
+                  ?? data_get($data, 'ros.other_clinical_notes')
+                  ?? ''
+              );
 
               // pull site and route from the same saved data
               if ($adminSite === '') {
                   $adminSite = $__pickFrom($data, [
                       'administration_site','admin_site','site','injection_site','vaccination_site',
+                      'administration-site','admin-site','injection-site','vaccination-site',
                   ]);
               }
               if ($adminRoute === '') {
                   $adminRoute = $__pickFrom($data, [
                       'administration_route','admin_route','route','vaccination_route','injection_route',
+                      'administration-route','admin-route','vaccination-route','injection-route',
                   ]);
               }
               if ($batchNumber === '') {
                   $batchNumber = $__pickFrom($data, [
                       'batch_number','batch','batch_no','batchNo','lot','lot_number','lot_no','lotNo',
+                      'batch-number','batch-no','lot-number','lot-no',
                   ]);
               }
               if ($expiryDate === '') {
                   $expiryDate = $__fmtDate($__pickFrom($data, [
                       'expiry_date','expiry','exp_date','exp','expiryDate','expiry_date_input',
+                      'expiry-date','exp-date',
                   ]));
               }
               // resolve supplied date / date provided from the same saved data
               if ($dateProvided === '') {
                   $dateProvided = $__fmtDate($__pickFrom($data, [
-                      'dateProvided','date provided','date_provided','date-of-provided','date-of-supply','date_of_supply','supply_date','dispense_date','issue_date','administration_date','admin_date','vaccination_date','date'
+                      'dateProvided','date provided','date_provided','date-provided','provided_date',
+                      'date-of-provided','date-of-supply','date_of_supply','supply_date','dispense_date','issue_date','administration_date','admin_date','vaccination_date','date'
                   ]));
                   if ($dateProvided === '') {
                       $dateProvided = $__findDateProvided($data);
@@ -535,27 +547,35 @@
           try {
               $smeta = is_array($sess->meta) ? $sess->meta : (json_decode($sess->meta ?? '[]', true) ?: []);
               $val = data_get($smeta, 'other_clinical_notes')
+                  ?? data_get($smeta, 'other-clinical-notes')
+                  ?? data_get($smeta, 'other clinical notes')
                   ?? data_get($smeta, 'clinical_notes')
                   ?? data_get($smeta, 'ros.other_clinical_notes');
               if (is_string($val) && trim($val) !== '') $extraNotes = (string) $val;
               if ($adminSite === '') {
-                  $v = data_get($smeta, 'administration_site') ?? data_get($smeta, 'admin_site') ?? data_get($smeta, 'site');
+                  $v = data_get($smeta, 'administration_site') ?? data_get($smeta, 'admin_site') ?? data_get($smeta, 'site')
+                      ?? data_get($smeta, 'administration-site') ?? data_get($smeta, 'admin-site');
                   if (is_string($v) && trim($v) !== '') { $adminSite = trim($v); }
               }
               if ($adminRoute === '') {
-                  $v = data_get($smeta, 'administration_route') ?? data_get($smeta, 'admin_route') ?? data_get($smeta, 'route');
+                  $v = data_get($smeta, 'administration_route') ?? data_get($smeta, 'admin_route') ?? data_get($smeta, 'route')
+                      ?? data_get($smeta, 'administration-route') ?? data_get($smeta, 'admin-route');
                   if (is_string($v) && trim($v) !== '') { $adminRoute = trim($v); }
               }
               if ($batchNumber === '') {
-                  $v = data_get($smeta, 'batch_number') ?? data_get($smeta, 'batch') ?? data_get($smeta, 'lot');
+                  $v = data_get($smeta, 'batch_number') ?? data_get($smeta, 'batch') ?? data_get($smeta, 'lot')
+                      ?? data_get($smeta, 'batch-number') ?? data_get($smeta, 'lot-number');
                   if (is_string($v) && trim($v) !== '') { $batchNumber = trim($v); }
               }
               if ($expiryDate === '') {
-                  $v = data_get($smeta, 'expiry_date') ?? data_get($smeta, 'expiry') ?? data_get($smeta, 'exp_date');
+                  $v = data_get($smeta, 'expiry_date') ?? data_get($smeta, 'expiry') ?? data_get($smeta, 'exp_date')
+                      ?? data_get($smeta, 'expiry-date') ?? data_get($smeta, 'exp-date');
                   if ($v !== null && $v !== '') { $expiryDate = $__fmtDate($v); }
               }
               if ($dateProvided === '') {
                   $v = data_get($smeta, 'date_provided')
+                      ?? data_get($smeta, 'date-provided')
+                      ?? data_get($smeta, 'provided_date')
                       ?? data_get($smeta, 'date_of_supply')
                       ?? data_get($smeta, 'date-of-supply')
                       ?? data_get($smeta, 'supply_date')
@@ -584,27 +604,29 @@
                   $val = data_get($d, 'other_clinical_notes');
                   if (is_string($val) && trim($val) !== '') { $extraNotes = (string) $val; break; }
                   if ($adminSite === '') {
-                      $vv = data_get($d, 'administration_site') ?? data_get($d, 'admin_site') ?? data_get($d, 'site');
+                      $vv = data_get($d, 'administration_site') ?? data_get($d, 'admin_site') ?? data_get($d, 'site')
+                          ?? data_get($d, 'administration-site') ?? data_get($d, 'admin-site');
                       $vv = $__prettyAns($vv);
                       if ($vv !== '') { $adminSite = $vv; }
                   }
                   if ($adminRoute === '') {
-                      $vv = data_get($d, 'administration_route') ?? data_get($d, 'admin_route') ?? data_get($d, 'route');
+                      $vv = data_get($d, 'administration_route') ?? data_get($d, 'admin_route') ?? data_get($d, 'route')
+                          ?? data_get($d, 'administration-route') ?? data_get($d, 'admin-route');
                       $vv = $__prettyAns($vv);
                       if ($vv !== '') { $adminRoute = $vv; }
                   }
                   if ($batchNumber === '') {
-                      $vv = $__pickFrom($d, ['batch_number','batch','batch_no','batchNo','lot','lot_number','lot_no','lotNo']);
+                      $vv = $__pickFrom($d, ['batch_number','batch','batch_no','batchNo','lot','lot_number','lot_no','lotNo','batch-number','batch-no','lot-number','lot-no']);
                       if ($vv !== '') { $batchNumber = $vv; }
                   }
                   if ($expiryDate === '') {
-                      $vv = $__pickFrom($d, ['expiry_date','expiry','exp_date','exp','expiryDate','expiry_date_input']);
+                      $vv = $__pickFrom($d, ['expiry_date','expiry','exp_date','exp','expiryDate','expiry_date_input','expiry-date','exp-date']);
                       $vv = $__fmtDate($vv);
                       if ($vv !== '') { $expiryDate = $vv; }
                   }
                   if ($dateProvided === '') {
                       $vv = $__pickFrom($d, [
-                          'date_provided','date-of-supply','date_of_supply','supply_date',
+                          'date_provided','date-provided','provided_date','date-of-supply','date_of_supply','supply_date',
                           'administration_date','admin_date','vaccination_date','date'
                       ]);
                       $vv = $__fmtDate($vv);
@@ -620,26 +642,42 @@
       // Final defensive fallback for notes (order/meta level)
       if ($extraNotes === null || $extraNotes === '') {
           $extraNotes = data_get($meta ?? [], 'other_clinical_notes')
+              ?? data_get($meta ?? [], 'other-clinical-notes')
+              ?? data_get($meta ?? [], 'other clinical notes')
               ?? data_get($meta ?? [], 'clinical_notes')
               ?? data_get($meta ?? [], 'notes')
               ?? data_get($meta ?? [], 'ros.notes')
               ?? '';
       }
       if ($adminSite === '') {
-          $adminSite = (string) (data_get($meta ?? [], 'administration_site') ?? data_get($meta ?? [], 'admin_site') ?? '');
+          $adminSite = (string) (
+              data_get($meta ?? [], 'administration_site') ?? data_get($meta ?? [], 'admin_site') ?? data_get($meta ?? [], 'site')
+              ?? data_get($meta ?? [], 'administration-site') ?? data_get($meta ?? [], 'admin-site') ?? ''
+          );
       }
       if ($adminRoute === '') {
-          $adminRoute = (string) (data_get($meta ?? [], 'administration_route') ?? data_get($meta ?? [], 'admin_route') ?? '');
+          $adminRoute = (string) (
+              data_get($meta ?? [], 'administration_route') ?? data_get($meta ?? [], 'admin_route') ?? data_get($meta ?? [], 'route')
+              ?? data_get($meta ?? [], 'administration-route') ?? data_get($meta ?? [], 'admin-route') ?? ''
+          );
       }
       if ($batchNumber === '') {
-          $batchNumber = (string) (data_get($meta ?? [], 'batch_number') ?? data_get($meta ?? [], 'batch') ?? data_get($meta ?? [], 'lot') ?? '');
+          $batchNumber = (string) (
+              data_get($meta ?? [], 'batch_number') ?? data_get($meta ?? [], 'batch') ?? data_get($meta ?? [], 'lot')
+              ?? data_get($meta ?? [], 'batch-number') ?? data_get($meta ?? [], 'lot-number') ?? ''
+          );
       }
       if ($expiryDate === '') {
-          $expiryDate = $__fmtDate(data_get($meta ?? [], 'expiry_date') ?? data_get($meta ?? [], 'expiry') ?? data_get($meta ?? [], 'exp_date'));
+          $expiryDate = $__fmtDate(
+              data_get($meta ?? [], 'expiry_date') ?? data_get($meta ?? [], 'expiry') ?? data_get($meta ?? [], 'exp_date')
+              ?? data_get($meta ?? [], 'expiry-date') ?? data_get($meta ?? [], 'exp-date')
+          );
       }
       if ($dateProvided === '') {
           $dateProvided = $__fmtDate(
               data_get($meta ?? [], 'date_provided')
+              ?? data_get($meta ?? [], 'date-provided')
+              ?? data_get($meta ?? [], 'provided_date')
               ?? data_get($meta ?? [], 'date_of_supply')
               ?? data_get($meta ?? [], 'date-of-supply')
               ?? data_get($meta ?? [], 'supply_date')
