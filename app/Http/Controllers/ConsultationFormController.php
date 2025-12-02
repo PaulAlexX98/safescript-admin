@@ -301,6 +301,8 @@ class ConsultationFormController extends Controller
                             $r[] = 'required_without:' . $name . '__existing';
                         }
                         $rules[$name] = $r;
+                        // Validate the companion __existing payload as an array of strings if present
+                        $rules[$name . '__existing'] = ['nullable', 'array'];
                         // track file input candidates for existing-path normalisation
                         $__fileFieldNames[] = $name;
                         break;
@@ -329,6 +331,14 @@ class ConsultationFormController extends Controller
             $__fileFieldExisting[$fname] = $arr;
             // Merge back to the request in a canonical array form
             $request->merge([$fname . '__existing' => $arr]);
+        }
+
+        // Strip any non-file payloads for file fields so "file" rule doesn't trip on strings/JSON
+        foreach ($__fileFieldNames as $fname) {
+            if (! $request->hasFile($fname) && $request->has($fname)) {
+                // Remove accidental string/JSON remnants under the file input name
+                $request->request->remove($fname);
+            }
         }
 
         // Run validation for required fields
@@ -481,6 +491,7 @@ class ConsultationFormController extends Controller
                     $submitted[$storeKey] = $existing;
                 }
             }
+            
         }
         // 4aa) Fallback merge for blades that post nested answers[...] keys
         // Build a tolerant map of allowed storage keys so we can accept
