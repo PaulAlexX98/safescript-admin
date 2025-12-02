@@ -12,6 +12,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Filament\Notifications\Notification;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\HtmlString;
@@ -198,6 +199,8 @@ class ConsultationFormController extends Controller
         }
 
         // 3b) Schema-driven validation for required fields
+        $__fileFieldNames = [];
+        $__fileFieldExisting = [];
         $rawSchema = is_array($form->schema) ? $form->schema : (json_decode($form->schema ?? '[]', true) ?: []);
         $rules = [];
         foreach ($rawSchema as $idx => $fld) {
@@ -262,32 +265,44 @@ class ConsultationFormController extends Controller
                         $rules[$name] = 'required|date';
                         break;
                     case 'select':
-                      // support single and multiple selections
-                      $options = (array)($cfg['options'] ?? ($fld['options'] ?? []));
-                      $values = [];
-                      foreach ($options as $ov => $ol) {
-                          $values[] = is_array($ol) ? ($ol['value'] ?? $ov) : $ov;
-                      }
-                      $isMultiple = (bool)($cfg['multiple'] ?? ($fld['multiple'] ?? false));
+                        // support single and multiple selections
+                        $options = (array)($cfg['options'] ?? ($fld['options'] ?? []));
+                        $values = [];
+                        foreach ($options as $ov => $ol) {
+                            $values[] = is_array($ol) ? ($ol['value'] ?? $ov) : $ov;
+                        }
+                        $isMultiple = (bool)($cfg['multiple'] ?? ($fld['multiple'] ?? false));
 
-                      $notAllowed = [];
-                      if (in_array('0', $values, true)) { $notAllowed[] = '0'; }
-                      if (in_array('',  $values, true)) { $notAllowed[] = ''; }
+                        $notAllowed = [];
+                        if (in_array('0', $values, true)) { $notAllowed[] = '0'; }
+                        if (in_array('',  $values, true)) { $notAllowed[] = ''; }
 
-                      if ($isMultiple) {
-                          $rules[$name] = ['required', 'array'];
-                          if (!empty($values)) {
-                              $rules[$name . '.*'] = array_filter([Rule::in($values), $notAllowed ? Rule::notIn($notAllowed) : null]);
-                          }
-                      } else {
-                          $rules[$name] = empty($values)
-                              ? ['required']
-                              : array_filter(['required', Rule::in($values), $notAllowed ? Rule::notIn($notAllowed) : null]);
-                      }
-                      break;
+                        if ($isMultiple) {
+                            $rules[$name] = ['required', 'array'];
+                            if (!empty($values)) {
+                                $rules[$name . '.*'] = array_filter([Rule::in($values), $notAllowed ? Rule::notIn($notAllowed) : null]);
+                            }
+                        } else {
+                            $rules[$name] = empty($values)
+                                ? ['required']
+                                : array_filter(['required', Rule::in($values), $notAllowed ? Rule::notIn($notAllowed) : null]);
+                        }
+                        break;
                     case 'file_upload':
                     case 'image':
-                        $rules[$name] = 'required';
+                        // Build robust rules so existing paths satisfy required
+                        $accept = strtolower((string)($cfg['accept'] ?? ''));
+                        $r = ['nullable', 'sometimes', 'file'];
+                        if ($type === 'image' || str_contains($accept, 'image')) {
+                            $r[] = 'image';
+                        }
+                        // apply "required_without" only when schema marks the field required
+                        if (!empty($cfg['required'])) {
+                            $r[] = 'required_without:' . $name . '__existing';
+                        }
+                        $rules[$name] = $r;
+                        // track file input candidates for existing-path normalisation
+                        $__fileFieldNames[] = $name;
                         break;
                     case 'signature':
                         $rules[$name] = 'required';
@@ -299,6 +314,21 @@ class ConsultationFormController extends Controller
                         break;
                 }
             }
+        }
+
+        // Normalise __existing for all file inputs so required_without sees an array
+        foreach ($__fileFieldNames as $fname) {
+            $raw = $request->input($fname . '__existing');
+            $arr = [];
+            if (is_array($raw)) {
+                $arr = array_values(array_filter($raw));
+            } elseif (is_string($raw) && $raw !== '') {
+                $dec = json_decode($raw, true);
+                $arr = is_array($dec) ? array_values(array_filter($dec)) : [];
+            }
+            $__fileFieldExisting[$fname] = $arr;
+            // Merge back to the request in a canonical array form
+            $request->merge([$fname . '__existing' => $arr]);
         }
 
         // Run validation for required fields
@@ -412,7 +442,7 @@ class ConsultationFormController extends Controller
                         ];
                     }
                 } else {
-                    if ($file) {
+                    if ($file instanceof UploadedFile) {
                         $p = $file->store('consultations', ['disk' => 'public']);
                         $objects[] = [
                             'name' => $file->getClientOriginalName(),
@@ -430,6 +460,25 @@ class ConsultationFormController extends Controller
                         $submitted[$f['store']] = $objects;
                         break;
                     }
+                }
+            }
+        }
+        // For any file fields with no upload this request, carry forward existing paths posted by the client preview
+        if (!empty($__fileFieldExisting)) {
+            foreach ($fields as $f) {
+                $storeKey = $f['store'] ?? null;
+                if (!$storeKey) continue;
+                // find any matching candidate that has an __existing payload
+                $existing = [];
+                foreach ((array)($f['candidates'] ?? []) as $cand) {
+                    if (!empty($__fileFieldExisting[$cand])) {
+                        $existing = $__fileFieldExisting[$cand];
+                        break;
+                    }
+                }
+                if (!empty($existing) && !array_key_exists($storeKey, $submitted)) {
+                    // Keep whatever shape the client sent the paths in; viewers handle strings or objects
+                    $submitted[$storeKey] = $existing;
                 }
             }
         }
