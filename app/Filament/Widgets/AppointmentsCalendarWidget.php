@@ -33,7 +33,7 @@ class AppointmentsCalendarWidget extends CalendarWidget
             $query = [
                 'filters' => [
                     'day'    => ['value' => $date],
-                    'status' => ['values' => ['approved']], // only approved
+                    'status' => ['values' => ['completed']], // only approved
                 ],
                 'sort' => 'start_at:asc',
             ];
@@ -48,7 +48,7 @@ class AppointmentsCalendarWidget extends CalendarWidget
                     ->selectRaw('DATE(start_at) as d, COUNT(*) as c')
                     ->whereBetween('start_at', [$start, $end])
                     ->when(Schema::hasColumn('appointments', 'status'), function ($q) {
-                        $q->whereIn('status', ['approved', 'booked', 'confirmed']);
+                        $q->whereIn('status', ['completed', 'booked', 'confirmed']);
                     })
                     ->groupBy('d')
                     ->get();
@@ -70,7 +70,7 @@ class AppointmentsCalendarWidget extends CalendarWidget
                 $rows = DB::table('appointments')
                     ->whereBetween('start_at', [$start, $end])
                     ->when(in_array('status', $cols), function ($q) {
-                        $q->whereIn('status', ['approved', 'booked', 'confirmed']);
+                        $q->whereIn('status', ['completed', 'booked', 'confirmed']);
                     })
                     ->orderBy('start_at')
                     ->get([
@@ -110,7 +110,7 @@ class AppointmentsCalendarWidget extends CalendarWidget
                     ->selectRaw('DATE(appointment_at) as d, COUNT(*) as c')
                     ->whereNotNull('appointment_at')
                     ->whereBetween('appointment_at', [$start, $end])
-                    ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->whereIn('booking_status', ['approved', 'confirmed']))
+                    ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->whereIn('booking_status', ['completed', 'confirmed']))
                     ->groupBy('d')
                     ->get();
 
@@ -127,7 +127,7 @@ class AppointmentsCalendarWidget extends CalendarWidget
                 $rows = DB::table('orders')
                     ->whereNotNull('appointment_at')
                     ->whereBetween('appointment_at', [$start, $end])
-                    ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->whereIn('booking_status', ['approved', 'confirmed']))
+                    ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->whereIn('booking_status', ['completed', 'confirmed']))
                     ->orderBy('appointment_at')
                     ->get([
                         'appointment_at',
@@ -175,7 +175,7 @@ class AppointmentsCalendarWidget extends CalendarWidget
             'dateClick' => $this->js(<<<'JS'
                 (info) => {
                     const d = info.dateStr;
-                    const url = `/admin/appointments?filters[day][value]=${encodeURIComponent(d)}&filters[status][values][0]=approved&sort=start_at:asc`;
+                    const url = `/admin/appointments?filters[day][value]=${encodeURIComponent(d)}&filters[status][values][0]=completed&sort=start_at:asc`;
                     window.location.href = url;
                 }
             JS),
