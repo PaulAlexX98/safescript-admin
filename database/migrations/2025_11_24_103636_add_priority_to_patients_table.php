@@ -11,8 +11,8 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('patients', function (Illuminate\Database\Schema\Blueprint $table) {
-            $table->string('priority', 10)->default('green')->after('email');
+        Schema::table('patients', function (Blueprint $table) {
+            $table->string('priority', 10)->default('green');
         });
     }
 
@@ -21,8 +21,10 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('patients', function (Blueprint $table) {
-            //
-        });
+        if (Schema::hasColumn('patients', 'priority')) {
+            Schema::table('patients', function (Blueprint $table) {
+                $table->dropColumn('priority');
+            });
+        }
     }
 };
