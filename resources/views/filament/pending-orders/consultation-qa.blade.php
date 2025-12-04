@@ -922,66 +922,87 @@
 
         if (is_array($val)) {
             // file-like (evidence uploads etc)
-            if (
-                isset($val[0]) &&
-                is_array($val[0]) &&
-                (isset($val[0]['name']) || isset($val[0]['url']) || isset($val[0]['path']))
-            ) {
-                $first = $val[0];
+            // Be tolerant: support a list of files OR a single assoc object with url/path
+            $fileCandidates = [];
 
-                $name = (string) ($first['name'] ?? basename((string) ($first['url'] ?? $first['path'] ?? 'file')));
+            if (isset($val[0]) && is_array($val[0]) && (isset($val[0]['name']) || isset($val[0]['url']) || isset($val[0]['path']))) {
+                $fileCandidates = $val;
+            } elseif (\Illuminate\Support\Arr::isAssoc($val) && (isset($val['name']) || isset($val['url']) || isset($val['path']))) {
+                $fileCandidates = [$val];
+            }
 
-                // raw path from API (may be filesystem or relative OR absolute local filesystem path)
-                $hrefRaw = (string) ($first['url'] ?? $first['path'] ?? '');
+            if (!empty($fileCandidates)) {
+                $parts = [];
 
-                // browser-facing URL guess (eg http://api.test/storage/...)
-                $href = $makePublicUrl($hrefRaw);
+                foreach ($fileCandidates as $f) {
+                    if (!is_array($f)) continue;
 
-                $type = (string) ($first['type'] ?? '');
-                $isImage = $type !== '' && str_starts_with(strtolower($type), 'image/');
+                    $name = (string) ($f['name'] ?? basename((string) ($f['url'] ?? $f['path'] ?? 'file')));
+                    $hrefRaw = (string) ($f['url'] ?? $f['path'] ?? '');
 
-                // if backend didn't send type, infer from filename
-                if (!$isImage && preg_match('/\\.(png|jpe?g|webp|gif)$/i', $name)) {
-                    $isImage = true;
-                }
+                    // Build a browser-facing URL
+                    $href = '';
+                    if ($hrefRaw !== '') {
+                        // If already absolute URL, use as-is, otherwise convert relative "intakes/raf/..." to API /storage path
+                        if (preg_match('/^https?:\\/\\//i', $hrefRaw)) {
+                            $href = $hrefRaw;
+                        } else {
+                            $href = $makePublicUrl($hrefRaw);
+                        }
+                    }
 
-                // choose best thumbnail source
-                // 1. try to embed local file as base64 (works even if Apache blocks symlinks and 403s)
-                // 2. fallback to public URL
-                $thumbSrc = '';
-                if ($isImage) {
-                    $thumbSrc = $makePreviewDataUrl($hrefRaw);
-                    if ($thumbSrc === '' && $href !== '') {
-                        $thumbSrc = $href;
+                    $type = strtolower((string) ($f['type'] ?? ''));
+                    $isImage = ($type !== '' && str_starts_with($type, 'image/'));
+
+                    // If backend didn't send type, infer from filename or href
+                    if (!$isImage) {
+                        $nameExt = strtolower(pathinfo($name, PATHINFO_EXTENSION) ?: '');
+                        $hrefExt = strtolower(pathinfo(parse_url($hrefRaw, PHP_URL_PATH) ?: '', PATHINFO_EXTENSION) ?: '');
+                        $anyExt = $nameExt ?: $hrefExt;
+                        if (in_array($anyExt, ['png','jpg','jpeg','webp','gif'], true)) {
+                            $isImage = true;
+                        }
+                    }
+
+                    // Choose best thumbnail source
+                    $thumbSrc = '';
+                    if ($isImage) {
+                        // Only attempt inline preview for real local files, never for URLs
+                        if ($hrefRaw !== '' && str_starts_with($hrefRaw, '/Applications/')) {
+                            $thumbSrc = $makePreviewDataUrl($hrefRaw);
+                        }
+                        if ($thumbSrc === '' && $href !== '') {
+                            $thumbSrc = $href;
+                        }
+                    }
+
+                    if ($isImage && $thumbSrc !== '') {
+                        // clickable image + filename
+                        if ($href !== '') {
+                            $parts[] =
+                                '<a href="' . e($href) . '" class="group inline-flex items-start gap-3" target="_blank" rel="noopener noreferrer">'
+                                . '<img src="' . e($thumbSrc) . '" class="h-20 w-20 rounded border border-gray-700 object-cover bg-black/20 group-hover:opacity-90" alt="' . e($name) . ' thumbnail" />'
+                                . '<span class="text-blue-400 underline break-all text-xs mt-1 group-hover:text-blue-300">' . e($name) . '</span>'
+                                . '</a>';
+                        } else {
+                            $parts[] =
+                                '<div class="inline-flex items-start gap-3">'
+                                . '<img src="' . e($thumbSrc) . '" class="h-20 w-20 rounded border border-gray-700 object-cover bg-black/20" alt="' . e($name) . ' thumbnail" />'
+                                . '<span class="text-xs text-gray-300 break-all mt-1">' . e($name) . '</span>'
+                                . '</div>';
+                        }
+                    } else {
+                        // Not an image, but if we have a usable href, render a link; otherwise show name
+                        if ($href !== '') {
+                            $parts[] = '<a href="' . e($href) . '" class="text-blue-400 underline break-all" target="_blank" rel="noopener noreferrer">' . e($name) . '</a>';
+                        } else {
+                            $parts[] = e($name);
+                        }
                     }
                 }
 
-                // If we have an image, try to render a thumbnail block
-                if ($isImage && $thumbSrc !== '') {
-                    // If we also have an href we can open in a new tab, wrap it in <a>
-                    if ($href !== '') {
-                        return
-                            '<a href="' . e($href) . '" class="group inline-flex items-start gap-3" target="_blank" rel="noopener noreferrer">'
-                            . '<img src="' . e($thumbSrc) . '" class="h-20 w-20 rounded border border-gray-700 object-cover bg-black/20 group-hover:opacity-90" alt="' . e($name) . ' thumbnail" />'
-                            . '<span class="text-blue-400 underline break-all text-xs mt-1 group-hover:text-blue-300">' . e($name) . '</span>'
-                            . '</a>';
-                    }
-
-                    // no href (403 etc) so just show inline preview + filename
-                    return
-                        '<div class="inline-flex items-start gap-3">'
-                        . '<img src="' . e($thumbSrc) . '" class="h-20 w-20 rounded border border-gray-700 object-cover bg-black/20" alt="' . e($name) . ' thumbnail" />'
-                        . '<span class="text-xs text-gray-300 break-all mt-1">' . e($name) . '</span>'
-                        . '</div>';
-                }
-
-                // Not an image, but we still have a link (eg PDF)
-                if ($href !== '') {
-                    return '<a href="' . e($href) . '" class="text-blue-400 underline break-all" target="_blank" rel="noopener noreferrer">' . e($name) . '</a>';
-                }
-
-                // fallback to plain name if no URL/path
-                return e($name);
+                // Join multiple files nicely
+                return implode('&lt;br&gt;', $parts);
             }
 
             // multi-select etc
@@ -1007,6 +1028,9 @@
             if ($looksLikeEvidencePath && $looksLikeImage) {
                 $name = basename($s);
                 $href = $makePublicUrl($s);
+                if (preg_match('/^https?:\\/\\//i', $s)) {
+                    $href = $s;
+                }
 
                 // fallback thumbnail source is just the same href
                 $thumbSrc = $href;
