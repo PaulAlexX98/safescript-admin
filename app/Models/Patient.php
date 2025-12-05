@@ -3,11 +3,11 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use App\Models\User;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Patient extends Model
 {
-    protected $table = 'users'; // map Patient model to users table
-
     protected $fillable = [
     'user_id','internal_id','first_name','last_name','email','phone',
     'dob','gender','street','city','postcode','country','is_active',
@@ -39,6 +39,10 @@ class Patient extends Model
     public function orders()
     {
         return $this->hasMany(Order::class, 'user_id');
+    }
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'user_id');
     }
 
     /**

@@ -490,6 +490,9 @@ class PendingOrderResource extends Resource
                     ->button()
                     ->color('primary')
                     ->modalHeading(function ($record) {
+                        if (! $record) {
+                            return 'Order Details';
+                        }
                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                         $name = data_get($meta, 'service')
                             ?: data_get($meta, 'serviceName')
@@ -499,8 +502,8 @@ class PendingOrderResource extends Resource
                         return $name ?: 'Order Details';
                     })
                     ->modalDescription(function ($record) {
-                        $ref = e($record->reference ?? '—');
-                        return new HtmlString('<span class="text-xs text-gray-400">Order Ref: ' . $ref . '</span>');
+                        $ref = e(optional($record)->reference ?? '—');
+                        return new \Illuminate\Support\HtmlString('<span class="text-xs text-gray-400">Order Ref: ' . $ref . '</span>');
                     })
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('Close')
@@ -516,6 +519,7 @@ class PendingOrderResource extends Resource
                                         TextEntry::make('patient_first_name')
                                             ->label('First Name')
                                             ->getStateUsing(function ($record) {
+                                                if (! $record) { return null; }
                                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                                 foreach (['firstName', 'first_name', 'patient.firstName', 'patient.first_name'] as $key) {
                                                     $v = data_get($meta, $key);
@@ -526,6 +530,7 @@ class PendingOrderResource extends Resource
                                         TextEntry::make('patient_last_name')
                                             ->label('Last Name')
                                             ->getStateUsing(function ($record) {
+                                                if (! $record) { return null; }
                                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                                 foreach (['lastName', 'last_name', 'patient.lastName', 'patient.last_name'] as $key) {
                                                     $v = data_get($meta, $key);
@@ -536,6 +541,7 @@ class PendingOrderResource extends Resource
                                         TextEntry::make('dob')
                                             ->label('DOB')
                                             ->getStateUsing(function ($record) {
+                                                if (! $record) { return null; }
                                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                                 foreach (['dob','dateOfBirth','patient.dob','patient.dateOfBirth'] as $k) {
                                                     $v = data_get($meta, $k);
@@ -550,18 +556,166 @@ class PendingOrderResource extends Resource
                                         TextEntry::make('meta.email')
                                             ->label('Email')
                                             ->getStateUsing(function ($record) {
+                                                if (! $record) { return null; }
                                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                                 return data_get($meta, 'email') ?: ($record->user->email ?? null);
                                             }),
                                         TextEntry::make('meta.phone')
                                             ->label('Phone')
                                             ->getStateUsing(function ($record) {
+                                                if (! $record) { return null; }
                                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                                 return data_get($meta, 'phone') ?: ($record->user->phone ?? null);
                                             }),
                                         TextEntry::make('created_at')
                                             ->label('Created')
                                             ->dateTime('d-m-Y H:i'),
+                                        TextEntry::make('patient_address_block')
+                                            ->label('Home address')
+                                            ->columnSpan(1)
+                                            ->getStateUsing(function ($record) {
+                                                if (! $record) { return null; }
+                                                $pick = function (array $arr, array $keys) {
+                                                    foreach ($keys as $k) {
+                                                        $v = data_get($arr, $k);
+                                                        if (is_string($v) && trim($v) !== '') return trim($v);
+                                                    }
+                                                    return null;
+                                                };
+
+                                                // 1) Meta-first lookup across common shapes
+                                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                                $a1 = $pick($meta, [
+                                                    'address1','address_1','patient.address1','patient.address_1',
+                                                    'billingAddress.address1','billingAddress.address_1','shippingAddress.address1','shippingAddress.address_1',
+                                                    'address.line1','address.line_1','line1','line_1',
+                                                ]);
+                                                $a2 = $pick($meta, [
+                                                    'address2','address_2','patient.address2','patient.address_2',
+                                                    'billingAddress.address2','billingAddress.address_2','shippingAddress.address2','shippingAddress.address_2',
+                                                    'address.line2','address.line_2','line2','line_2',
+                                                ]);
+                                                $city = $pick($meta, [
+                                                    'city','town','patient.city','patient.town',
+                                                    'billingAddress.city','shippingAddress.city',
+                                                    'address.city',
+                                                ]);
+                                                $pc = $pick($meta, [
+                                                    'postcode','post_code','zip','zip_code','patient.postcode','patient.post_code',
+                                                    'billingAddress.postcode','shippingAddress.postcode',
+                                                    'address.postcode',
+                                                ]);
+                                                $country = $pick($meta, [
+                                                    'country','patient.country','billingAddress.country','shippingAddress.country','address.country',
+                                                ]);
+
+                                                // 2) If mostly empty, fall back to related user's address fields if present
+                                                if (!$a1 && optional($record->user)) {
+                                                    $u = $record->user;
+                                                    $a1 = $a1 ?: ($u->address1 ?? $u->address_1 ?? null);
+                                                    $a2 = $a2 ?: ($u->address2 ?? $u->address_2 ?? null);
+                                                    $city = $city ?: ($u->city ?? $u->town ?? null);
+                                                    $pc = $pc ?: ($u->postcode ?? $u->post_code ?? $u->zip ?? null);
+                                                    $country = $country ?: ($u->country ?? null);
+                                                }
+
+                                                $lines = array_values(array_filter([
+                                                    $a1,
+                                                    $a2,
+                                                    trim(trim((string)$city) . ' ' . trim((string)$pc)) ?: null,
+                                                    $country,
+                                                ], fn($v) => is_string($v) && $v !== ''));
+
+                                                if (empty($lines)) {
+                                                    return '—';
+                                                }
+
+                                                return implode("\n", $lines);
+                                            })
+                                            ->formatStateUsing(fn ($state) => $state ? nl2br(e($state)) : '—')
+                                            ->html(),
+                                        TextEntry::make('patient_shipping_address_block')
+                                            ->label('Shipping address')
+                                            ->columnSpan(1)
+                                            ->getStateUsing(function ($record) {
+                                                if (! $record) { return null; }
+                                                $pick = function (array $arr, array $keys) {
+                                                    foreach ($keys as $k) {
+                                                        $v = data_get($arr, $k);
+                                                        if (is_string($v) && trim($v) !== '') return trim($v);
+                                                    }
+                                                    return null;
+                                                };
+
+                                                // Prefer explicit shipping or delivery shapes
+                                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                                $a1 = $pick($meta, [
+                                                    'shippingAddress.address1','shippingAddress.address_1','deliveryAddress.address1','deliveryAddress.address_1',
+                                                    'shipping.address1','shipping.address_1','delivery.address1','delivery.address_1',
+                                                    'address.shipping.line1','address.delivery.line1','shipping.line1','delivery.line1',
+                                                ]);
+                                                $a2 = $pick($meta, [
+                                                    'shippingAddress.address2','shippingAddress.address_2','deliveryAddress.address2','deliveryAddress.address_2',
+                                                    'shipping.address2','shipping.address_2','delivery.address2','delivery.address_2',
+                                                    'address.shipping.line2','address.delivery.line2','shipping.line2','delivery.line2',
+                                                ]);
+                                                $city = $pick($meta, [
+                                                    'shippingAddress.city','deliveryAddress.city','shipping.city','delivery.city',
+                                                    'address.shipping.city','address.delivery.city',
+                                                ]);
+                                                $pc = $pick($meta, [
+                                                    'shippingAddress.postcode','shippingAddress.post_code','deliveryAddress.postcode','deliveryAddress.post_code',
+                                                    'shipping.postcode','delivery.postcode','shipping.zip','delivery.zip',
+                                                    'address.shipping.postcode','address.delivery.postcode',
+                                                ]);
+                                                $country = $pick($meta, [
+                                                    'shippingAddress.country','deliveryAddress.country','shipping.country','delivery.country',
+                                                    'address.shipping.country','address.delivery.country',
+                                                ]);
+
+                                                // If not present, fall back to generic meta keys or user shipping fields
+                                                if (!$a1) {
+                                                    $a1 = $a1 ?: $pick($meta, ['address.shipping.line1','address.line1','line1','address1','address_1']);
+                                                    $a2 = $a2 ?: $pick($meta, ['address.shipping.line2','address.line2','line2','address2','address_2']);
+                                                    $city = $city ?: $pick($meta, ['address.shipping.city','address.city','city','town']);
+                                                    $pc = $pc ?: $pick($meta, ['address.shipping.postcode','address.postcode','postcode','post_code','zip','zip_code']);
+                                                    $country = $country ?: $pick($meta, ['address.shipping.country','address.country','country']);
+                                                }
+
+                                                // User fallbacks if available
+                                                if (!$a1 && optional($record->user)) {
+                                                    $u = $record->user;
+                                                    // try common custom columns for shipping
+                                                    $a1 = $a1 ?: ($u->shipping_address1 ?? $u->shipping_address_1 ?? null);
+                                                    $a2 = $a2 ?: ($u->shipping_address2 ?? $u->shipping_address_2 ?? null);
+                                                    $city = $city ?: ($u->shipping_city ?? null);
+                                                    $pc = $pc ?: ($u->shipping_postcode ?? $u->shipping_post_code ?? $u->shipping_zip ?? null);
+                                                    $country = $country ?: ($u->shipping_country ?? null);
+                                                    // fall back to home if shipping not set
+                                                    if (!$a1) {
+                                                        $a1 = $u->address1 ?? $u->address_1 ?? null;
+                                                        $a2 = $a2 ?: ($u->address2 ?? $u->address_2 ?? null);
+                                                        $city = $city ?: ($u->city ?? $u->town ?? null);
+                                                        $pc = $pc ?: ($u->postcode ?? $u->post_code ?? $u->zip ?? null);
+                                                        $country = $country ?: ($u->country ?? null);
+                                                    }
+                                                }
+
+                                                $lines = array_values(array_filter([
+                                                    $a1,
+                                                    $a2,
+                                                    trim(trim((string)$city) . ' ' . trim((string)$pc)) ?: null,
+                                                    $country,
+                                                ], fn($v) => is_string($v) && $v !== ''));
+
+                                                if (empty($lines)) {
+                                                    return '—';
+                                                }
+
+                                                return implode("\n", $lines);
+                                            })
+                                            ->formatStateUsing(fn ($state) => $state ? nl2br(e($state)) : '—')
+                                            ->html(),
                                     ]),
                                 ]),
                             // RIGHT COLUMN: stack Payment Details over Appointment Date & Time
@@ -587,6 +741,118 @@ class PendingOrderResource extends Resource
                                                     };
                                                 }),
                                         ]),
+                                    Section::make('Verification')
+                                        ->schema([
+                                            \Filament\Schemas\Components\Grid::make(2)->schema([
+                                                TextEntry::make('scr_verified_badge')
+                                                    ->label('SCR')
+                                                    ->getStateUsing(function ($record) {
+                                                        if (! $record) { return '—'; }
+
+                                                        $norm = function ($v) {
+                                                            if (in_array($v, [true, 1, '1', 'true', 'yes', 'YES', 'Yes'], true)) return 'Yes';
+                                                            if (in_array($v, [false, 0, '0', 'false', 'no', 'NO', 'No'], true)) return 'No';
+                                                            return null;
+                                                        };
+
+                                                        // 1) Pending order meta
+                                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                                        $v = $norm(data_get($meta, 'scr_verified'));
+                                                        if ($v !== null) return $v;
+
+                                                        // 2) User meta / column
+                                                        try {
+                                                            $u = $record->user ?? null;
+                                                            if ($u) {
+                                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                                                    $um = is_array($u->meta) ? $u->meta : (json_decode($u->meta ?? '[]', true) ?: []);
+                                                                    $uv = $norm(data_get($um, 'scr_verified'));
+                                                                    if ($uv !== null) return $uv;
+                                                                }
+                                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'scr_verified')) {
+                                                                    $flat = $norm($u->scr_verified ?? null);
+                                                                    if ($flat !== null) return $flat;
+                                                                }
+                                                            }
+                                                        } catch (\Throwable $e) {}
+
+                                                        // 3) Linked order by reference
+                                                        try {
+                                                            $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                                            if ($ord) {
+                                                                $om = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
+                                                                $ov = $norm(data_get($om, 'scr_verified'));
+                                                                if ($ov !== null) return $ov;
+                                                            }
+                                                        } catch (\Throwable $e) {}
+
+                                                        return '—';
+                                                    })
+                                                    ->badge()
+                                                    ->color(function ($state) {
+                                                        $s = strtolower((string) $state);
+                                                        return match ($s) {
+                                                            'yes' => 'success',
+                                                            'no'  => 'danger',
+                                                            default => 'gray',
+                                                        };
+                                                    }),
+
+                                                TextEntry::make('id_verified_badge')
+                                                    ->label('ID')
+                                                    ->getStateUsing(function ($record) {
+                                                        if (! $record) { return '—'; }
+
+                                                        $norm = function ($v) {
+                                                            if (in_array($v, [true, 1, '1', 'true', 'yes', 'YES', 'Yes'], true)) return 'Yes';
+                                                            if (in_array($v, [false, 0, '0', 'false', 'no', 'NO', 'No'], true)) return 'No';
+                                                            return null;
+                                                        };
+
+                                                        // 1) Pending order meta
+                                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                                        $v = $norm(data_get($meta, 'id_verified'));
+                                                        if ($v !== null) return $v;
+
+                                                        // 2) User meta / column
+                                                        try {
+                                                            $u = $record->user ?? null;
+                                                            if ($u) {
+                                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                                                    $um = is_array($u->meta) ? $u->meta : (json_decode($u->meta ?? '[]', true) ?: []);
+                                                                    $uv = $norm(data_get($um, 'id_verified'));
+                                                                    if ($uv !== null) return $uv;
+                                                                }
+                                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified')) {
+                                                                    $flat = $norm($u->id_verified ?? null);
+                                                                    if ($flat !== null) return $flat;
+                                                                }
+                                                            }
+                                                        } catch (\Throwable $e) {}
+
+                                                        // 3) Linked order by reference
+                                                        try {
+                                                            $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                                            if ($ord) {
+                                                                $om = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
+                                                                $ov = $norm(data_get($om, 'id_verified'));
+                                                                if ($ov !== null) return $ov;
+                                                            }
+                                                        } catch (\Throwable $e) {}
+
+                                                        return '—';
+                                                    })
+                                                    ->badge()
+                                                    ->color(function ($state) {
+                                                        $s = strtolower((string) $state);
+                                                        return match ($s) {
+                                                            'yes' => 'success',
+                                                            'no'  => 'danger',
+                                                            default => 'gray',
+                                                        };
+                                                    }),
+                                            ]),
+                                        ]),
                                     Section::make('Appointment Date & Time')
                                     ->schema([
                                         \Filament\Infolists\Components\TextEntry::make('appointment_datetime')->hiddenLabel(),
@@ -599,19 +865,124 @@ class PendingOrderResource extends Resource
                                 TextEntry::make('meta.admin_notes')
                                     ->hiddenLabel()
                                     ->getStateUsing(function ($record) {
+                                        if (! $record) {
+                                            return '—';
+                                        }
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                         return (string) (data_get($meta, 'admin_notes') ?: '—');
                                     })
                                     ->formatStateUsing(fn ($state) => nl2br(e($state)))
                                     ->extraAttributes(function ($record) {
-                                        $ts = optional($record->updated_at)->timestamp ?? time();
-                                        return ['wire:key' => 'pending-admin-notes-' . $record->getKey() . '-' . $ts];
+                                        $ts = optional(optional($record)->updated_at)->timestamp ?? time();
+                                        $key = optional($record)->getKey() ?? '0';
+                                        return ['wire:key' => 'pending-admin-notes-' . $key . '-' . $ts];
                                     })
                                     ->html(),
                             ]),
 
+                        // Order history (collapsible section like Products and Assessment Answers)
+                        Section::make('Order history')
+                            ->collapsible()
+                            ->collapsed(false)
+                            ->schema([
+                                ViewEntry::make('order_history_view')
+                                    ->hiddenLabel()
+                                    ->view('filament.partials.order-history-table')
+                                    ->getStateUsing(function ($record) {
+                                        if (! $record) return ['rows' => []];
+
+                                        $uid = $record->user_id ?: optional($record->user)->id;
+                                        $pid = $record->patient_id;
+
+                                        $q = \App\Models\Order::query()
+                                            ->where('status', 'completed')
+                                            ->where(function ($w) use ($uid, $pid) {
+                                                if ($uid) {
+                                                    $w->orWhere('user_id', $uid)
+                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.user_id') = ?", [$uid])
+                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.user.id') = ?", [$uid]);
+                                                }
+                                                if ($pid && \Schema::hasColumn('orders', 'patient_id')) {
+                                                    $w->orWhere('patient_id', $pid)
+                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.patient_id') = ?", [$pid])
+                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.patient.id') = ?", [$pid]);
+                                                }
+                                            });
+
+                                        $orders = $q->latest('id')->limit(25)->get();
+
+                                        $money = function ($o) {
+                                            if (isset($o->products_total_minor) && is_numeric($o->products_total_minor)) {
+                                                return '£' . number_format(((int) $o->products_total_minor) / 100, 2);
+                                            }
+                                            $m = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
+                                            $val = data_get($m, 'products_total_minor') ?? data_get($m, 'totalMinor') ?? data_get($m, 'amountMinor');
+                                            if (is_numeric($val)) return '£' . number_format(((int) $val) / 100, 2);
+                                            $sum = 0;
+                                            foreach ((array) (data_get($m, 'items') ?? data_get($m, 'lines') ?? []) as $it) {
+                                                if (!is_array($it)) continue;
+                                                $qty   = (int) ($it['qty'] ?? $it['quantity'] ?? 1) ?: 1;
+                                                $minor = $it['totalMinor'] ?? $it['lineTotalMinor'] ?? $it['amountMinor'] ?? null;
+                                                if ($minor === null && isset($it['unitMinor'])) $minor = (int) $it['unitMinor'] * $qty;
+                                                if (is_numeric($minor)) $sum += (int) $minor;
+                                            }
+                                            return $sum > 0 ? '£' . number_format($sum / 100, 2) : '—';
+                                        };
+
+                                        $fmtDate = fn($dt) => tap($dt, function (&$x) {
+                                            try { $x = \Carbon\Carbon::parse($x)->format('d-m-Y H:i'); } catch (\Throwable) {}
+                                        });
+
+                                        $itemsSummary = function ($o) {
+                                            $m = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
+                                            $cands = [data_get($m, 'items'), data_get($m, 'lines'), data_get($m, 'products'), data_get($m, 'line_items')];
+                                            $items = collect($cands)->first(fn($c) => is_array($c) && count($c)) ?? [];
+
+                                            if (empty($items)) {
+                                                $name = data_get($m, 'product_name') ?? data_get($m, 'selectedProduct.name');
+                                                if (!$name) return '—';
+                                                $qty = (int) (data_get($m, 'qty') ?? data_get($m, 'quantity') ?? 1) ?: 1;
+                                                $opt = data_get($m, 'selectedProduct.variations') ?? data_get($m, 'selectedProduct.optionLabel')
+                                                    ?? data_get($m, 'variant') ?? data_get($m, 'dose') ?? data_get($m, 'strength');
+                                                if (is_array($opt)) $opt = ($opt['label'] ?? $opt['value'] ?? '');
+                                                return e(trim("$qty × $name" . ($opt ? " $opt" : '')));
+                                            }
+
+                                            $labels = [];
+                                            foreach ($items as $it) {
+                                                $qty = (int) ($it['qty'] ?? $it['quantity'] ?? 1) ?: 1;
+                                                $name = $it['name'] ?? $it['title'] ?? $it['product_name'] ?? 'Item';
+                                                $opt = data_get($it, 'variations') ?? data_get($it, 'variation') ?? data_get($it, 'optionLabel')
+                                                    ?? data_get($it, 'variant') ?? data_get($it, 'dose') ?? data_get($it, 'strength') ?? data_get($it, 'option');
+                                                if (is_array($opt)) $opt = $opt['label'] ?? $opt['value'] ?? implode(' ', array_filter(array_map('strval', $opt)));
+                                                $labels[] = e(trim("$qty × $name" . ($opt ? " $opt" : '')));
+                                                if (count($labels) >= 2) break;
+                                            }
+                                            $html = implode('<br>', $labels);
+                                            $more = max(0, count($items) - 2);
+                                            if ($more) $html .= "<br><span class=\"oh-more\">+{$more} more</span>";
+                                            return $html ?: '—';
+                                        };
+
+                                        $rows = [];
+                                        foreach ($orders as $o) {
+                                            $rows[] = [
+                                                'ref'     => e($o->reference ?? ('#' . $o->id)),
+                                                'created' => $fmtDate($o->created_at) ?? '',
+                                                'items'   => $itemsSummary($o), // already escaped with <br>
+                                                'total'   => $money($o),
+                                                'url'     => "/admin/orders/completed-orders/{$o->id}/details",
+                                            ];
+                                        }
+
+                                        return ['rows' => $rows];
+                                    }),
+                            ]),
                         // Products (from order meta or booking relation)
                         Section::make(function ($record) {
+                            if (! $record) {
+                                return 'Products';
+                            }
                             // Build normalized products array to derive a dynamic title like: Products (N)
                             $items = [];
                             $candidates = [
@@ -634,6 +1005,9 @@ class PendingOrderResource extends Resource
                                 RepeatableEntry::make('products')
                                     ->hiddenLabel()
                                     ->getStateUsing(function ($record) {
+                                        if (! $record) {
+                                            return [];
+                                        }
                                         // Normalize various meta shapes into a uniform array of { name, qty, priceMinor }
                                         $items = null;
                                         $candidates = [
@@ -952,7 +1326,12 @@ class PendingOrderResource extends Resource
                                             ->label('') // no header over value cell
                                             ->hiddenLabel()
                                             ->columnSpan(2)
-                                            ->getStateUsing(fn ($record) => $record->products_total_minor)
+                                            ->getStateUsing(function ($record) {
+                                                if (! $record) {
+                                                    return 0;
+                                                }
+                                                return (int) ($record->products_total_minor ?? 0);
+                                            })
                                             ->formatStateUsing(fn ($state) => '£' . number_format(((int) $state) / 100, 2))
                                             ->placeholder('£0.00')
                                             ->extraAttributes(['class' => 'text-right tabular-nums']),
@@ -967,6 +1346,9 @@ class PendingOrderResource extends Resource
                                 ViewEntry::make('consultation_qa')
                                     ->label(false)
                                     ->getStateUsing(function ($record) {
+                                        if (! $record) {
+                                            return [];
+                                        }
                                         // First try formsQA from the PendingOrder meta
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                         $forms = data_get($meta, 'formsQA', []);

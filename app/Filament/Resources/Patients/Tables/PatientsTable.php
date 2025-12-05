@@ -22,6 +22,9 @@ class PatientsTable
     public static function configure(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(function (Builder $query) {
+                return $query->with('user');
+            })
             ->columns([
 
                 TextColumn::make('patient_priority_dot')
@@ -133,11 +136,65 @@ class PatientsTable
                 TextColumn::make('gender')->label('Gender')->toggleable(),
                 TextColumn::make('email')->label('Email')->searchable()->toggleable(),
                 TextColumn::make('phone')->label('Phone')->searchable()->toggleable(),
-                TextColumn::make('dob')->label('DOB')->date()->toggleable(),
-                TextColumn::make('address1')->label('Street')->toggleable(),
-                TextColumn::make('city')->label('City')->toggleable(),
-                TextColumn::make('postcode')->label('Postcode')->toggleable(),
-                TextColumn::make('country')->label('Country')->toggleable(),
+                TextColumn::make('dob')
+                    ->label('DOB')
+                    ->getStateUsing(function ($record) {
+                        $u = $record->user ?? null;
+                        $raw = $u?->dob;
+                        if (!$raw) return '—';
+                        try {
+                            return ($raw instanceof \Carbon\Carbon)
+                                ? $raw->format('d-m-Y')
+                                : \Carbon\Carbon::parse($raw)->format('d-m-Y');
+                        } catch (\Throwable $e) {
+                            return (string) $raw;
+                        }
+                    })
+                    ->searchable()
+                    ->toggleable(),
+                TextColumn::make('home_address')
+                    ->label('Home address')
+                    ->getStateUsing(function ($record) {
+                        $u = $record->user ?? null;
+                        if (!$u) return '—';
+                        $line1 = $u->address1 ?? $u->address_1 ?? $u->address_line1 ?? null;
+                        $line2 = $u->address2 ?? $u->address_2 ?? $u->address_line2 ?? null;
+                        $city  = $u->city ?? $u->town ?? null;
+                        $pc    = $u->postcode ?? $u->post_code ?? $u->postal_code ?? $u->zip ?? $u->zip_code ?? null;
+                        $parts = [];
+                        if (is_string($line1) && trim($line1) !== '') $parts[] = trim($line1);
+                        if (is_string($line2) && trim($line2) !== '') $parts[] = trim($line2);
+                        if (is_string($city)  && trim($city)  !== '') $parts[] = trim($city);
+                        if (is_string($pc)    && trim($pc)    !== '') $parts[] = trim($pc);
+                        return $parts ? implode(', ', $parts) : '—';
+                    })
+                    ->searchable()
+                    ->toggleable(),
+
+                TextColumn::make('shipping_address')
+                    ->label('Shipping address')
+                    ->getStateUsing(function ($record) {
+                        $u = $record->user ?? null;
+                        if (!$u) return '—';
+                        // prefer user shipping
+                        $line1 = $u->shipping_address1 ?? $u->shipping_address_1 ?? $u->shipping_line1 ?? null;
+                        $line2 = $u->shipping_address2 ?? $u->shipping_address_2 ?? $u->shipping_line2 ?? null;
+                        $city  = $u->shipping_city ?? $u->shipping_town ?? null;
+                        $pc    = $u->shipping_postcode ?? $u->shipping_post_code ?? $u->shipping_postal_code ?? $u->shipping_zip ?? $u->shipping_zip_code ?? null;
+                        // fallback to user home
+                        if (!$line1) $line1 = $u->address1 ?? $u->address_1 ?? $u->address_line1 ?? null;
+                        if (!$line2) $line2 = $u->address2 ?? $u->address_2 ?? $u->address_line2 ?? null;
+                        if (!$city)  $city  = $u->city ?? $u->town ?? null;
+                        if (!$pc)    $pc    = $u->postcode ?? $u->post_code ?? $u->postal_code ?? $u->zip ?? $u->zip_code ?? null;
+                        $parts = [];
+                        if (is_string($line1) && trim($line1) !== '') $parts[] = trim($line1);
+                        if (is_string($line2) && trim($line2) !== '') $parts[] = trim($line2);
+                        if (is_string($city)  && trim($city)  !== '') $parts[] = trim($city);
+                        if (is_string($pc)    && trim($pc)    !== '') $parts[] = trim($pc);
+                        return $parts ? implode(', ', $parts) : '—';
+                    })
+                    ->searchable()
+                    ->toggleable(),
             ])
             ->defaultSort('id', 'desc')
 
@@ -157,43 +214,148 @@ class PatientsTable
                     ->icon('heroicon-m-shopping-bag')
                     ->color('success')
                     ->button()
-                    ->modalHeading(fn ($record) => 'Orders for ' . ($record->first_name . ' ' . $record->last_name))
+                    ->modalHeading(function ($record) {
+                        if (!$record) return 'Orders';
+                        $fn = trim((string) ($record->first_name ?? optional($record->user)->first_name ?? ''));
+                        $ln = trim((string) ($record->last_name  ?? optional($record->user)->last_name  ?? ''));
+                        $name = trim($fn . ' ' . $ln);
+                        return $name !== '' ? ('Orders for ' . $name) : 'Orders';
+                    })
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('Close')
                     ->modalWidth('7xl')
                     ->modalDescription(function ($record) {
+                        if (!$record) {
+                            return new \Illuminate\Support\HtmlString('<p class="text-sm text-gray-500">No record selected</p>');
+                        }
                         // Try to load orders related to the patient.
-                        // Priority: explicit relationship -> user_id match -> email in orders table or meta.email
+                        // Priority: explicit relationship (if it returns rows) -> robust fallback lookup
                         try {
+                            // Pre-compute IDs for strict matching and filtering
+                            $uid = optional($record)->user_id ?: optional($record->user)->id;
+                            $pid = optional($record)->id;
+                            $orders = collect();
+
+                            // 0) Try relationship first, but only trust it if it returns rows
                             if (method_exists($record, 'orders')) {
-                                $orders = $record->orders()->latest('created_at')->take(150)->get(['id','reference','status','payment_status','created_at','meta','user_id']);
-                            } else {
-                                $query = Order::query();
-                                $query->where(function ($w) use ($record) {
-                                    $hasAny = false;
-                                    if (!empty($record->user_id)) {
-                                        $w->orWhere('user_id', $record->user_id);
-                                        $hasAny = true;
+                                try {
+                                    $relRows = $record->orders()
+                                        ->latest('created_at')
+                                        ->take(150)
+                                        ->get(['id','reference','status','payment_status','created_at','meta','user_id']);
+                                    if ($relRows && $relRows->count() > 0) {
+                                        $orders = $relRows;
                                     }
-                                    if (!empty($record->email)) {
-                                        $email = strtolower(trim((string) $record->email));
-                                        $w->orWhereRaw('LOWER(email) = ?', [$email]);
-                                        $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email'))) = ?", [$email]);
-                                        $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.email'))) = ?", [$email]);
-                                        $hasAny = true;
-                                    }
-                                    if (!$hasAny) {
-                                        $w->orWhereRaw('1 = 0');
-                                    }
-                                });
-                                $orders = $query->latest('created_at')->take(150)->get(['id','reference','status','payment_status','created_at','meta','user_id']);
+                                } catch (\Throwable $e) {
+                                    // ignore and fall through
+                                }
                             }
+
+                            if ($orders->isEmpty()) {
+                                // Build a robust lookup using user_id / patient_id / emails / phone
+                                $query = Order::query();
+
+                                $hasEmailColumn = \Schema::hasColumn('orders', 'email');
+
+                                $emails = [];
+
+                                if (!empty($record->email)) {
+                                    $emails[] = strtolower(trim((string) $record->email));
+                                }
+                                if (!empty(optional($record->user)->email)) {
+                                    $emails[] = strtolower(trim((string) $record->user->email));
+                                }
+                                $emails = array_values(array_unique(array_filter($emails)));
+
+                                $phone = trim((string) ($record->phone ?? optional($record->user)->phone ?? ''));
+                                $__uid = $uid;
+                                $__pid = $pid;
+
+                                // Strict precedence:
+                                // 1) If we have user_id or patient_id, match ONLY by those IDs (including JSON meta id paths).
+                                // 2) Otherwise (no IDs available), fall back to emails.
+                                // 3) Finally, fall back to phone if needed.
+                                $haveId = !empty($uid) || !empty($pid);
+
+                                if ($haveId) {
+                                    $query->where(function ($w) use ($uid, $pid) {
+                                        // user id matches (column or JSON)
+                                        if (!empty($uid)) {
+                                            $w->orWhere('user_id', $uid);
+                                            $w->orWhereRaw("JSON_EXTRACT(meta, '$.user_id') = ?", [$uid]);
+                                            $w->orWhereRaw("JSON_EXTRACT(meta, '$.user.id') = ?", [$uid]);
+                                        }
+                                        // patient id matches (column or JSON)
+                                        if (!empty($pid)) {
+                                            if (\Schema::hasColumn('orders', 'patient_id')) {
+                                                $w->orWhere('patient_id', $pid);
+                                            }
+                                            $w->orWhereRaw("JSON_EXTRACT(meta, '$.patient_id') = ?", [$pid]);
+                                            $w->orWhereRaw("JSON_EXTRACT(meta, '$.patient.id') = ?", [$pid]);
+                                        }
+                                    });
+                                } else {
+                                    // No IDs available — do not attempt fuzzy matching
+                                    $query->whereRaw('1 = 0');
+                                }
+
+                                try {
+                                    $columns = ['id','reference','status','payment_status','created_at','meta','user_id'];
+                                    if ($hasEmailColumn) $columns[] = 'email';
+                                    $orders = $query
+                                        ->with([])
+                                        ->latest('created_at')
+                                        ->take(150)
+                                        ->get($columns);
+                                } catch (\Throwable $e) {
+                                    \Log::warning('patients.orders.lookup_failed', ['err' => $e->getMessage()]);
+                                    $orders = collect();
+                                }
+                            }
+                            // Final guard: keep only orders that match by strict IDs
+                            $orders = $orders->filter(function ($o) use ($uid, $pid) {
+                                $meta = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
+                                $match = false;
+                                if (!empty($uid)) {
+                                    if ((string)($o->user_id ?? '') === (string)$uid) $match = true;
+                                    if ((string) data_get($meta, 'user_id') === (string)$uid) $match = true;
+                                    if ((string) data_get($meta, 'user.id') === (string)$uid) $match = true;
+                                }
+                                if (!empty($pid)) {
+                                    if (property_exists($o, 'patient_id') && (string)($o->patient_id ?? '') === (string)$pid) $match = true;
+                                    if ((string) data_get($meta, 'patient_id') === (string)$pid) $match = true;
+                                    if ((string) data_get($meta, 'patient.id') === (string)$pid) $match = true;
+                                }
+                                return $match;
+                            })->values();
                         } catch (Throwable $e) {
                             $orders = collect();
                         }
-  
+
+                        if (!isset($emails) || !is_array($emails)) $emails = [];
+                        \Log::info('patients.orders.lookup_summary', [
+                            'mode' => (!empty($record->user_id) || !empty($record->id)) ? 'id-first' : 'fallback',
+                            'patient_id' => $record->id,
+                            'user_id' => $record->user_id,
+                            'user_email' => optional($record->user)->email,
+                            'patient_email' => $record->email,
+                            'emails_used' => $emails,
+                            'count' => $orders->count(),
+                        ]);
+
                         if ($orders->isEmpty()) {
-                            return new HtmlString('<p class="text-sm text-gray-500">No orders found for this patient</p>');
+                            $diag = [
+                                'patient_id' => $record->id,
+                                'user_id' => $record->user_id,
+                                'user_email' => optional($record->user)->email,
+                                'patient_email' => $record->email,
+                                'has_rel' => method_exists($record, 'orders') ? 'yes' : 'no',
+                            ];
+                            // Show a small grey diagnostics line in the modal to help debug
+                            $hint = '<div style="margin-bottom:.5rem;color:#9ca3af;font-size:12px">Lookup used: '
+                                . e(json_encode($diag)) . '</div>';
+                            // Continue with empty message, but include the hint
+                            return new HtmlString($hint . '<p class="text-sm text-gray-500">No orders found for this patient</p>');
                         }
   
                         // Helpers
@@ -321,10 +483,29 @@ class PatientsTable
                             return "<span style=\"display:inline-flex;align-items:center;padding:.125rem .375rem;border-radius:.375rem;font-size:.75rem;font-weight:600;color:{$conf[0]};background-color:{$bg}\">{$conf[1]}</span>";
                         };
 
+                        // Ensure debug-scoping vars are always defined
+                        if (!isset($__uid)) { $__uid = null; }
+                        if (!isset($__pid)) { $__pid = null; }
+                        if (!isset($emails) || !is_array($emails)) { $emails = []; }
+                        if (!isset($phone)) { $phone = ''; }
                         // Build rows (no Tailwind classes)
-                        $rows = $orders->map(function ($o) use ($formatDate, $money, $normalizeItems, $lineToString, $statusBadge, $paymentBadge) {
+                        $rows = $orders->map(function ($o) use ($formatDate, $money, $normalizeItems, $lineToString, $statusBadge, $paymentBadge, $__uid, $__pid, $emails, $phone) {
                             $meta = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
-                            $ref = e($o->reference ?? ('#' . $o->id));
+                            // Work out why this order matched (debug badge)
+                            $mUserId   = data_get($meta, 'user_id') ?? data_get($meta, 'user.id');
+                            $mPatientId= data_get($meta, 'patient_id') ?? data_get($meta, 'patient.id');
+                            $src = null;
+                            if ($__uid && ((string)$o->user_id === (string)$__uid)) $src = 'user_id';
+                            elseif ($__uid && ((string)$mUserId === (string)$__uid)) $src = 'meta.user_id';
+                            elseif ($__pid && (property_exists($o, 'patient_id') && (string)$o->patient_id === (string)$__pid)) $src = 'patient_id';
+                            elseif ($__pid && ((string)$mPatientId === (string)$__pid)) $src = 'meta.patient_id';
+                            else {
+                                // No fallback – we already filtered by strict IDs only
+                                $src = '';
+                            }
+                            $srcBadge = $src ? "<span style=\"margin-left:.35rem;font-size:.65rem;color:#9ca3af;border:1px solid rgba(156,163,175,.35);padding:.05rem .3rem;border-radius:.25rem\">{$src}</span>" : '';
+                            $refRaw = (string)($o->reference ?? ('#' . $o->id));
+                            $ref = e($refRaw) . $srcBadge;
                             $service = e(
                                 data_get($meta, 'service')
                                 ?? data_get($meta, 'serviceName')
@@ -362,14 +543,19 @@ class PatientsTable
                                 ? '£' . number_format(((int) $totalMinor) / 100, 2)
                                 : ($money(data_get($meta, 'total') ?? data_get($meta, 'amount') ?? data_get($meta, 'subtotal')) ?? '—');
 
+                            // Always open completed-orders details page
+                            $detailsUrl = "/admin/orders/completed-orders/{$o->id}/details";
+                            $viewBtn = "<a href='" . e($detailsUrl) . "' target='_blank' rel='noopener' style=\"display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .55rem;border-radius:.375rem;background:#ea580c;color:#fff;font-weight:600;text-decoration:none\">View</a>";
+
                             return "<tr>
-                                <td class='cell ref'>{$ref}</td>
+                                <td class='cell ref' title='" . e($refRaw) . "'>{$ref}</td>
                                 <td class='cell service'>{$service}</td>
                                 <td class='cell items' title='" . e($itemsTextFull) . "'>{$itemsHtml}</td>
                                 <td class='cell date'>{$created}</td>
                                 <td class='cell status'>{$status}</td>
                                 <td class='cell payment'>{$payment}</td>
                                 <td class='cell total'>{$total}</td>
+                                <td>{$viewBtn}</td>
                             </tr>";
                         })->implode('');
 
@@ -390,7 +576,7 @@ class PatientsTable
 
                         .cell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
                         .cell.items{white-space:normal;line-height:1.35}
-                        .cell.ref{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#d1d5db;width:9ch}
+                        .cell.ref{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#d1d5db;width:18ch;white-space:nowrap;overflow:visible;text-overflow:clip}
                         /* Widened columns */
                         .cell.service{width:24rem}
                         .cell.items{width:44rem;color:#cbd5e1}
@@ -414,9 +600,9 @@ class PatientsTable
 
                         $table = $summary . "<div class='orders-wrap'><table class='orders-table'>
                             <colgroup>
-                                <col style=\"width:14ch\">
-                                <col style=\"width:12rem\">
-                                <col style=\"width:30rem\">
+                                <col style=\"width:18ch\">
+                                <col style=\"width:9rem\">
+                                <col style=\"width:26rem\">
                                 <col style=\"width:10rem\">
                                 <col style=\"width:6rem\">
                                 <col style=\"width:6rem\">
@@ -437,7 +623,7 @@ class PatientsTable
                         </table></div>";
 
                         return new HtmlString($css . $table);
-                    })
+                    }),
             ])
 
             ->toolbarActions([]);

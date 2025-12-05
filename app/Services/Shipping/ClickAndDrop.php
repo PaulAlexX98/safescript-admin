@@ -51,18 +51,84 @@ class ClickAndDrop
         $lastName  = trim((string) data_get($patient, 'last_name', ''));
         $fullName  = trim($firstName . ' ' . $lastName) ?: (string) data_get($patient, 'name', 'Patient');
 
-        $addr1   = (string) data_get($patient, 'address1', data_get($patient, 'address.line1'));
-        $addr2   = (string) (data_get($patient, 'address2', data_get($patient, 'address.line2')) ?? '');
-        $city    = (string) (data_get($patient, 'city', data_get($patient, 'address.city')) ?? data_get($patient, 'town', ''));
-        $postcode= (string) (data_get($patient, 'postcode', data_get($patient, 'address.postcode')) ?? '');
-        $country = (string) (data_get($patient, 'country_code', data_get($patient, 'address.country_code')) ?? 'GB');
+        // Debug: log incoming patient fields and explicit shipping override
+        Log::info('clickanddrop.payload.in', [
+            'has_override_shipping' => isset($overrides['shipping']) && is_array($overrides['shipping']),
+            'override_shipping'     => $overrides['shipping'] ?? null,
+            'patient_shipping'      => [
+                'shipping_address1' => data_get($patient, 'shipping_address1'),
+                'shipping_address2' => data_get($patient, 'shipping_address2'),
+                'shipping_city'     => data_get($patient, 'shipping_city'),
+                'shipping_postcode' => data_get($patient, 'shipping_postcode'),
+                'shipping_country'  => data_get($patient, 'shipping_country') ?? data_get($patient, 'shipping_country_code'),
+                'nested'            => data_get($patient, 'shipping'),
+            ],
+            'patient_home'          => [
+                'address1' => data_get($patient, 'address1'),
+                'address2' => data_get($patient, 'address2'),
+                'city'     => data_get($patient, 'city'),
+                'postcode' => data_get($patient, 'postcode'),
+                'country'  => data_get($patient, 'country') ?? data_get($patient, 'country_code'),
+            ],
+        ]);
+
+        // 1) If explicit shipping override is provided, use it exclusively
+        // 1 use explicit shipping override if present
+        $explicit = (isset($overrides['shipping']) && is_array($overrides['shipping'])) ? $overrides['shipping'] : null;
+        if ($explicit) {
+            $addr1 = (string) ($explicit['address1'] ?? '');
+            $addr2 = (string) ($explicit['address2'] ?? '');
+            $city  = (string) ($explicit['city'] ?? '');
+            $postcode = (string) ($explicit['postcode'] ?? '');
+            $countryCode = strtoupper((string) ($explicit['country_code'] ?? 'GB'));
+            $source = 'override';
+        } else {
+            // 2 try order meta shipping block with canonical keys
+            $oMeta = is_array($order->meta ?? null) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+            $mShip = (array) data_get($oMeta, 'shipping', []);
+            $mHas  = ($mShip['address1'] ?? null) || ($mShip['city'] ?? null) || ($mShip['postcode'] ?? null);
+
+            if ($mHas) {
+                $addr1 = (string) ($mShip['address1'] ?? '');
+                $addr2 = (string) ($mShip['address2'] ?? '');
+                $city  = (string) ($mShip['city'] ?? '');
+                $postcode = (string) ($mShip['postcode'] ?? '');
+                $countryCode = strtoupper((string) ($mShip['country_code'] ?? 'GB'));
+                $source = 'order_meta.shipping';
+            } else {
+                // 3 fall back to user shipping columns exactly
+                $addr1 = (string) (data_get($order->user, 'shipping_address1') ?? '');
+                $addr2 = (string) (data_get($order->user, 'shipping_address2') ?? '');
+                $city  = (string) (data_get($order->user, 'shipping_city') ?? '');
+                $postcode = (string) (data_get($order->user, 'shipping_postcode') ?? '');
+                $countryCode = strtoupper((string) (data_get($order->user, 'shipping_country') ?? 'GB'));
+                $source = 'user.shipping_*';
+
+                // 4 if shipping empty, final fallback to home address
+                if ($addr1 === '' && $city === '' && $postcode === '') {
+                    $addr1 = (string) (data_get($order->user, 'address1') ?? '');
+                    $addr2 = (string) (data_get($order->user, 'address2') ?? '');
+                    $city  = (string) (data_get($order->user, 'city') ?? '');
+                    $postcode = (string) (data_get($order->user, 'postcode') ?? '');
+                    $countryCode = strtoupper((string) (data_get($order->user, 'country') ?? 'GB'));
+                    $source = 'user.home';
+                }
+            }
+        }
+
+        // debug the chosen source and values
+        \Log::info('clickanddrop.payload.resolved', [
+            'source' => $source,
+            'resolved' => compact('addr1','addr2','city','postcode','countryCode'),
+        ]);
+        
         $email   = (string) (data_get($patient, 'email') ?? '');
         $phone   = (string) (data_get($patient, 'phone') ?? data_get($patient, 'mobile', ''));
 
         // Weight fallback — if you measure per item, sum; else default 100g
         $weightG = (int) (data_get($order, 'weight_g', 0));
         if ($weightG <= 0) {
-            $weightG = 1000;
+            $weightG = 2000;
         }
 
         // Build the minimal working payload structure (matches your successful curl)
@@ -80,7 +146,7 @@ class ClickAndDrop
                         'addressLine2' => $addr2,
                         'city' => $city,
                         'postcode' => $postcode,
-                        'countryCode' => strtoupper($country ?: 'GB'),
+                        'countryCode' => $countryCode ?: 'GB',
                     ],
                     'email' => $email,
                     'phone' => $phone,

@@ -601,6 +601,61 @@ class CompletedOrderDetails extends ViewRecord
                                 TextEntry::make('phone')->label('Phone')
                                     ->state(fn () => data_get($meta,'phone') ?? $rec->user?->phone),
                                 TextEntry::make('created_at')->label('Created')->dateTime('d-m-Y H:i'),
+                                TextEntry::make('home_address_block')
+                                    ->label('Home address')
+                                    ->state(function ($record) {
+                                        $u = $record->user ?? null;
+                                        if (!$u) return null;
+                                        $line1 = $u->address1 ?? $u->address_1 ?? $u->address_line1 ?? null;
+                                        $line2 = $u->address2 ?? $u->address_2 ?? $u->address_line2 ?? null;
+                                        $city  = $u->city ?? $u->town ?? null;
+                                        $pc    = $u->postcode ?? $u->post_code ?? $u->postal_code ?? $u->zip ?? $u->zip_code ?? null;
+                                        $country = $u->country ?? $u->country_name ?? null;
+                                        $parts = [];
+                                        if (is_string($line1) && trim($line1) !== '') $parts[] = trim($line1);
+                                        if (is_string($line2) && trim($line2) !== '') $parts[] = trim($line2);
+                                        if (is_string($city)  && trim($city)  !== '' || is_string($pc) && trim($pc) !== '') {
+                                            $cityLine = trim(trim((string)$city) . ' ' . trim((string)$pc));
+                                            if ($cityLine !== '') $parts[] = $cityLine;
+                                        }
+                                        if (is_string($country) && trim($country) !== '') $parts[] = trim($country);
+                                        return $parts ? implode("\n", $parts) : null;
+                                    })
+                                    ->formatStateUsing(fn ($state) => $state ? nl2br(e($state)) : null)
+                                    ->html(),
+
+                                TextEntry::make('shipping_address_block')
+                                    ->label('Shipping address')
+                                    ->state(function ($record) {
+                                        $u = $record->user ?? null;
+                                        if (!$u) return null;
+                                        // Prefer user shipping fields
+                                        $line1 = $u->shipping_address1 ?? $u->shipping_address_1 ?? $u->shipping_line1 ?? null;
+                                        $line2 = $u->shipping_address2 ?? $u->shipping_address_2 ?? $u->shipping_line2 ?? null;
+                                        $city  = $u->shipping_city ?? $u->shipping_town ?? null;
+                                        $pc    = $u->shipping_postcode ?? $u->shipping_post_code ?? $u->shipping_postal_code ?? $u->shipping_zip ?? $u->shipping_zip_code ?? null;
+                                        $country = $u->shipping_country ?? null;
+
+                                        // Fallback to home if shipping is incomplete
+                                        if (!$line1) $line1 = $u->address1 ?? $u->address_1 ?? $u->address_line1 ?? null;
+                                        if (!$line2) $line2 = $u->address2 ?? $u->address_2 ?? $u->address_line2 ?? null;
+                                        if (!$city)  $city  = $u->city ?? $u->town ?? null;
+                                        if (!$pc)    $pc    = $u->postcode ?? $u->post_code ?? $u->postal_code ?? $u->zip ?? $u->zip_code ?? null;
+                                        if (!$country) $country = $u->country ?? $u->country_name ?? null;
+
+                                        $parts = [];
+                                        if (is_string($line1) && trim($line1) !== '') $parts[] = trim($line1);
+                                        if (is_string($line2) && trim($line2) !== '') $parts[] = trim($line2);
+                                        if (is_string($city)  && trim($city)  !== '' || is_string($pc) && trim($pc) !== '') {
+                                            $cityLine = trim(trim((string)$city) . ' ' . trim((string)$pc));
+                                            if ($cityLine !== '') $parts[] = $cityLine;
+                                        }
+                                        if (is_string($country) && trim($country) !== '') $parts[] = trim($country);
+                                        return $parts ? implode("\n", $parts) : null;
+                                    })
+                                    ->formatStateUsing(fn ($state) => $state ? nl2br(e($state)) : null)
+                                    ->html(),
+                                
                             ]),
                         ]),
 

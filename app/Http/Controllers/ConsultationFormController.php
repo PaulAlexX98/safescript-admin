@@ -1071,10 +1071,8 @@ class ConsultationFormController extends Controller
                             $candidatePaths = [
                                 'shipping_address',
                                 'shipping.address',
-                                'address.shipping',
-                                'address',
-                                'patient.address',
                                 'patient.shipping_address',
+                                'shipping',
                             ];
 
                             foreach ($candidatePaths as $path) {
@@ -1092,12 +1090,39 @@ class ConsultationFormController extends Controller
                                     'last_name'    => $orderMeta['last_name']    ?? $orderMeta['lastName']    ?? null,
                                     'email'        => $orderMeta['email']        ?? null,
                                     'phone'        => $orderMeta['phone']        ?? $orderMeta['mobile']      ?? null,
-                                    'address1'     => $orderMeta['address1']     ?? $orderMeta['line1']       ?? $orderMeta['addressLine1'] ?? null,
-                                    'address2'     => $orderMeta['address2']     ?? $orderMeta['line2']       ?? $orderMeta['addressLine2'] ?? null,
-                                    'city'         => $orderMeta['city']         ?? $orderMeta['town']        ?? $orderMeta['addressCity']  ?? null,
-                                    'county'       => $orderMeta['county']       ?? null,
-                                    'postcode'     => $orderMeta['postcode']     ?? $orderMeta['postCode']    ?? null,
-                                    'country_code' => $orderMeta['country_code'] ?? $orderMeta['country']     ?? $orderMeta['countryCode'] ?? null,
+                                    // Prefer shipping keys only
+                                    'address1'     => data_get($orderMeta, 'shipping_address1')
+                                                        ?? data_get($orderMeta, 'shipping.line1')
+                                                        ?? data_get($orderMeta, 'shipping.address1')
+                                                        ?? data_get($orderMeta, 'shippingAddress1')
+                                                        ?? data_get($orderMeta, 'shipping.line_1')
+                                                        ?? data_get($orderMeta, 'shipping_address.line1')
+                                                        ?? null,
+                                    'address2'     => data_get($orderMeta, 'shipping_address2')
+                                                        ?? data_get($orderMeta, 'shipping.line2')
+                                                        ?? data_get($orderMeta, 'shipping.address2')
+                                                        ?? data_get($orderMeta, 'shippingAddress2')
+                                                        ?? data_get($orderMeta, 'shipping.line_2')
+                                                        ?? data_get($orderMeta, 'shipping_address.line2')
+                                                        ?? null,
+                                    'city'         => data_get($orderMeta, 'shipping_city')
+                                                        ?? data_get($orderMeta, 'shipping.city')
+                                                        ?? data_get($orderMeta, 'shipping.town')
+                                                        ?? data_get($orderMeta, 'shippingAddress.city')
+                                                        ?? null,
+                                    'county'       => data_get($orderMeta, 'shipping_county')
+                                                        ?? data_get($orderMeta, 'shipping.county')
+                                                        ?? null,
+                                    'postcode'     => data_get($orderMeta, 'shipping_postcode')
+                                                        ?? data_get($orderMeta, 'shipping.postcode')
+                                                        ?? data_get($orderMeta, 'shipping.postCode')
+                                                        ?? data_get($orderMeta, 'shipping.postal_code')
+                                                        ?? null,
+                                    'country_code' => data_get($orderMeta, 'shipping_country_code')
+                                                        ?? data_get($orderMeta, 'shipping.country_code')
+                                                        ?? data_get($orderMeta, 'shipping.country')
+                                                        ?? data_get($orderMeta, 'shipping.countryCode')
+                                                        ?? null,
                                 ];
 
                                 $nonEmpty = array_filter($guess, fn ($v) => $v !== null && $v !== '');
@@ -1105,6 +1130,26 @@ class ConsultationFormController extends Controller
                                     $addr = $guess;
                                 }
                             }
+                        }
+                    }
+
+                    // 2c) If still empty, try user shipping fields from the owning user
+                    if ((! is_array($addr) || empty($addr)) && $order && $order->user) {
+                        $u = $order->user;
+                        $uShipping = [
+                            'address1'     => $u->shipping_address1 ?? null,
+                            'address2'     => $u->shipping_address2 ?? null,
+                            'city'         => $u->shipping_city ?? null,
+                            'postcode'     => $u->shipping_postcode ?? null,
+                            'country_code' => $u->shipping_country ?? null,
+                            'first_name'   => $u->first_name ?? null,
+                            'last_name'    => $u->last_name ?? null,
+                            'email'        => $u->email ?? null,
+                            'phone'        => $u->phone ?? null,
+                        ];
+                        $nonEmpty = array_filter($uShipping, fn ($v) => $v !== null && $v !== '');
+                        if (! empty($nonEmpty)) {
+                            $addr = $uShipping;
                         }
                     }
 
@@ -1243,6 +1288,31 @@ class ConsultationFormController extends Controller
                 };
 
                 // Build a lightweight patient object using hydrated meta plus deep fallbacks
+                // Resolve SHIPPING fields first from meta; these will be passed to Click & Drop
+                $shipLine1 = data_get($metaArr, 'shipping.address1')
+                    ?? data_get($metaArr, 'shipping.line1')
+                    ?? data_get($metaArr, 'patient.shipping_address1')
+                    ?? data_get($metaArr, 'patient.shipping.line1')
+                    ?? data_get($metaArr, 'patient.shipping_address.line1');
+                $shipLine2 = data_get($metaArr, 'shipping.address2')
+                    ?? data_get($metaArr, 'shipping.line2')
+                    ?? data_get($metaArr, 'patient.shipping_address2')
+                    ?? data_get($metaArr, 'patient.shipping.line2')
+                    ?? data_get($metaArr, 'patient.shipping_address.line2');
+                $shipCity = data_get($metaArr, 'shipping.city')
+                    ?? data_get($metaArr, 'shipping.town')
+                    ?? data_get($metaArr, 'patient.shipping_city')
+                    ?? data_get($metaArr, 'patient.shipping.city');
+                $shipPostcode = data_get($metaArr, 'shipping.postcode')
+                    ?? data_get($metaArr, 'shipping.postCode')
+                    ?? data_get($metaArr, 'shipping.postal_code')
+                    ?? data_get($metaArr, 'patient.shipping_postcode')
+                    ?? data_get($metaArr, 'patient.shipping.postcode');
+                $shipCountry = data_get($metaArr, 'shipping.country_code')
+                    ?? data_get($metaArr, 'shipping.country')
+                    ?? data_get($metaArr, 'patient.shipping_country_code')
+                    ?? data_get($metaArr, 'patient.shipping.country_code');
+
                 $firstName = data_get($metaArr, 'patient.first_name')
                     ?? data_get($metaArr, 'patient.name.first')
                     ?? data_get($metaArr, 'first_name')
@@ -1256,37 +1326,49 @@ class ConsultationFormController extends Controller
                     ?? $findMeta($metaArr, ['.email']);
                 $phone    = data_get($metaArr, 'patient.phone')
                     ?? $findMeta($metaArr, ['.phone', '.mobile']);
-                $address1 = data_get($metaArr, 'patient.address1')
+                $address1 = $shipLine1
+                    ?? data_get($metaArr, 'patient.address1')
                     ?? data_get($metaArr, 'patient.address.line1')
                     ?? $findMeta($metaArr, ['.address1', '.line1', '.addressLine1']);
-                $address2 = data_get($metaArr, 'patient.address2')
+                $address2 = $shipLine2
+                    ?? data_get($metaArr, 'patient.address2')
                     ?? data_get($metaArr, 'patient.address.line2')
                     ?? $findMeta($metaArr, ['.address2', '.line2', '.addressLine2']);
-                $city     = data_get($metaArr, 'patient.city')
+                $city     = $shipCity
+                    ?? data_get($metaArr, 'patient.city')
                     ?? data_get($metaArr, 'patient.address.city')
                     ?? $findMeta($metaArr, ['.city', '.town']);
                 $county   = data_get($metaArr, 'patient.county')
                     ?? data_get($metaArr, 'patient.address.county')
                     ?? $findMeta($metaArr, ['.county']);
-                $postcode = data_get($metaArr, 'patient.postcode')
+                $postcode = $shipPostcode
+                    ?? data_get($metaArr, 'patient.postcode')
                     ?? data_get($metaArr, 'patient.address.postcode')
                     ?? $findMeta($metaArr, ['.postcode', '.postCode']);
-                $country  = data_get($metaArr, 'patient.country_code')
+                $country  = $shipCountry
+                    ?? data_get($metaArr, 'patient.country_code')
                     ?? data_get($metaArr, 'patient.address.country_code')
                     ?? $findMeta($metaArr, ['.country_code', '.countryCode', '.country'])
                     ?? 'GB';
 
                 $patient = (object) [
-                    'first_name'    => $firstName,
-                    'last_name'     => $lastName,
-                    'email'         => $email,
-                    'phone'         => $phone,
-                    'address1'      => $address1,
-                    'address2'      => $address2,
-                    'city'          => $city,
-                    'county'        => $county,
-                    'postcode'      => $postcode,
-                    'country_code'  => $country,
+                    'first_name'           => $firstName,
+                    'last_name'            => $lastName,
+                    'email'                => $email,
+                    'phone'                => $phone,
+                    // Home-address style fields (now prefilled with shipping when present)
+                    'address1'             => $address1,
+                    'address2'             => $address2,
+                    'city'                 => $city,
+                    'county'               => $county,
+                    'postcode'             => $postcode,
+                    'country_code'         => $country,
+                    // Explicit SHIPPING fields for Click & Drop
+                    'shipping_address1'    => $shipLine1,
+                    'shipping_address2'    => $shipLine2,
+                    'shipping_city'        => $shipCity,
+                    'shipping_postcode'    => $shipPostcode,
+                    'shipping_country_code'=> $shipCountry,
                 ];
 
                 \Log::info('clickanddrop.patient_built', [

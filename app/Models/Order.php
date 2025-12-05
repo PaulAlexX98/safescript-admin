@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use App\Models\Patient;
 
 class Order extends Model
 {
@@ -78,6 +79,55 @@ class Order extends Model
             if ($status === 'completed' && empty($order->completed_at)) {
                 $order->completed_at = now();
             }
+        });
+
+        // Ensure meta contains user_id and patient_id on create
+        static::creating(function (self $order) {
+            $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+
+            // Mirror user_id into meta.user_id if missing
+            if (!empty($order->user_id) && ! data_get($meta, 'user_id')) {
+                data_set($meta, 'user_id', $order->user_id);
+            }
+
+            // Work out patient_id (column if present, else infer from user->patient)
+            $pid = null;
+            if (\Schema::hasColumn($order->getTable(), 'patient_id')) {
+                $pid = $order->getAttribute('patient_id');
+            }
+            if (empty($pid) && !empty($order->user_id)) {
+                $pid = Patient::where('user_id', $order->user_id)->value('id');
+                if ($pid && \Schema::hasColumn($order->getTable(), 'patient_id') && empty($order->getAttribute('patient_id'))) {
+                    $order->setAttribute('patient_id', $pid);
+                }
+            }
+            if (!empty($pid) && ! data_get($meta, 'patient_id')) {
+                data_set($meta, 'patient_id', $pid);
+            }
+
+            $order->meta = $meta;
+        });
+
+        // Also enforce on update without clobbering existing values
+        static::updating(function (self $order) {
+            $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+
+            if (!empty($order->user_id) && ! data_get($meta, 'user_id')) {
+                data_set($meta, 'user_id', $order->user_id);
+            }
+
+            $pid = null;
+            if (\Schema::hasColumn($order->getTable(), 'patient_id')) {
+                $pid = $order->getAttribute('patient_id');
+            }
+            if (empty($pid) && !empty($order->user_id)) {
+                $pid = Patient::where('user_id', $order->user_id)->value('id');
+            }
+            if (!empty($pid) && ! data_get($meta, 'patient_id')) {
+                data_set($meta, 'patient_id', $pid);
+            }
+
+            $order->meta = $meta;
         });
     }
 

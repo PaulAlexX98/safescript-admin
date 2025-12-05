@@ -74,6 +74,62 @@ class ConsultationRunner extends Page
         $this->variation = $this->selected['variation'] ?? $this->selected['variations'] ?? null;
         $this->total     = isset($this->meta['totalMinor']) ? number_format($this->meta['totalMinor'] / 100, 2) : null;
 
+        // Ensure shipping fields exist in session meta for Click & Drop
+        try {
+            $user = $this->order?->user;
+            if ($user) {
+                $meta = is_array($this->meta) ? $this->meta : (json_decode($this->meta ?? '[]', true) ?: []);
+
+                // Build a shipping snapshot from the user profile
+                $userShip = [
+                    'address1' => $user->shipping_address1 ?? null,
+                    'address2' => $user->shipping_address2 ?? null,
+                    'city' => $user->shipping_city ?? null,
+                    'postcode' => $user->shipping_postcode ?? null,
+                    // Store ISO alpha-2 if available, else try country text
+                    'country_code' => $user->shipping_country ?? ($user->country ?? null),
+                ];
+
+                // If user has no shipping set, fall back to their home address
+                if (! ($userShip['address1'] ?? null)) {
+                    $userShip['address1'] = $user->address1 ?? null;
+                    $userShip['address2'] = $user->address2 ?? null;
+                    $userShip['city'] = $user->city ?? null;
+                    $userShip['postcode'] = $user->postcode ?? null;
+                    $userShip['country_code'] = $userShip['country_code'] ?? ($user->country ?? null);
+                }
+
+                // Only inject keys that are missing in meta.shipping right now
+                $existing = (array) data_get($meta, 'shipping', []);
+                foreach ($userShip as $k => $v) {
+                    if (! array_key_exists($k, $existing) || $existing[$k] === null || $existing[$k] === '') {
+                        if ($v !== null && $v !== '') {
+                            data_set($meta, 'shipping.' . $k, $v);
+                        }
+                    }
+                }
+
+                // Also mirror to patient.shipping_* for legacy readers
+                $map = [
+                    'address1' => 'patient.shipping_address1',
+                    'address2' => 'patient.shipping_address2',
+                    'city' => 'patient.shipping_city',
+                    'postcode' => 'patient.shipping_postcode',
+                    'country_code' => 'patient.shipping_country_code',
+                ];
+                foreach ($map as $src => $dst) {
+                    $val = data_get($meta, 'shipping.' . $src);
+                    if ($val !== null && $val !== '' && data_get($meta, $dst) === null) {
+                        data_set($meta, $dst, $val);
+                    }
+                }
+
+                $this->meta = $meta; // keep in-memory; it will be persisted by syncMetaToOrder()
+            }
+        } catch (\Throwable $e) {
+            // Non-fatal: do not block the page if we can't hydrate shipping
+        }
+
         // Compute a reliable display name once
         $this->patientName = $this->resolvePatientName();
     }
@@ -246,22 +302,57 @@ class ConsultationRunner extends Page
             $last  = data_get($meta, 'patient.last_name')
                 ?? data_get($this->order?->user, 'last_name');
 
-            $out = app(ClickAndDrop::class)->createOrder([
-                'reference'  => $this->order?->reference ?? ('CONS-' . $this->session->id),
-                'first_name' => $first,
-                'last_name'  => $last,
-                'email'      => data_get($meta, 'patient.email') ?? data_get($this->order?->user, 'email'),
-                'phone'      => data_get($meta, 'patient.phone'),
-                'address1'   => data_get($meta, 'patient.address1') ?? data_get($meta, 'patient.address.line1'),
-                'address2'   => data_get($meta, 'patient.address2') ?? data_get($meta, 'patient.address.line2'),
-                'city'       => data_get($meta, 'patient.city')     ?? data_get($meta, 'patient.address.city'),
-                'county'     => data_get($meta, 'patient.county')   ?? data_get($meta, 'patient.address.county'),
-                'postcode'   => data_get($meta, 'patient.postcode') ?? data_get($meta, 'patient.address.postcode'),
-                'item_name'  => $this->service ?? 'Pharmacy order',
-                'sku'        => data_get($meta, 'sku') ?? 'RX',
-                'weight'     => 100,
-                'value'      => 0,
+            // Build explicit shipping block for Click & Drop (shipping-first, fallback to user shipping)
+            // Build explicit shipping block using canonical keys only
+            $ship = [
+                'address1'     => data_get($this->meta, 'shipping.address1')
+                                    ?? data_get($this->order?->user, 'shipping_address1'),
+                'address2'     => data_get($this->meta, 'shipping.address2')
+                                    ?? data_get($this->order?->user, 'shipping_address2'),
+                'city'         => data_get($this->meta, 'shipping.city')
+                                    ?? data_get($this->order?->user, 'shipping_city'),
+                'postcode'     => data_get($this->meta, 'shipping.postcode')
+                                    ?? data_get($this->order?->user, 'shipping_postcode'),
+                'country_code' => strtoupper(
+                                    data_get($this->meta, 'shipping.country_code')
+                                    ?? data_get($this->order?->user, 'shipping_country')
+                                    ?? 'GB'
+                                ),
+            ];
+
+            // Build a lightweight patient object for the shipping service
+            $patientObj = (object) [
+                'first_name'        => $first,
+                'last_name'         => $last,
+                'email'             => data_get($meta, 'patient.email') ?? data_get($this->order?->user, 'email'),
+                'phone'             => data_get($meta, 'patient.phone') ?? data_get($this->order?->user, 'phone'),
+                // Home fields kept for completeness
+                'address1'          => data_get($this->order?->user, 'address1'),
+                'address2'          => data_get($this->order?->user, 'address2'),
+                'city'              => data_get($this->order?->user, 'city'),
+                'postcode'          => data_get($this->order?->user, 'postcode'),
+                'country'           => data_get($this->order?->user, 'country'),
+                // Shipping snapshot on the patient
+                'shipping_address1' => $ship['address1'] ?? null,
+                'shipping_address2' => $ship['address2'] ?? null,
+                'shipping_city'     => $ship['city'] ?? null,
+                'shipping_postcode' => $ship['postcode'] ?? null,
+                'shipping_country'  => $ship['country_code'] ?? null,
+                'shipping'          => $ship,
+            ];
+
+            // Log the call mode and shipping override
+            \Log::info('clickanddrop.runner.call', [
+                'mode'          => 'order+patient+overrides',
+                'order_ref'     => $this->order?->reference,
+                'ship_override' => $ship,
             ]);
+
+            $out = app(\App\Services\Shipping\ClickAndDrop::class)->createOrder(
+                $this->order,
+                $patientObj,
+                ['shipping' => $ship]
+            );
 
             // Persist shipping details onto the order meta for visibility and PDFs
             $oMeta = is_array($this->order?->meta) ? $this->order->meta : (json_decode($this->order->meta ?? '[]', true) ?: []);

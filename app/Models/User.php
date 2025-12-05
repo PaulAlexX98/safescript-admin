@@ -17,7 +17,13 @@ class User extends Authenticatable implements FilamentUser
 
     protected $fillable = [
         'first_name','last_name','gender','phone','dob',
-        'address1','address2','city','county','postcode','country',
+        'address1','address2',
+        'shipping_address1',
+        'shipping_address2',
+        'shipping_city',
+        'shipping_postcode',
+        'shipping_country',
+        'city','county','postcode','country',
         'marketing',
         'name','email','password',
         'is_pharmacist',
@@ -25,6 +31,9 @@ class User extends Authenticatable implements FilamentUser
         'gphc_number',
         'signature_path',
         'consultation_defaults',
+        'id_verified',
+        'id_verified_at',
+
     ];
 
     protected $hidden = ['password','remember_token'];
@@ -33,11 +42,15 @@ class User extends Authenticatable implements FilamentUser
     {
         return [
             'email_verified_at'    => 'datetime',
+            'dob'                  => 'date',
             'password'             => 'hashed',   // ← make sure password is hashed
             'consultation_defaults'=> 'array',
             'is_pharmacist'        => 'boolean',
             'scr_verified' => 'boolean',
             'scr_verified_at' => 'datetime',
+            'id_verified' => 'boolean',
+            'id_verified_at' => 'datetime',
+
         ];
     }
 

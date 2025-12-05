@@ -533,7 +533,7 @@ class AppointmentResource extends Resource
                         'cancelled' => 'Cancelled',
                         'rejected'  => 'Rejected',
                     ])
-                    ->default(['completed'])
+                    ->default(['pending', 'completed'])
                     ->query(function (Builder $query, array $data): Builder {
                         // $data may be ['values' => [...]] for multiple select
                         $values = $data['values'] ?? [];
@@ -708,10 +708,10 @@ class AppointmentResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        // Count appointments for *today* (entire day), ignoring pending.
+        // Count appointments for today including pending and completed so the badge appears when either exists.
         $count = Appointment::query()
             ->whereDate('start_at', now()->toDateString())
-            ->where('status', '!=', 'pending')
+            ->whereIn('status', ['pending', 'completed'])
             ->count();
 
         return $count > 0 ? (string) $count : null;
@@ -869,8 +869,20 @@ class AppointmentResource extends Resource
             return static::getUrl('edit', ['record' => $record]);
         }
 
-        $segment = 'completed-orders';
+        // Normalise known pending-like states from either the appointment or the order
+        $apptStatus  = is_string($record->status ?? null) ? strtolower(trim($record->status)) : null;
+        $orderStatus = is_string($order->status ?? null) ? strtolower(trim($order->status)) : null;
+        $payStatus   = is_string($order->payment_status ?? null) ? strtolower(trim($order->payment_status)) : null;
 
-        return url("/admin/orders/{$segment}/{$order->id}/details");
+        $isPendingAppt = in_array($apptStatus, ['pending', 'awaiting', 'awaiting_approval', 'awaiting-approval', 'awaiting_confirmation', 'awaiting-confirmation'], true);
+        $isPendingOrd  = in_array($orderStatus, ['pending', 'awaiting', 'awaiting_approval', 'awaiting-approval', 'awaiting_confirmation', 'awaiting-confirmation'], true)
+                      || in_array($payStatus,   ['pending', 'awaiting', 'awaiting_confirmation', 'awaiting-confirmation'], true);
+
+        if ($isPendingAppt || $isPendingOrd) {
+            return url('/admin/pending-orders');
+        }
+
+        // Keep the original completed details path which you confirmed is correct
+        return url("/admin/orders/completed-orders/{$order->id}/details");
     }
 }

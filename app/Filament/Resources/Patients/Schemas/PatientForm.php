@@ -57,6 +57,26 @@ class PatientForm
             TextInput::make('country')
                 ->label('Country')
                 ->maxLength(120),
+
+            TextInput::make('shipping_address1')
+                ->label('Shipping address line 1')
+                ->maxLength(190),
+
+            TextInput::make('shipping_address2')
+                ->label('Shipping address line 2')
+                ->maxLength(190),
+
+            TextInput::make('shipping_city')
+                ->label('Shipping city')
+                ->maxLength(120),
+
+            TextInput::make('shipping_postcode')
+                ->label('Shipping postcode')
+                ->maxLength(20),
+
+            TextInput::make('shipping_country')
+                ->label('Shipping country')
+                ->maxLength(120),
         ]);
     }
 }
