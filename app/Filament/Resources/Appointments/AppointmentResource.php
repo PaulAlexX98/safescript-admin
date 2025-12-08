@@ -116,15 +116,13 @@ class AppointmentResource extends Resource
                     ->columnSpan(6),
 
                 \Filament\Forms\Components\Select::make('status')
-                    ->label('Status')
+                    ->label('Attendance')
                     ->options([
-                        'booked'    => 'Booked',
-                        'approved'  => 'Approved',
-                        'completed' => 'Completed',
-                        'pending'   => 'Pending',
-                        'cancelled' => 'Cancelled',
-                        'rejected'  => 'Rejected',
+                        'waiting'       => 'Waiting',
+                        'attended'      => 'Attended',
+                        'not_attended'  => 'Not attended',
                     ])
+                    ->default('waiting')
                     ->native(false)
                     ->searchable()
                     ->columnSpan(6),
@@ -147,7 +145,7 @@ class AppointmentResource extends Resource
 
                         return (is_string($ref) && trim($ref) !== '')
                             ? trim($ref)
-                            : '—';
+                            : '';
                     })
                     ->toggleable()
                     ->searchable(true, function (Builder $query, string $search): Builder {
@@ -483,86 +481,156 @@ class AppointmentResource extends Resource
                               ->orWhere('service_name', 'like', $like);
                         });
                     }),
-                TextColumn::make('status')
-                    ->badge()
-                    ->color(fn (string $state): string => match (strtolower($state)) {
-                        'booked', 'approved', 'completed' => 'success',
-                        'pending'            => 'warning',
-                        'cancelled', 'canceled' => 'gray',
-                        'rejected'           => 'danger',
-                        default              => 'primary',
+                // Inserted order_status column before attendance
+                TextColumn::make('order_status')
+                    ->label('Order status')
+                    ->getStateUsing(function ($record) {
+                        $o = static::findRelatedOrder($record);
+                        if (! $o) return '—';
+                        $st = is_string($o->status ?? null) ? trim(strtolower($o->status)) : '';
+                        return $st !== '' ? ucfirst($st) : '—';
                     })
-                    ->sortable(),
+                    ->badge()
+                    ->color(function ($state) {
+                        return match (strtolower($state)) {
+                            'approved'  => 'success',
+                            'completed' => 'success',
+                            'pending'   => 'warning',
+                            'rejected'  => 'danger',
+                            default     => 'gray',
+                        };
+                    })
+                    ->toggleable()
+                    ->searchable(),
+                TextColumn::make('attendance')
+                    ->label('Attendance')
+                    ->getStateUsing(function ($record) {
+                        if (! $record) return 'Waiting';
+                        $raw = is_string($record->status ?? null) ? strtolower(trim($record->status)) : '';
+                        return match ($raw) {
+                            'attended'      => 'Attended',
+                            'not_attended'  => 'Not attended',
+                            default         => 'Waiting',
+                        };
+                    })
+                    ->formatStateUsing(fn ($state) => $state ?: '—')
+                    ->badge()
+                    ->color(function ($state) {
+                        return match ($state) {
+                            'Attended'     => 'success',
+                            'Not attended' => 'gray',
+                            'Waiting'      => 'warning',
+                            default        => 'primary',
+                        };
+                    })
+                    ->toggleable(),
                 TextColumn::make('deleted_at')->label('Deleted')->dateTime()->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
-                // Day selector (defaults to today) — shows only that date
-                SelectFilter::make('day')
-                    ->label('Day')
-                    ->options(function () {
-                        $options = [];
-                        for ($i = -180; $i <= 180; $i++) {
-                            $date = now()->clone()->addDays($i);
-                            $options[$date->toDateString()] = $date->format('D d M');
-                        }
-                        return $options;
-                    })
-                    ->default(now()->toDateString())
+                // Attendance quick filter maps to status values
+                SelectFilter::make('attendance')
+                    ->label('Attendance')
+                    ->options([
+                        'attended'     => 'Attended',
+                        'not_attended' => 'Not attended',
+                        'waiting'      => 'Waiting',
+                    ])
+                    ->default('waiting')
                     ->query(function (Builder $query, array $data): Builder {
-                        // $data comes as ['value' => 'YYYY-MM-DD']
-                        $date = $data['value'] ?? null;
-                        if ($date) {
-                            $query->whereDate('start_at', $date);
+                        // Filament passes the selected option under 'value'
+                        $val = $data['value'] ?? null;
+
+                        if ($val === 'attended') {
+                            return $query->where('status', 'attended');
                         }
-                        return $query;
+                        if ($val === 'not_attended') {
+                            return $query->where('status', 'not_attended');
+                        }
+
+                        // Waiting includes explicit waiting plus legacy null or empty and pending
+                        return $query->where(function (Builder $q) {
+                            $q->whereNull('status')
+                              ->orWhere('status', '')
+                              ->orWhere('status', 'waiting')
+                              ->orWhere('status', 'pending');
+                        });
+                    })
+                    ->indicateUsing(function (array $data) {
+                        $v = $data['value'] ?? null;
+                        return match ($v) {
+                            'attended'     => 'Attended',
+                            'not_attended' => 'Not attended',
+                            default        => 'Waiting',
+                        };
+                    }),
+                 
+
+                // Single-day date picker filter for appointment date
+                Filter::make('day')
+                    ->label('Date')
+                    ->form([
+                        DatePicker::make('on')->label('On')->native(false),
+                    ])
+                    ->query(function (Builder $query, array $data): Builder {
+                        $on = $data['on'] ?? null;
+                        return $on ? $query->whereDate('start_at', $on) : $query;
                     })
                     ->indicateUsing(function ($state) {
-                        $date = is_array($state) ? ($state['value'] ?? null) : $state;
-                        return $date ? 'Day ' . \Illuminate\Support\Carbon::parse($date)->format('D d M') : null;
+                        $d = is_array($state) ? ($state['on'] ?? null) : null;
+                        return $d ? ('Date ' . \Illuminate\Support\Carbon::parse($d)->format('d M Y')) : null;
                     }),
-
-                // Status filter (inserted after Day)
-                SelectFilter::make('status')
-                    ->label('Status')
-                    ->multiple()
-                    ->options([
-                        'booked'    => 'Booked',
-                        'approved'  => 'Approved',
-                        'completed' => 'Completed',
-                        'pending'   => 'Pending',
-                        'cancelled' => 'Cancelled',
-                        'rejected'  => 'Rejected',
-                    ])
-                    ->default(['pending', 'completed'])
-                    ->query(function (Builder $query, array $data): Builder {
-                        // $data may be ['values' => [...]] for multiple select
-                        $values = $data['values'] ?? [];
-                        $values = array_values(array_filter(array_map('strtolower', (array) $values)));
-                        if (!empty($values)) {
-                            $query->whereIn('status', $values);
-                        }
-                        return $query;
-                    }),
-
-                // Ref filter (search by order reference)
-                \Filament\Tables\Filters\Filter::make('ref')
-                    ->label('Ref')
-                    ->form([\Filament\Forms\Components\TextInput::make('q')->placeholder('PTCN…')->debounce(500)])
-                    ->query(function (\Illuminate\Database\Eloquent\Builder $query, array $data): \Illuminate\Database\Eloquent\Builder {
-                        $ref = trim((string) ($data['q'] ?? ''));
-                        if ($ref === '') return $query;
-                        $ids = \App\Models\Order::query()->where('reference', 'like', "%{$ref}%")->pluck('id')->all();
-                        if (empty($ids)) { return $query->whereRaw('1 = 0'); }
-                        return $query->whereIn('order_id', $ids);
-                    })
-                    ->indicateUsing(fn ($state) => ($state['q'] ?? null) ? ('Ref: ' . $state['q']) : null),
-
-                // Optional: Upcoming toggle (no default). Use if you only want future times for the chosen day.
-                Filter::make('upcoming')
-                    ->label('Upcoming')
-                    ->query(fn (Builder $q) => $q->where('start_at', '>=', now())),
             ])
             ->actions([
+                \Filament\Actions\Action::make('attendance')
+                    ->label('Status')
+                    ->button()
+                    ->color('success')
+                    ->icon('heroicon-o-check-circle')
+                    ->modalHeading('Set attendance')
+                    ->form([
+                        \Filament\Forms\Components\Radio::make('attendance')
+                            ->label('Mark as')
+                            ->options([
+                                'waiting'      => 'Waiting',
+                                'attended'     => 'Attended',
+                                'not_attended' => 'Not attended',
+                            ])
+                            ->default(fn ($record) => in_array(($record->status ?? null), ['attended','not_attended','waiting'], true)
+                                ? $record->status
+                                : 'waiting')
+                            ->inline()
+                            ->required(),
+                        \Filament\Forms\Components\Textarea::make('note')
+                            ->label('Optional note')
+                            ->rows(2),
+                    ])
+                    ->action(function (\App\Models\Appointment $record, array $data): void {
+                        $att = $data['attendance'] ?? null;
+                        if ($att === 'attended') {
+                            $record->status = 'attended';
+                        } elseif ($att === 'not_attended') {
+                            $record->status = 'not_attended';
+                        } else {
+                            $record->status = 'waiting';
+                        }
+                        // Optional note persists as before
+                        try {
+                            if (\Illuminate\Support\Facades\Schema::hasColumn($record->getTable(), 'notes') && !empty($data['note'])) {
+                                $record->notes = trim((string) $data['note']);
+                            }
+                        } catch (\Throwable $e) {}
+                        $record->save();
+
+                        \Filament\Notifications\Notification::make()
+                            ->success()
+                            ->title('Status updated')
+                            ->body(match ($att) {
+                                'attended' => 'Appointment marked as Attended.',
+                                'not_attended' => 'Appointment marked as Not attended.',
+                                default => 'Appointment marked as Waiting.',
+                            })
+                            ->send();
+                    }),
                 \Filament\Actions\Action::make('view')
                     ->label('View')
                     ->button()
@@ -703,15 +771,77 @@ class AppointmentResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery();
+        $base = parent::getEloquentQuery();
+
+        return $base
+            // Group ALL visibility rules so later filters (like status=waiting) are ANDed against this whole set
+            ->where(function (Builder $visible) {
+                $visible
+                    ->where(function (Builder $wrap) {
+                        $wrap
+                            // Appointment already carries a real reference
+                            ->where(function (Builder $q) {
+                                $q->whereNotNull('appointments.order_reference')
+                                  ->where('appointments.order_reference', '<>', '');
+                            })
+
+                            // Or: directly linked order with a real reference
+                            ->orWhereExists(function ($sub) {
+                                $sub->select(\DB::raw('1'))
+                                    ->from('orders')
+                                    ->whereColumn('orders.id', 'appointments.order_id')
+                                    ->whereNotNull('orders.reference')
+                                    ->where('orders.reference', '<>', '');
+                            })
+
+                            // Or: stored order_reference matches an order's reference
+                            ->orWhereExists(function ($sub) {
+                                $sub->select(\DB::raw('1'))
+                                    ->from('orders')
+                                    ->whereColumn('orders.reference', 'appointments.order_reference')
+                                    ->where('orders.reference', '<>', '');
+                            })
+
+                            // Or: heuristic match by appointment time stored in order meta
+                            ->orWhereExists(function ($sub) {
+                                $sub->select(\DB::raw('1'))
+                                    ->from('orders')
+                                    // only consider real orders that have a reference
+                                    ->whereNotNull('orders.reference')
+                                    ->where('orders.reference', '<>', '')
+                                    ->where(function ($qq) {
+                                        $qq->whereRaw(
+                                            "DATE(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.appointment_start_at'))) = DATE(appointments.start_at)"
+                                        )->orWhereRaw(
+                                            "DATE(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.appointment_at'))) = DATE(appointments.start_at)"
+                                        );
+                                    })
+                                    // and keep the time reasonably close if MySQL can parse it as DATETIME
+                                    ->where(function ($qq) {
+                                        $qq->orWhereRaw(
+                                            "ABS(TIMESTAMPDIFF(MINUTE, appointments.start_at, CAST(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.appointment_start_at')) AS DATETIME))) <= 180"
+                                        )->orWhereRaw(
+                                            "ABS(TIMESTAMPDIFF(MINUTE, appointments.start_at, CAST(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.appointment_at')) AS DATETIME))) <= 180"
+                                        );
+                                    });
+                            });
+                    });
+            })
+            ->orderBy('start_at', 'asc')
+            ->orderByDesc('id');
     }
 
     public static function getNavigationBadge(): ?string
     {
-        // Count appointments for today including pending and completed so the badge appears when either exists.
         $count = Appointment::query()
-            ->whereDate('start_at', now()->toDateString())
-            ->whereIn('status', ['pending', 'completed'])
+            // Show badge for all upcoming waiting-type appointments from today onwards
+            ->whereDate('start_at', '>=', now()->toDateString())
+            ->where(function (Builder $q) {
+                $q->whereNull('status')
+                  ->orWhere('status', '')
+                  ->orWhere('status', 'waiting')
+                  ->orWhere('status', 'pending');
+            })
             ->count();
 
         return $count > 0 ? (string) $count : null;
@@ -719,12 +849,22 @@ class AppointmentResource extends Resource
 
     public static function getNavigationBadgeColor(): ?string
     {
-        // Green if there are appointments today, gray if none.
-        $count = Appointment::query()
-            ->whereDate('start_at', now()->toDateString())
-            ->count();
+        $hasWaiting = Appointment::query()
+            ->whereDate('start_at', '>=', now()->toDateString())
+            ->where(function (Builder $q) {
+                $q->whereNull('status')
+                  ->orWhere('status', '')
+                  ->orWhere('status', 'waiting')
+                  ->orWhere('status', 'pending');
+            })
+            ->exists();
 
-        return $count > 0 ? 'success' : 'gray';
+        return $hasWaiting ? 'success' : 'gray';
+    }
+
+    public static function getNavigationBadgeTooltip(): ?string
+    {
+        return 'Waiting appointments (today and upcoming)';
     }
     
     public static function formatWhenFor(?\App\Models\Appointment $a): ?string
@@ -869,14 +1009,13 @@ class AppointmentResource extends Resource
             return static::getUrl('edit', ['record' => $record]);
         }
 
-        // Normalise known pending-like states from either the appointment or the order
+        // Normalise pending state for both appointment and order
         $apptStatus  = is_string($record->status ?? null) ? strtolower(trim($record->status)) : null;
         $orderStatus = is_string($order->status ?? null) ? strtolower(trim($order->status)) : null;
         $payStatus   = is_string($order->payment_status ?? null) ? strtolower(trim($order->payment_status)) : null;
 
-        $isPendingAppt = in_array($apptStatus, ['pending', 'awaiting', 'awaiting_approval', 'awaiting-approval', 'awaiting_confirmation', 'awaiting-confirmation'], true);
-        $isPendingOrd  = in_array($orderStatus, ['pending', 'awaiting', 'awaiting_approval', 'awaiting-approval', 'awaiting_confirmation', 'awaiting-confirmation'], true)
-                      || in_array($payStatus,   ['pending', 'awaiting', 'awaiting_confirmation', 'awaiting-confirmation'], true);
+        $isPendingAppt = $apptStatus === 'pending';
+        $isPendingOrd  = ($orderStatus === 'pending') || ($payStatus === 'pending');
 
         if ($isPendingAppt || $isPendingOrd) {
             return url('/admin/pending-orders');

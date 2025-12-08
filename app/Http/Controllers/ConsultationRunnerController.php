@@ -82,6 +82,45 @@ class ConsultationRunnerController extends Controller
         return $resolvedId;
     }
 
+    /**
+     * Resolve the canonical consultation intent from any linked Order meta.
+     * Returns 'reorder' or 'risk_assessment' or null if unknown.
+     */
+    private function resolveOrderIntent(ConsultationSession $session): ?string
+    {
+        try {
+            if (class_exists(\App\Models\Order::class)) {
+                $order = null;
+
+                // 1) direct session link
+                $order = \App\Models\Order::where('meta->consultation_session_id', $session->id)->first();
+
+                // 2) by reference on the session
+                if (!$order && ($ref = ($session->reference ?? $session->order_reference ?? null))) {
+                    $order = \App\Models\Order::where('reference', $ref)->first();
+                }
+
+                if ($order) {
+                    $meta = is_array($order->meta ?? null) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                    $type = (string) (data_get($meta, 'type') ?? data_get($meta, 'consultation.type') ?? data_get($meta, 'consultation.mode') ?? data_get($meta, 'mode') ?? '');
+                    if ($type !== '') {
+                        $sv = \Illuminate\Support\Str::slug($type);
+                        // Treat explicit reorder-style hints only; do NOT treat "maintenance" as reorder.
+                        if (\Illuminate\Support\Str::contains($sv, 'reorder') || \Illuminate\Support\Str::contains($sv, 'repeat') || \Illuminate\Support\Str::contains($sv, 'refill')) {
+                            return 'reorder';
+                        }
+                        if (in_array($sv, ['risk-assessment','risk_assessment','raf','new','initial','maintenance','maintenance-plan'], true)) {
+                            return 'risk_assessment';
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // ignore and fall through
+        }
+        return null;
+    }
+
     public function pharmacistAdvice(ConsultationSession $session)
     {
         return $this->jump($session, 'pharmacist-advice');
@@ -114,6 +153,18 @@ class ConsultationRunnerController extends Controller
 
     public function start(ConsultationSession $session)
     {
+        // If the linked Order tells us the intent, honour that first.
+        if ($intentFromOrder = $this->resolveOrderIntent($session)) {
+            $meta = is_array($session->meta ?? null)
+                ? $session->meta
+                : (json_decode($session->meta ?? '[]', true) ?: []);
+            data_set($meta, 'consultation.type', $intentFromOrder);
+            data_set($meta, 'consultation.mode', $intentFromOrder);
+            $session->meta = $meta;
+            try { $session->save(); } catch (\Throwable $e) {}
+            return $this->jump($session, $intentFromOrder === 'reorder' ? 'reorder' : 'risk-assessment');
+        }
+
         // Honour explicit query first
         $explicit = null;
         try {
@@ -162,25 +213,34 @@ class ConsultationRunnerController extends Controller
         ];
         $view = $map[$step] ?? $map['risk-assessment'];
 
-        // Persist type intent onto the session meta so downstream resolvers remain deterministic
+        // Persist type intent onto the session meta only if:
+        // - an explicit query param requested a type, or
+        // - the session currently has no intent saved.
         $meta = is_array($session->meta ?? null)
             ? $session->meta
             : (json_decode($session->meta ?? '[]', true) ?: []);
 
-        $intent = $step === 'reorder' ? 'reorder' : 'risk_assessment';
+        $existing = (string) (data_get($meta, 'consultation.type') ?? '');
+        $explicitIntent = null;
+
         try {
             $q = request()->query('type') ?? request()->query('mode');
             if (is_string($q) && $q !== '') {
-                $sv = Str::slug($q);
-                if (str_contains($sv, 'reorder')) $intent = 'reorder';
-                if (in_array($sv, ['risk-assessment','risk_assessment','raf'], true)) $intent = 'risk_assessment';
+                $sv = \Illuminate\Support\Str::slug($q);
+                if (str_contains($sv, 'reorder')) $explicitIntent = 'reorder';
+                if (in_array($sv, ['risk-assessment','risk_assessment','raf'], true)) $explicitIntent = 'risk_assessment';
             }
         } catch (\Throwable $e) {}
 
-        data_set($meta, 'consultation.type', $intent);
-        data_set($meta, 'consultation.mode', $intent);
-        $session->meta = $meta;
-        try { $session->save(); } catch (\Throwable $e) {}
+        $computedIntent = $step === 'reorder' ? 'reorder' : 'risk_assessment';
+        $finalIntent = $explicitIntent ?: ($existing !== '' ? $existing : $computedIntent);
+
+        if ($existing === '' || $explicitIntent) {
+            data_set($meta, 'consultation.type', $finalIntent);
+            data_set($meta, 'consultation.mode', $finalIntent);
+            $session->meta = $meta;
+            try { $session->save(); } catch (\Throwable $e) {}
+        }
 
         // Resolve the correct ClinicForm id for this step and pass it to the view
         $stepKey = Str::slug($step);
@@ -207,7 +267,7 @@ class ConsultationRunnerController extends Controller
             $q = request()->query('type') ?? request()->query('mode');
             if (is_string($q) && $q !== '') {
                 $sv = Str::slug($q);
-                if (str_contains($sv, 'reorder') || str_contains($sv, 'repeat') || str_contains($sv, 'refill') || str_contains($sv, 'maintenance')) {
+                if (str_contains($sv, 'reorder') || str_contains($sv, 'repeat') || str_contains($sv, 'refill')) {
                     return true;
                 }
                 if (in_array($sv, ['risk-assessment','risk_assessment','raf'], true)) {
@@ -221,7 +281,7 @@ class ConsultationRunnerController extends Controller
         // 2) Session property if present
         if (property_exists($session, 'form_type') && is_string($session->form_type)) {
             $sv = Str::slug($session->form_type);
-            if (str_contains($sv, 'reorder') || str_contains($sv, 'repeat') || str_contains($sv, 'refill') || str_contains($sv, 'maintenance')) {
+            if (str_contains($sv, 'reorder') || str_contains($sv, 'repeat') || str_contains($sv, 'refill')) {
                 return true;
             }
             if (in_array($sv, ['risk-assessment','risk_assessment','raf'], true)) {
@@ -236,6 +296,24 @@ class ConsultationRunnerController extends Controller
 
         if ($this->isReorderMeta($meta)) {
             return true;
+        }
+
+        // 3b) Linked Order meta
+        try {
+            if (class_exists(\App\Models\Order::class)) {
+                $ord = \App\Models\Order::where('meta->consultation_session_id', $session->id)->first();
+                if (!$ord && ($ref = ($session->reference ?? $session->order_reference ?? null))) {
+                    $ord = \App\Models\Order::where('reference', $ref)->first();
+                }
+                if ($ord) {
+                    $m = is_array($ord->meta ?? null) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
+                    if ($this->isReorderMeta($m)) {
+                        return true;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // ignore order lookup issues
         }
 
         // 4) Fallback try to infer from related ApprovedOrder if we can find it
@@ -299,8 +377,7 @@ class ConsultationRunnerController extends Controller
             $sv = Str::slug($v);
             if (str_contains($sv, 'reorder') ||
                 str_contains($sv, 'repeat') ||
-                str_contains($sv, 'refill') ||
-                str_contains($sv, 'maintenance')) {
+                str_contains($sv, 'refill')) {
                 return true;
             }
         }
@@ -317,7 +394,6 @@ class ConsultationRunnerController extends Controller
             $sv = Str::slug($v);
             if (str_contains($sv, 'repeat') ||
                 str_contains($sv, 'refill') ||
-                str_contains($sv, 'maintenance') ||
                 str_contains($sv, 'reorder')) {
                 return true;
             }

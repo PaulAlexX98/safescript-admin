@@ -20,11 +20,25 @@ class AppointmentsCalendarWidget extends CalendarWidget
     protected ?string $locale = 'en-gb';
     protected function getEvents(FetchInfo $info): Collection | array | Builder
     {
-        $start = Carbon::parse($info->start);
-        $end   = Carbon::parse($info->end);
+        $rawStart = is_callable([$info, 'start']) ? $info->start() : (property_exists($info, 'start') ? $info->start : null);
+        $rawEnd   = is_callable([$info, 'end'])   ? $info->end()   : (property_exists($info, 'end')   ? $info->end   : null);
+
+        // Fallback guards
+        if (!$rawStart) { $rawStart = now()->startOfMonth()->toDateString(); }
+        if (!$rawEnd)   { $rawEnd   = now()->endOfMonth()->addDay()->toDateString(); } // FullCalendar passes end-exclusive
+
+        $start = Carbon::parse($rawStart);
+        // end from FullCalendar is exclusive; subtract a micro to make it inclusive for SQL between
+        $end   = Carbon::parse($rawEnd)->subSecond();
 
         // Month view usually requests ~4–6 weeks. Treat 28+ days as "month".
         $isMonthView = $start->diffInDays($end) >= 28;
+
+        // Aggregate map for month counts when needed
+        $counts = [];
+        $addCount = function (string $date, int $n = 1) use (&$counts) {
+            $counts[$date] = ($counts[$date] ?? 0) + $n;
+        };
 
         $events = [];
 
@@ -32,8 +46,7 @@ class AppointmentsCalendarWidget extends CalendarWidget
         $buildUrl = function (string $date) {
             $query = [
                 'filters' => [
-                    'day'    => ['value' => $date],
-                    'status' => ['values' => ['completed']], // only approved
+                    'day' => ['value' => $date],
                 ],
                 'sort' => 'start_at:asc',
             ];
@@ -47,31 +60,19 @@ class AppointmentsCalendarWidget extends CalendarWidget
                 $rows = DB::table('appointments')
                     ->selectRaw('DATE(start_at) as d, COUNT(*) as c')
                     ->whereBetween('start_at', [$start, $end])
-                    ->when(Schema::hasColumn('appointments', 'status'), function ($q) {
-                        $q->whereIn('status', ['completed', 'booked', 'confirmed']);
-                    })
                     ->groupBy('d')
                     ->get();
 
                 foreach ($rows as $r) {
-                    $date  = $r->d;
-                    $title = (string) $r->c;
-
-                    $events[] = CalendarEvent::make()
-                        ->title($title)           // show just the count like "8"
-                        ->start($date)            // YYYY-MM-DD
-                        ->end($date)              // ensure end is initialised (single-day all-day)
-                        ->allDay(true)            // render inside the day cell
-                        ->url($buildUrl($date));  // clicking opens the day in Appointments
+                    if (!empty($r->d)) {
+                        $addCount($r->d, (int) $r->c);
+                    }
                 }
             } else {
                 // Week/Day views: render individual timed events.
                 $cols = Schema::getColumnListing('appointments');
                 $rows = DB::table('appointments')
                     ->whereBetween('start_at', [$start, $end])
-                    ->when(in_array('status', $cols), function ($q) {
-                        $q->whereIn('status', ['completed', 'booked', 'confirmed']);
-                    })
                     ->orderBy('start_at')
                     ->get([
                         'id',
@@ -103,14 +104,44 @@ class AppointmentsCalendarWidget extends CalendarWidget
             }
         }
 
-        // ----- Fallback: orders.appointment_at (if no appointments or table missing) -----
-        if (empty($events) && Schema::hasTable('orders') && Schema::hasColumn('orders', 'appointment_at')) {
+        // When showing the month grid, also include counts from orders.appointment_at
+        if ($isMonthView && Schema::hasTable('orders') && Schema::hasColumn('orders', 'appointment_at')) {
+            $rows = DB::table('orders')
+                ->selectRaw('DATE(appointment_at) as d, COUNT(*) as c')
+                ->whereNotNull('appointment_at')
+                ->whereBetween('appointment_at', [$start, $end])
+                ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->whereIn('booking_status', ['completed', 'confirmed', 'pending']))
+                ->groupBy('d')
+                ->get();
+
+            foreach ($rows as $r) {
+                if (!empty($r->d)) {
+                    $addCount($r->d, (int) $r->c);
+                }
+            }
+        }
+
+        // If we have any counts, convert them to CalendarEvent items
+        if ($isMonthView && !empty($counts)) {
+            ksort($counts);
+            foreach ($counts as $date => $count) {
+                $events[] = CalendarEvent::make()
+                    ->title((string) $count)
+                    ->start($date)
+                    ->end($date)
+                    ->allDay(true)
+                    ->url($buildUrl($date));
+            }
+        }
+
+        // ----- Fallback: orders.appointment_at (non-month views OR when appointments produced nothing) -----
+        if (Schema::hasTable('orders') && Schema::hasColumn('orders', 'appointment_at') && (!$isMonthView ? true : empty($events))) {
             if ($isMonthView) {
                 $rows = DB::table('orders')
                     ->selectRaw('DATE(appointment_at) as d, COUNT(*) as c')
                     ->whereNotNull('appointment_at')
                     ->whereBetween('appointment_at', [$start, $end])
-                    ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->whereIn('booking_status', ['completed', 'confirmed']))
+                    ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->whereIn('booking_status', ['completed', 'confirmed', 'pending']))
                     ->groupBy('d')
                     ->get();
 
@@ -127,7 +158,7 @@ class AppointmentsCalendarWidget extends CalendarWidget
                 $rows = DB::table('orders')
                     ->whereNotNull('appointment_at')
                     ->whereBetween('appointment_at', [$start, $end])
-                    ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->whereIn('booking_status', ['completed', 'confirmed']))
+                    ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->whereIn('booking_status', ['completed', 'confirmed', 'pending']))
                     ->orderBy('appointment_at')
                     ->get([
                         'appointment_at',
@@ -157,7 +188,7 @@ class AppointmentsCalendarWidget extends CalendarWidget
             'firstDay'      => 1, // Monday start for UK
             'height'        => 'auto',
             'headerToolbar' => [
-                'left'   => 'prev,next today',
+                'left'   => 'prevYear,prev,next,nextYear today',
                 'center' => 'title',
                 'right'  => 'dayGridMonth,timeGridWeek,timeGridDay,listWeek',
             ],
@@ -175,7 +206,7 @@ class AppointmentsCalendarWidget extends CalendarWidget
             'dateClick' => $this->js(<<<'JS'
                 (info) => {
                     const d = info.dateStr;
-                    const url = `/admin/appointments?filters[day][value]=${encodeURIComponent(d)}&filters[status][values][0]=completed&sort=start_at:asc`;
+                    const url = `/admin/appointments?filters[day][value]=${encodeURIComponent(d)}&sort=start_at:asc`;
                     window.location.href = url;
                 }
             JS),
@@ -204,6 +235,15 @@ class AppointmentsCalendarWidget extends CalendarWidget
                             border: 1px solid rgba(0,0,0,0.15) !important;
                             box-shadow: none !important;
                             color: inherit !important;
+                        }
+                        /* Ensure toolbar buttons are actually clickable */
+                        .fc .fc-toolbar.fc-header-toolbar {
+                            position: relative !important;
+                            z-index: 50 !important;
+                            pointer-events: auto !important;
+                        }
+                        .fc .fc-button {
+                            pointer-events: auto !important;
                         }
 
                         /* List views */

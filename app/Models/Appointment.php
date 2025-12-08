@@ -22,6 +22,26 @@ class Appointment extends Model
         'end_at'   => 'datetime',
     ];
 
+    /**
+     * Default attributes so every new appointment starts as waiting
+     */
+    protected $attributes = [
+        'status' => 'waiting',
+    ];
+
+    /**
+     * Ensure blank status always becomes waiting
+     */
+    protected static function booting(): void
+    {
+        static::creating(function ($appointment) {
+            $s = is_string($appointment->status ?? null) ? trim($appointment->status) : '';
+            if ($s === '') {
+                $appointment->status = 'waiting';
+            }
+        });
+    }
+
     protected static function booted(): void
     {
         static::creating(function (Appointment $appointment) {

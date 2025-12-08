@@ -452,7 +452,7 @@ class ApprovedOrder extends Model
             if (is_numeric($v)) return ((int) $v) === 1;
             if (is_string($v) && $v !== '') {
                 $sv = \Illuminate\Support\Str::slug($v);
-                if (in_array($sv, ['1','true','yes','reorder','repeat','refill','maintenance'], true)) return true;
+                if (in_array($sv, ['1','true','yes','reorder','repeat','refill'], true)) return true;
             }
         }
 
@@ -470,8 +470,7 @@ class ApprovedOrder extends Model
             $sv = \Illuminate\Support\Str::slug($v);
             if (str_contains($sv, 'reorder') ||
                 str_contains($sv, 'repeat') ||
-                str_contains($sv, 'refill') ||
-                str_contains($sv, 'maintenance')) {
+                str_contains($sv, 'refill')) {
                 return true;
             }
         }
@@ -488,7 +487,6 @@ class ApprovedOrder extends Model
             $sv = \Illuminate\Support\Str::slug($v);
             if (str_contains($sv, 'repeat') ||
                 str_contains($sv, 'refill') ||
-                str_contains($sv, 'maintenance') ||
                 str_contains($sv, 'reorder')) {
                 return true;
             }

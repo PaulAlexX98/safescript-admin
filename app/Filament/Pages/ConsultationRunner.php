@@ -109,6 +109,24 @@ class ConsultationRunner extends Page
                     }
                 }
 
+                // Ensure contact details exist for Click & Drop
+                $email = $user->email ?? data_get($meta, 'patient.email');
+                $phone = $user->phone ?? data_get($meta, 'patient.phone');
+
+                if ($email && ! data_get($meta, 'patient.email')) {
+                    data_set($meta, 'patient.email', $email);
+                }
+                if ($phone && ! data_get($meta, 'patient.phone')) {
+                    data_set($meta, 'patient.phone', $phone);
+                }
+                // Mirror to shipping.* for services that read contact from shipping
+                if ($email && ! data_get($meta, 'shipping.email')) {
+                    data_set($meta, 'shipping.email', $email);
+                }
+                if ($phone && ! data_get($meta, 'shipping.phone')) {
+                    data_set($meta, 'shipping.phone', $phone);
+                }
+
                 // Also mirror to patient.shipping_* for legacy readers
                 $map = [
                     'address1' => 'patient.shipping_address1',
@@ -318,6 +336,10 @@ class ConsultationRunner extends Page
                                     ?? data_get($this->order?->user, 'shipping_country')
                                     ?? 'GB'
                                 ),
+                'email'       => data_get($this->meta, 'patient.email')
+                                    ?? data_get($this->order?->user, 'email'),
+                'phone'       => data_get($this->meta, 'patient.phone')
+                                    ?? data_get($this->order?->user, 'phone'),
             ];
 
             // Build a lightweight patient object for the shipping service
@@ -351,7 +373,13 @@ class ConsultationRunner extends Page
             $out = app(\App\Services\Shipping\ClickAndDrop::class)->createOrder(
                 $this->order,
                 $patientObj,
-                ['shipping' => $ship]
+                [
+                    'shipping' => $ship,
+                    'contact'  => [
+                        'email' => $ship['email'] ?? ($patientObj->email ?? null),
+                        'phone' => $ship['phone'] ?? ($patientObj->phone ?? null),
+                    ],
+                ]
             );
 
             // Persist shipping details onto the order meta for visibility and PDFs
@@ -360,6 +388,19 @@ class ConsultationRunner extends Page
             data_set($oMeta, 'shipping.tracking', $out['tracking'] ?? null);
             data_set($oMeta, 'shipping.label', $out['label_path'] ?? null);
             data_set($oMeta, 'shipping.raw', $out['raw'] ?? null);
+            // Persist contact details into order meta for PDFs and admin
+            if (! data_get($oMeta, 'shipping.email') && ($ship['email'] ?? null)) {
+                data_set($oMeta, 'shipping.email', $ship['email']);
+            }
+            if (! data_get($oMeta, 'shipping.phone') && ($ship['phone'] ?? null)) {
+                data_set($oMeta, 'shipping.phone', $ship['phone']);
+            }
+            if (! data_get($oMeta, 'patient.email') && ($patientObj->email ?? null)) {
+                data_set($oMeta, 'patient.email', $patientObj->email);
+            }
+            if (! data_get($oMeta, 'patient.phone') && ($patientObj->phone ?? null)) {
+                data_set($oMeta, 'patient.phone', $patientObj->phone);
+            }
             if ($this->order) {
                 $this->order->meta = $oMeta;
                 $this->order->save();

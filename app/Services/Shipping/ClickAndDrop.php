@@ -72,7 +72,7 @@ class ClickAndDrop
             ],
         ]);
 
-        // 1) If explicit shipping override is provided, use it exclusively
+       
         // 1 use explicit shipping override if present
         $explicit = (isset($overrides['shipping']) && is_array($overrides['shipping'])) ? $overrides['shipping'] : null;
         if ($explicit) {
@@ -116,14 +116,43 @@ class ClickAndDrop
             }
         }
 
+        // Normalise country code to ISO alpha-2 where possible
+        $countryCode = $this->normalizeCountryCode($countryCode ?? '');
+
         // debug the chosen source and values
         \Log::info('clickanddrop.payload.resolved', [
             'source' => $source,
             'resolved' => compact('addr1','addr2','city','postcode','countryCode'),
         ]);
         
-        $email   = (string) (data_get($patient, 'email') ?? '');
-        $phone   = (string) (data_get($patient, 'phone') ?? data_get($patient, 'mobile', ''));
+        // Resolve contact details with robust fallbacks
+        // Priority: patient meta -> order meta shipping -> order user -> order root
+        $oMeta = isset($oMeta) ? $oMeta : (is_array($order->meta ?? null) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []));
+        $mShip = (array) data_get($oMeta, 'shipping', []);
+
+        $email = (string) (
+            data_get($patient, 'email') ?:
+            data_get($mShip, 'email') ?:
+            data_get($order, 'user.email') ?:
+            data_get($order, 'email') ?:
+            ''
+        );
+
+        $phoneRaw = (string) (
+            data_get($patient, 'phone') ?:
+            data_get($patient, 'mobile') ?:
+            data_get($mShip, 'phone') ?:
+            data_get($order, 'user.phone') ?:
+            data_get($order, 'phone') ?:
+            ''
+        );
+
+        // Light phone normalisation strip spaces and ensure leading +
+        $phone = preg_replace('/\s+/', '', $phoneRaw ?? '');
+        if ($phone && $phone[0] !== '+' && preg_match('/^0\d{9,}$/', $phone)) {
+            // Assume UK if leading 0 and no country code
+            $phone = '+44' . ltrim($phone, '0');
+        }
 
         // Weight fallback — if you measure per item, sum; else default 100g
         $weightG = (int) (data_get($order, 'weight_g', 0));
@@ -148,8 +177,12 @@ class ClickAndDrop
                         'postcode' => $postcode,
                         'countryCode' => $countryCode ?: 'GB',
                     ],
+                    // Provide both common keys used by Royal Mail integrations
+                    // so email/phone appear in Click & Drop UI regardless of schema variant.
                     'email' => $email,
+                    'emailAddress' => $email,
                     'phone' => $phone,
+                    'telephoneNumber' => $phone,
                 ],
                 'packages' => [[
                     'packageFormatIdentifier' => $packageId,
@@ -162,6 +195,8 @@ class ClickAndDrop
                 'includeLabelInResponse' => true,
             ]],
         ];
+
+        Log::info('clickanddrop.contact', ['ref' => $ref, 'email' => $email, 'phone' => $phone]);
 
         // Fire the request using Bearer auth and JSON body
         $url = $base . '/orders';
@@ -206,6 +241,33 @@ class ClickAndDrop
             'response' => $data,
             'label_paths' => $saved,
         ];
+    }
+
+    /**
+     * Attempt to coerce a human country string into ISO alpha-2 code.
+     * Defaults to GB for any unrecognised/long value.
+     */
+    private function normalizeCountryCode(string $value): string
+    {
+        $v = strtoupper(trim($value));
+        if ($v === '') {
+            return 'GB';
+        }
+        // Already an alpha-2 code
+        if (strlen($v) === 2) {
+            return $v;
+        }
+        // Common mappings
+        $map = [
+            'UNITED KINGDOM' => 'GB',
+            'UK' => 'GB',
+            'GREAT BRITAIN' => 'GB',
+            'ENGLAND' => 'GB',
+            'SCOTLAND' => 'GB',
+            'WALES' => 'GB',
+            'NORTHERN IRELAND' => 'GB',
+        ];
+        return $map[$v] ?? 'GB';
     }
 
     private function iso8601($value): string

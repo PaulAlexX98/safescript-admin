@@ -234,7 +234,7 @@ class StartConsultation
             $isReorder = (bool) (
                 Arr::get($order->meta ?? [], 'is_reorder')
                 || Arr::get($order->meta ?? [], 'reorder')
-                || Str::contains((string) $treat, ['reorder','repeat','maintenance'])
+                || Str::contains((string) $treat, ['reorder','repeat'])
                 || Str::contains((string) $service, ['reorder','repeat'])
             );
         }
