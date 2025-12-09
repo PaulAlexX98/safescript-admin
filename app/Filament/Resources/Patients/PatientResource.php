@@ -11,6 +11,7 @@ use App\Filament\Resources\Patients\Schemas\PatientInfolist;
 use App\Filament\Resources\Patients\Tables\PatientsTable;
 use App\Models\Patient;
 use BackedEnum;
+use Illuminate\Database\Eloquent\Model;
 use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
@@ -128,6 +129,68 @@ class PatientResource extends Resource
     public static function getRelations(): array
     {
         return [];
+    }
+
+    public static function getGloballySearchableAttributes(): array
+    {
+        // Limit to real DB columns to avoid "unknown column" errors
+        return [
+            'internal_id',
+            'first_name',
+            'last_name',
+            'email',
+            'phone',
+        ];
+    }
+
+    public static function getGlobalSearchResultTitle(Model $record): string
+    {
+        // Prefer full name if available
+        $first = is_string($record->first_name ?? null) ? trim($record->first_name) : '';
+        $last  = is_string($record->last_name ?? null) ? trim($record->last_name) : '';
+        $full  = trim(trim($first . ' ' . $last));
+
+        if ($full !== '') {
+            return $full;
+        }
+
+        if (is_string($record->internal_id ?? null) && trim($record->internal_id) !== '') {
+            return 'Patient ' . trim($record->internal_id);
+        }
+
+        return 'Patient #' . $record->getKey();
+    }
+
+    public static function getGlobalSearchResultDetails(Model $record): array
+    {
+        $details = [];
+
+        if (is_string($record->email ?? null) && trim($record->email) !== '') {
+            $details['Email'] = trim($record->email);
+        }
+
+        if (is_string($record->phone ?? null) && trim($record->phone) !== '') {
+            $details['Phone'] = trim($record->phone);
+        }
+
+        $rawDob = $record->dob ?? optional($record->user)->dob ?? null;
+        if ($rawDob) {
+            try {
+                $dob = $rawDob instanceof \Carbon\Carbon
+                    ? $rawDob
+                    : \Carbon\Carbon::parse($rawDob);
+
+                $details['DOB'] = $dob->format('d-m-Y');
+            } catch (\Throwable $e) {
+                // ignore parse errors
+            }
+        }
+
+        if (is_string($record->internal_id ?? null) && trim($record->internal_id) !== '') {
+            $details['ID'] = trim($record->internal_id);
+        }
+
+        return $details;
     }
 
     public static function getPages(): array

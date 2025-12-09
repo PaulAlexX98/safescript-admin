@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\View;
 use Log;
 use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\TextInput;
 use App\Filament\Resources\ApprovedOrders\Pages\ListApprovedOrders;
 use App\Filament\Resources\ApprovedOrders\Schemas\ApprovedOrderForm;
 use App\Models\ApprovedOrder;
@@ -382,7 +383,39 @@ class ApprovedOrderResource extends Resource
                         }
                         return $name ?: '—';
                     })
-                    ->searchable()
+                    ->searchable(true, function (Builder $query, string $search): Builder {
+                        $like = '%' . $search . '%';
+
+                        return $query->where(function (Builder $q) use ($like) {
+                            // Search common name/email shapes inside meta JSON
+                            $q->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.firstName')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.first_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.lastName')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.last_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.full_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email')) LIKE ?", [$like])
+
+                              // Patient/customer nested shapes
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.first_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.last_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.first_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.last_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.name')) LIKE ?", [$like])
+
+                              // Related user model (first_name/last_name/email)
+                              ->orWhereHas('user', function ($uq) use ($like) {
+                                  $uq->where('first_name', 'like', $like)
+                                     ->orWhere('last_name', 'like', $like)
+                                     ->orWhereRaw("concat_ws(' ', first_name, last_name) like ?", [$like])
+                                     ->orWhere('email', 'like', $like);
+                              })
+
+                              // Direct order reference search
+                              ->orWhere('reference', 'like', $like);
+                        });
+                    })
                     ->toggleable(),
             ])
             ->filters([
@@ -859,8 +892,18 @@ class ApprovedOrderResource extends Resource
                                             ->hiddenLabel()
                                             ->label('')
                                             ->columnSpan(2)
-                                            ->getStateUsing(fn ($record) => $record->products_total_minor)
-                                            ->formatStateUsing(fn ($state) => '£' . number_format(((int) $state) / 100, 2))
+                                            ->getStateUsing(function ($record) {
+                                                $meta = is_array($record->meta)
+                                                    ? $record->meta
+                                                    : (json_decode($record->meta ?? '[]', true) ?: []);
+                                                return data_get($meta, 'products_total_minor');
+                                            })
+                                            ->formatStateUsing(function ($state) {
+                                                if ($state === null || $state === '') {
+                                                    return '£0.00';
+                                                }
+                                                return '£' . number_format(((int) $state) / 100, 2);
+                                            })
                                             ->placeholder('£0.00')
                                             ->extraAttributes(['class' => 'text-right tabular-nums']),
                                     ]),
@@ -1067,7 +1110,277 @@ class ApprovedOrderResource extends Resource
                             // Fallback to generic start route with type hint
                             return redirect()->route('consultations.runner.start', $params);
                         }),
-            
+
+                    Action::make('editProduct')
+                        ->label('Edit product')
+                        ->color('warning')
+                        ->icon('heroicon-o-pencil-square')
+                        ->modalHeading('Edit product')
+                        ->form(function ($record): array {
+                            // Decode meta safely
+                            $meta = is_array($record->meta)
+                                ? $record->meta
+                                : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                            // Try to locate the primary line item from common locations
+                            $items = null;
+                            foreach ([
+                                'items',
+                                'lines',
+                                'products',
+                                'line_items',
+                                'cart.items',
+                            ] as $path) {
+                                $arr = data_get($meta, $path);
+                                if (is_array($arr) && count($arr)) {
+                                    $items = $arr;
+                                    break;
+                                }
+                            }
+
+                            // If we have a single associative product, wrap it as one line
+                            if (is_array($items)) {
+                                $isList = array_keys($items) === range(0, count($items) - 1);
+                                if (
+                                    ! $isList &&
+                                    (isset($items['name']) || isset($items['title']) || isset($items['product_name']))
+                                ) {
+                                    $items = [$items];
+                                }
+                            }
+
+                            $first = (is_array($items) && count($items)) ? $items[0] : [];
+
+                            $name = '';
+                            $variation = '';
+                            $qty = 1;
+                            $unitMinor = null;
+
+                            if (is_array($first)) {
+                                $name = (string) ($first['name'] ?? $first['title'] ?? $first['product_name'] ?? '');
+                                $qty  = (int) ($first['qty'] ?? $first['quantity'] ?? 1);
+                                if ($qty < 1) {
+                                    $qty = 1;
+                                }
+
+                                // Resolve a variation/strength label from common keys
+                                $variation = (string) (
+                                    data_get($first, 'variations')
+                                    ?? data_get($first, 'variation')
+                                    ?? data_get($first, 'optionLabel')
+                                    ?? data_get($first, 'variant')
+                                    ?? data_get($first, 'dose')
+                                    ?? data_get($first, 'strength')
+                                    ?? data_get($first, 'option')
+                                    ?? ''
+                                );
+
+                                // Try to find a per-unit minor price
+                                foreach ([
+                                    'unitMinor', 'unit_minor', 'unitPriceMinor', 'unit_price_minor',
+                                    'unitPricePennies', 'unit_price_pennies',
+                                    'priceMinor', 'price_minor', 'priceInMinor', 'priceInPence',
+                                ] as $key) {
+                                    if (array_key_exists($key, $first) && $first[$key] !== null && $first[$key] !== '') {
+                                        $val = $first[$key];
+                                        if (is_numeric($val)) {
+                                            $unitMinor = (int) $val;
+                                        }
+                                        break;
+                                    }
+                                }
+
+                                // Fallback to a totalMinor-style field divided by qty
+                                if ($unitMinor === null) {
+                                    foreach ([
+                                        'lineTotalMinor', 'line_total_minor', 'totalMinor', 'total_minor',
+                                        'amountMinor', 'amount_minor',
+                                    ] as $key) {
+                                        if (array_key_exists($key, $first) && $first[$key] !== null && $first[$key] !== '') {
+                                            $val = $first[$key];
+                                            if (is_numeric($val)) {
+                                                $totalMinor = (int) $val;
+                                                $unitMinor = (int) round($totalMinor / max(1, $qty));
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            $unitPrice = $unitMinor !== null
+                                ? number_format($unitMinor / 100, 2, '.', '')
+                                : '';
+
+                            return [
+                                TextInput::make('name')
+                                    ->label('Product name')
+                                    ->default($name)
+                                    ->required(),
+                                TextInput::make('variation')
+                                    ->label('Variation or strength')
+                                    ->default($variation),
+                                TextInput::make('qty')
+                                    ->label('Quantity')
+                                    ->numeric()
+                                    ->minValue(1)
+                                    ->default($qty ?: 1)
+                                    ->required(),
+                                TextInput::make('unit_price')
+                                    ->label('Unit price £')
+                                    ->numeric()
+                                    ->default($unitPrice)
+                                    ->required(),
+                            ];
+                        })
+                        ->action(function ($record, array $data): void {
+                            // Decode meta safely
+                            $meta = is_array($record->meta)
+                                ? $record->meta
+                                : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                            // Locate items array again
+                            $items = null;
+                            $itemsPath = null;
+                            foreach ([
+                                'items',
+                                'lines',
+                                'products',
+                                'line_items',
+                                'cart.items',
+                            ] as $path) {
+                                $arr = data_get($meta, $path);
+                                if (is_array($arr) && count($arr)) {
+                                    $items = $arr;
+                                    $itemsPath = $path;
+                                    break;
+                                }
+                            }
+
+                            // If we have a single associative product, wrap it
+                            if (is_array($items)) {
+                                $isList = array_keys($items) === range(0, count($items) - 1);
+                                if (
+                                    ! $isList &&
+                                    (isset($items['name']) || isset($items['title']) || isset($items['product_name']))
+                                ) {
+                                    $items = [$items];
+                                }
+                            }
+
+                            if (! is_array($items) || empty($items)) {
+                                $items = [[]];
+                                $itemsPath = $itemsPath ?? 'items';
+                            }
+
+                            $qty = max(1, (int) ($data['qty'] ?? 1));
+                            $name = trim((string) ($data['name'] ?? ''));
+                            $variation = trim((string) ($data['variation'] ?? ''));
+                            $unitPrice = (float) ($data['unit_price'] ?? 0);
+                            $unitMinor = (int) round($unitPrice * 100);
+                            if ($unitMinor < 0) {
+                                $unitMinor = 0;
+                            }
+                            $lineTotalMinor = $unitMinor * $qty;
+
+                            // Update the first line item
+                            $first = $items[0] ?? [];
+                            if (! is_array($first)) {
+                                $first = [];
+                            }
+
+                            $first['name'] = $name !== '' ? $name : ($first['name'] ?? 'Item');
+                            $first['qty'] = $qty;
+                            $first['quantity'] = $qty;
+
+                            if ($variation !== '') {
+                                $first['variations'] = $variation;
+                                $first['variation'] = $variation;
+                                $first['optionLabel'] = $variation;
+                            }
+
+                            $first['unitMinor'] = $unitMinor;
+                            $first['unit_minor'] = $unitMinor;
+                            $first['priceMinor'] = $unitMinor;
+                            $first['price_minor'] = $unitMinor;
+
+                            $first['lineTotalMinor'] = $lineTotalMinor;
+                            $first['line_total_minor'] = $lineTotalMinor;
+                            $first['totalMinor'] = $lineTotalMinor;
+                            $first['total_minor'] = $lineTotalMinor;
+
+                            $items[0] = $first;
+
+                            // Write items back into meta at the same path we found them
+                            if ($itemsPath === null) {
+                                $meta['items'] = $items;
+                            } else {
+                                data_set($meta, $itemsPath, $items);
+                            }
+
+                            // Also update selectedProduct shape if present or if this is a single-product order
+                            $sp = is_array(data_get($meta, 'selectedProduct'))
+                                ? data_get($meta, 'selectedProduct')
+                                : [];
+
+                            $sp['name'] = $first['name'] ?? $name;
+                            if ($variation !== '') {
+                                $sp['variations'] = $variation;
+                                $sp['variation'] = $variation;
+                                $sp['optionLabel'] = $variation;
+                            }
+                            $sp['qty'] = $qty;
+                            $sp['quantity'] = $qty;
+                            $sp['priceMinor'] = $unitMinor;
+                            $sp['price_minor'] = $unitMinor;
+                            $sp['lineTotalMinor'] = $lineTotalMinor;
+                            $sp['line_total_minor'] = $lineTotalMinor;
+
+                            $meta['selectedProduct'] = $sp;
+
+                            // Recalculate a simple products_total_minor sum
+                            $sum = 0;
+                            foreach ($items as $it) {
+                                if (! is_array($it)) {
+                                    continue;
+                                }
+                                $line = null;
+                                foreach ([
+                                    'lineTotalMinor',
+                                    'line_total_minor',
+                                    'totalMinor',
+                                    'total_minor',
+                                    'amountMinor',
+                                    'amount_minor',
+                                ] as $k) {
+                                    if (isset($it[$k]) && is_numeric($it[$k])) {
+                                        $line = (int) $it[$k];
+                                        break;
+                                    }
+                                }
+                                if ($line === null && isset($it['unitMinor'])) {
+                                    $line = (int) $it['unitMinor'] * max(1, (int) ($it['qty'] ?? $it['quantity'] ?? 1));
+                                }
+                                if ($line !== null) {
+                                    $sum += $line;
+                                }
+                            }
+                            if ($sum > 0) {
+                                // Store the total only inside meta
+                                $meta['products_total_minor'] = $sum;
+                            }
+
+                            // Save back to the approved order
+                            $record->meta = $meta;
+                            $record->save();
+
+                            Notification::make()
+                                ->success()
+                                ->title('Product updated')
+                                ->body('Product details have been updated for this order.')
+                                ->send();
+                        }),
+
                         Action::make('addAdminNote')
                                 ->label('Add Admin Note')
                                 ->color('primary')

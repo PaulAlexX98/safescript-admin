@@ -114,18 +114,6 @@ class AppointmentResource extends Resource
                     ->hidden()
                     ->dehydrated(false)
                     ->columnSpan(6),
-
-                \Filament\Forms\Components\Select::make('status')
-                    ->label('Attendance')
-                    ->options([
-                        'waiting'       => 'Waiting',
-                        'attended'      => 'Attended',
-                        'not_attended'  => 'Not attended',
-                    ])
-                    ->default('waiting')
-                    ->native(false)
-                    ->searchable()
-                    ->columnSpan(6),
             ]);
     }
 
@@ -133,7 +121,12 @@ class AppointmentResource extends Resource
     {
         return $table
             ->columns([
-                TextColumn::make('start_at')->label('When')->dateTime('d M Y, H:i')->sortable()->searchable(),
+                TextColumn::make('start_at')
+                    ->label('When')
+                    ->dateTime('d M Y, H:i')
+                    ->sortable()
+                    ->searchable(),
+
                 TextColumn::make('reference')
                     ->label('Ref')
                     ->getStateUsing(function ($record) {
@@ -143,62 +136,71 @@ class AppointmentResource extends Resource
 
                         $ref = static::resolveOrderRef($record);
 
-                        return (is_string($ref) && trim($ref) !== '')
-                            ? trim($ref)
-                            : '';
+                        if (is_string($ref)) {
+                            $r = trim($ref);
+                            return ($r !== '' && $r !== '-') ? $r : '';
+                        }
+                        return '';
                     })
                     ->toggleable()
                     ->searchable(true, function (Builder $query, string $search): Builder {
                         $like = "%" . $search . "%";
 
                         return $query->where(function ($q) use ($like) {
-                            // search the appointment's own reference
                             $q->where('order_reference', 'like', $like)
-                              // plus any linked order reference
-                              ->orWhereExists(function ($sub) use ($like) {
-                                  $sub->select(\DB::raw('1'))
-                                      ->from('orders')
-                                      ->whereColumn('orders.id', 'appointments.order_id')
-                                      ->where('orders.reference', 'like', $like);
-                              });
+                            ->orWhereExists(function ($sub) use ($like) {
+                                $sub->select(\DB::raw('1'))
+                                    ->from('orders')
+                                    ->whereColumn('orders.id', 'appointments.order_id')
+                                    ->where('orders.reference', 'like', $like);
+                            });
                         });
                     }),
+
                 TextColumn::make('order_item')
                     ->label('Item')
                     ->getStateUsing(function ($record) {
-                        if (!$record) return '—';
+                        if (! $record) {
+                            return '—';
+                        }
 
                         $findOrder = function () use ($record) {
                             // 1 direct link via order_id
                             try {
-                                if (\Illuminate\Support\Facades\Schema::hasColumn('appointments','order_id') && !empty($record->order_id)) {
+                                if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'order_id') && ! empty($record->order_id)) {
                                     $ord = \App\Models\Order::find($record->order_id);
-                                    if ($ord) return $ord;
+                                    if ($ord) {
+                                        return $ord;
+                                    }
                                 }
-                            } catch (\Throwable $e) {}
+                            } catch (\Throwable $e) {
+                            }
 
                             // 2 match by stored appointment time in order meta
                             try {
-                                if (!empty($record->start_at)) {
-                                    $s = \Carbon\Carbon::parse($record->start_at);
+                                if (! empty($record->start_at)) {
+                                    $s      = \Carbon\Carbon::parse($record->start_at);
                                     $isoUtc = $s->copy()->setTimezone('UTC')->toIso8601String();
                                     $ymsLon = $s->copy()->setTimezone('Europe/London')->format('Y-m-d H:i:s');
 
-                                    foreach (['appointment_start_at','appointment_at'] as $key) {
+                                    foreach (['appointment_start_at', 'appointment_at'] as $key) {
                                         $ord = \App\Models\Order::query()
                                             ->whereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.$key')) in (?,?)", [$isoUtc, $ymsLon])
                                             ->orderByDesc('id')
-                                            ->first(['id','meta']);
-                                        if ($ord) return $ord;
+                                            ->first(['id', 'meta']);
+                                        if ($ord) {
+                                            return $ord;
+                                        }
                                     }
                                 }
-                            } catch (\Throwable $e) {}
+                            } catch (\Throwable $e) {
+                            }
 
                             return null;
                         };
 
                         $ord = $findOrder();
-                        if (!$ord) {
+                        if (! $ord) {
                             $name = is_string($record->service_name ?? null) ? trim($record->service_name) : '';
                             if ($name === '') {
                                 $name = is_string($record->service ?? null) ? trim($record->service) : '';
@@ -208,48 +210,54 @@ class AppointmentResource extends Resource
 
                         $meta = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
 
-                        // Extract the first item name variation from common shapes
-                        $name = null; $variation = null; $qty = null;
+                        $name = null;
+                        $variation = null;
+                        $qty = null;
 
                         $sel = data_get($meta, 'selectedProduct');
                         if (is_array($sel)) {
-                            $name = (string) ($sel['name'] ?? '');
+                            $name      = (string) ($sel['name'] ?? '');
                             $variation = (string) ($sel['variation'] ?? $sel['strength'] ?? '');
-                            $qty = isset($sel['qty']) ? (int) $sel['qty'] : $qty;
+                            $qty       = isset($sel['qty']) ? (int) $sel['qty'] : $qty;
                         }
 
-                        if (!$name) {
+                        if (! $name) {
                             $line0 = data_get($meta, 'lines.0');
                             if (is_array($line0)) {
-                                $name = (string) ($line0['name'] ?? '');
+                                $name      = (string) ($line0['name'] ?? '');
                                 $variation = (string) ($line0['variation'] ?? '');
-                                $qty = isset($line0['qty']) ? (int) $line0['qty'] : $qty;
+                                $qty       = isset($line0['qty']) ? (int) $line0['qty'] : $qty;
                             }
                         }
 
-                        if (!$name) {
+                        if (! $name) {
                             $item0 = data_get($meta, 'items.0');
                             if (is_array($item0)) {
-                                $name = (string) ($item0['name'] ?? '');
+                                $name      = (string) ($item0['name'] ?? '');
                                 $variation = (string) ($item0['variations'] ?? $item0['strength'] ?? '');
-                                $qty = isset($item0['qty']) ? (int) $item0['qty'] : $qty;
+                                $qty       = isset($item0['qty']) ? (int) $item0['qty'] : $qty;
                             }
                         }
 
-                        if (!$name) {
-                            $name = (string) (data_get($meta,'service') ?? '');
+                        if (! $name) {
+                            $name = (string) (data_get($meta, 'service') ?? '');
                         }
 
-                        $name = is_string($name) ? trim($name) : '';
+                        $name      = is_string($name) ? trim($name) : '';
                         $variation = is_string($variation) ? trim($variation) : '';
                         $qtySuffix = ' × ' . (($qty !== null && $qty > 0) ? $qty : 1);
 
-                        if ($name === '' && $variation === '') return '—';
-                        if ($name !== '' && $variation !== '') return $name.' — '.$variation.$qtySuffix;
-                        return ($name !== '' ? $name : $variation).$qtySuffix;
+                        if ($name === '' && $variation === '') {
+                            return '—';
+                        }
+                        if ($name !== '' && $variation !== '') {
+                            return $name . ' — ' . $variation . $qtySuffix;
+                        }
+                        return ($name !== '' ? $name : $variation) . $qtySuffix;
                     })
                     ->searchable(true, function (Builder $query, string $search): Builder {
                         $like = "%" . $search . "%";
+
                         return $query
                             ->whereExists(function ($sub) use ($like) {
                                 $sub->select(\DB::raw('1'))
@@ -257,169 +265,125 @@ class AppointmentResource extends Resource
                                     ->whereColumn('orders.id', 'appointments.order_id')
                                     ->where(function ($q) use ($like) {
                                         $q->whereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.selectedProduct.name')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.selectedProduct.title')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.selectedProduct.variation')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.selectedProduct.strength')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.selectedProduct.title')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.selectedProduct.variation')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.selectedProduct.strength')) like ?", [$like])
 
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.lines[0].name')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.lines[0].title')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.lines[0].variation')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.lines[0].name')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.lines[0].title')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.lines[0].variation')) like ?", [$like])
 
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].name')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].title')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].variations')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].strength')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].name')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].title')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].variations')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.items[0].strength')) like ?", [$like])
 
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.cart.items[0].name')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.cart.items[0].title')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.cart.items[0].name')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.cart.items[0].title')) like ?", [$like])
 
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.product.name')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.product.title')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.product_name')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.product.name')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.product.title')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.product_name')) like ?", [$like])
 
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.treatment')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.treatment.name')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.treatment_name')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.treatment')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.treatment.name')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.treatment_name')) like ?", [$like])
 
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.medicine')) like ?", [$like])
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.medicine.name')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.medicine')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.medicine.name')) like ?", [$like])
 
-                                          ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.service')) like ?", [$like])
+                                        ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.service')) like ?", [$like])
 
-                                          ->orWhereRaw("CAST(orders.meta AS CHAR) like ?", [$like]);
+                                        ->orWhereRaw("CAST(orders.meta AS CHAR) like ?", [$like]);
                                     });
                             })
                             ->orWhere(function ($q) use ($like) {
                                 $q->where('service_name', 'like', $like)
-                                  ->orWhere('service', 'like', $like)
-                                  ->orWhere('service_slug', 'like', $like);
+                                ->orWhere('service', 'like', $like)
+                                ->orWhere('service_slug', 'like', $like);
                             });
                     })
                     ->wrap()
                     ->toggleable(),
+
                 TextColumn::make('patient')
                     ->label('Patient')
                     ->getStateUsing(function ($record) {
-                        if (!$record) return '—';
-
-                        // 1) Prefer explicit patient_name on the appointment
-                        $pn = is_string($record->patient_name ?? null) ? trim($record->patient_name) : '';
-                        if ($pn !== '') return $pn;
-
-                        // 2) Try first_name / last_name on the appointment row
-                        $first = is_string($record->first_name ?? null) ? trim($record->first_name) : '';
-                        $last  = is_string($record->last_name ?? null) ? trim($record->last_name) : '';
-                        $name  = trim(trim($first.' '.$last));
-                        if ($name !== '') return $name;
-
-                        // Helper to extract a display name from an order/meta shape
-                        $extractName = function ($meta, $order = null) {
-                            $firstKeys = [
-                                'first_name','firstName','first','given_name','givenName',
-                                'patient.first_name','patient.firstName','patient.first','patient.given_name','patient.givenName',
-                                'customer.first_name','customer.firstName','customer.first','customer.given_name','customer.givenName',
-                                'billing_first_name','shipping_first_name',
-                            ];
-                            $lastKeys  = [
-                                'last_name','lastName','last','family_name','familyName','surname',
-                                'patient.last_name','patient.lastName','patient.last','patient.family_name','patient.familyName',
-                                'customer.last_name','customer.lastName','customer.last','customer.family_name','customer.familyName',
-                                'billing_last_name','shipping_last_name',
-                            ];
-                            $singleKeys = [
-                                'patient.full_name','customer.full_name','full_name',
-                                'patient.name','customer.name','name','billing_name','shipping_name',
-                            ];
-
-                            // Try order columns if provided
-                            if ($order) {
-                                $of = is_string($order->first_name ?? null) ? trim($order->first_name) : '';
-                                $ol = is_string($order->last_name  ?? null) ? trim($order->last_name)  : '';
-                                $on = trim(trim($of.' '.$ol));
-                                if ($on !== '') return $on;
-                            }
-
-                            $f = null; $l = null;
-                            foreach ($firstKeys as $k) { $v = data_get($meta, $k); if (is_string($v) && trim($v) !== '') { $f = trim($v); break; } }
-                            foreach ($lastKeys  as $k) { $v = data_get($meta, $k); if (is_string($v) && trim($v) !== '') { $l = trim($v); break; } }
-
-                            $joined = trim(trim((string)$f).' '.trim((string)$l));
-                            if ($joined !== '') return $joined;
-
-                            foreach ($singleKeys as $k) {
-                                $v = data_get($meta, $k);
-                                if (is_string($v) && trim($v) !== '') return trim($v);
-                            }
-                            return null;
-                        };
-
-                        // 2.5) Directly linked order via order_id if present
-                        try {
-                            if (\Illuminate\Support\Facades\Schema::hasColumn('appointments','order_id') && !empty($record->order_id)) {
-                                $ord = \App\Models\Order::find($record->order_id);
-                                if ($ord) {
-                                    $meta = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
-                                    if ($n = $extractName($meta, $ord)) return $n;
-
-                                    // also try the linked user on the order
-                                    $uf = is_string(optional($ord->user)->first_name ?? null) ? trim($ord->user->first_name) : '';
-                                    $ul = is_string(optional($ord->user)->last_name  ?? null) ? trim($ord->user->last_name)  : '';
-                                    $un = trim(trim($uf.' '.$ul));
-                                    if ($un !== '') return $un;
-                                    $un2 = is_string(optional($ord->user)->name ?? null) ? trim($ord->user->name) : '';
-                                    if ($un2 !== '') return $un2;
-                                }
-                            }
-                        } catch (\Throwable $e) {}
-
-                        // 3) Fall back to related user's first/last or name (if appointment->user relation exists)
-                        $ufirst = is_string(optional($record->user)->first_name ?? null) ? trim(optional($record->user)->first_name) : '';
-                        $ulast  = is_string(optional($record->user)->last_name  ?? null) ? trim(optional($record->user)->last_name)  : '';
-                        $uname  = trim(trim($ufirst.' '.$ulast));
-                        if ($uname !== '') return $uname;
-                        $uname2 = is_string(optional($record->user)->name ?? null) ? trim(optional($record->user)->name) : '';
-                        if ($uname2 !== '') return $uname2;
-
-                        // 4) Heuristic: look for a matching Order on the same day (prefer same service)
-                        try {
-                            $day = \Illuminate\Support\Carbon::parse($record->start_at)->toDateString();
-                            $svcAppt = \Illuminate\Support\Str::slug((string) ($record->service_slug ?? $record->service ?? $record->service_name ?? ''));
-
-                            $orders = \App\Models\Order::query()
-                                ->whereDate('created_at', $day)
-                                ->orderByDesc('created_at')
-                                ->limit(15)
-                                ->get(['id','meta','user_id','created_at']);
-
-                            foreach ($orders as $ord) {
-                                $meta = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
-
-                                // align services if both sides have something
-                                $svcMeta = \Illuminate\Support\Str::slug((string) (data_get($meta,'service_slug') ?? data_get($meta,'service') ?? ''));
-                                if ($svcAppt && $svcMeta && $svcMeta !== $svcAppt) continue;
-
-                                if ($n = $extractName($meta, $ord)) return $n;
-
-                                // final try with the order's user
-                                $ou = optional($ord->user);
-                                $uf = is_string($ou->first_name ?? null) ? trim($ou->first_name) : '';
-                                $ul = is_string($ou->last_name  ?? null) ? trim($ou->last_name)  : '';
-                                $un = trim(trim($uf.' '.$ul));
-                                if ($un !== '') return $un;
-                                $un2 = is_string($ou->name ?? null) ? trim($ou->name) : '';
-                                if ($un2 !== '') return $un2;
-                            }
-                        } catch (\Throwable $e) {
-                            // ignore lookup errors
+                        if (! $record) {
+                            return '—';
                         }
 
-                        // 5) Last resort: show appointment email
+                        // 1) Explicit patient_name on the appointment
+                        $pn = is_string($record->patient_name ?? null) ? trim($record->patient_name) : '';
+                        if ($pn !== '') {
+                            return $pn;
+                        }
+
+                        // 2) First / last name on the appointment row
+                        $first = is_string($record->first_name ?? null) ? trim($record->first_name) : '';
+                        $last  = is_string($record->last_name ?? null) ? trim($record->last_name) : '';
+                        $name  = trim(trim($first . ' ' . $last));
+                        if ($name !== '') {
+                            return $name;
+                        }
+
+                        // 3) Linked order (using helper)
+                        $order = static::findRelatedOrder($record);
+                        if ($order) {
+                            // 3a) Order's own first / last
+                            $of = is_string($order->first_name ?? null) ? trim($order->first_name) : '';
+                            $ol = is_string($order->last_name ?? null) ? trim($order->last_name) : '';
+                            $on = trim(trim($of . ' ' . $ol));
+                            if ($on !== '') {
+                                return $on;
+                            }
+
+                            // 3b) Linked user on the order
+                            $ou = optional($order->user);
+                            $uf = is_string($ou->first_name ?? null) ? trim($ou->first_name) : '';
+                            $ul = is_string($ou->last_name ?? null) ? trim($ou->last_name) : '';
+                            $un = trim(trim($uf . ' ' . $ul));
+                            if ($un !== '') {
+                                return $un;
+                            }
+                            $un2 = is_string($ou->name ?? null) ? trim($ou->name) : '';
+                            if ($un2 !== '') {
+                                return $un2;
+                            }
+
+                            // 3c) Common shapes in order meta
+                            $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                            $metaName = data_get($meta, 'patient.name')
+                                ?? data_get($meta, 'customer.name')
+                                ?? data_get($meta, 'full_name')
+                                ?? data_get($meta, 'name');
+
+                            if (is_string($metaName) && trim($metaName) !== '') {
+                                return trim($metaName);
+                            }
+
+                            $pf = data_get($meta, 'patient.first_name') ?? data_get($meta, 'customer.first_name');
+                            $pl = data_get($meta, 'patient.last_name') ?? data_get($meta, 'customer.last_name');
+
+                            if (is_string($pf) || is_string($pl)) {
+                                $pf = is_string($pf) ? trim($pf) : '';
+                                $pl = is_string($pl) ? trim($pl) : '';
+                                $pfull = trim(trim($pf . ' ' . $pl));
+                                if ($pfull !== '') {
+                                    return $pfull;
+                                }
+                            }
+                        }
+
+                        // 4) Last resort: show appointment email
                         $email = is_string($record->email ?? null) ? trim($record->email) : '';
                         return $email !== '' ? $email : '—';
                     })
                     ->searchable(true, function (Builder $query, string $search): Builder {
-                        $like = "%" . $search . "%";
-                        return $query->where(function ($q) use ($like) {
+                        $like = '%' . $search . '%';
+
+                        return $query->where(function (Builder $q) use ($like) {
                             $q->where('patient_name', 'like', $like)
                               ->orWhere('first_name', 'like', $like)
                               ->orWhere('last_name', 'like', $like)
@@ -430,7 +394,11 @@ class AppointmentResource extends Resource
                                       ->from('orders')
                                       ->whereColumn('orders.id', 'appointments.order_id')
                                       ->where(function ($q2) use ($like) {
-                                          $q2->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.patient.name')) like ?", [$like])
+                                          $q2->orWhere('orders.first_name', 'like', $like)
+                                             ->orWhere('orders.last_name', 'like', $like)
+                                             ->orWhereRaw("concat_ws(' ', orders.first_name, orders.last_name) like ?", [$like])
+                                             ->orWhere('orders.email', 'like', $like)
+                                             ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.patient.name')) like ?", [$like])
                                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.patient.first_name')) like ?", [$like])
                                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.patient.last_name')) like ?", [$like])
                                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.customer.name')) like ?", [$like])
@@ -441,6 +409,7 @@ class AppointmentResource extends Resource
                               });
                         });
                     }),
+
                 TextColumn::make('service')
                     ->label('Service')
                     ->getStateUsing(function ($record) {
@@ -466,7 +435,10 @@ class AppointmentResource extends Resource
                         return null;
                     })
                     ->formatStateUsing(function ($state) {
-                        if (empty($state)) return '—';
+                        if (empty($state)) {
+                            return '—';
+                        }
+
                         return \Illuminate\Support\Str::of((string) $state)
                             ->replace('-', ' ')
                             ->title()
@@ -475,18 +447,21 @@ class AppointmentResource extends Resource
                     ->toggleable()
                     ->searchable(true, function (Builder $query, string $search): Builder {
                         $like = "%" . $search . "%";
+
                         return $query->where(function ($q) use ($like) {
                             $q->where('service', 'like', $like)
-                              ->orWhere('service_slug', 'like', $like)
-                              ->orWhere('service_name', 'like', $like);
+                            ->orWhere('service_slug', 'like', $like)
+                            ->orWhere('service_name', 'like', $like);
                         });
                     }),
-                // Inserted order_status column before attendance
+
                 TextColumn::make('order_status')
                     ->label('Order status')
                     ->getStateUsing(function ($record) {
                         $o = static::findRelatedOrder($record);
-                        if (! $o) return '—';
+                        if (! $o) {
+                            return '—';
+                        }
                         $st = is_string($o->status ?? null) ? trim(strtolower($o->status)) : '';
                         return $st !== '' ? ucfirst($st) : '—';
                     })
@@ -502,70 +477,8 @@ class AppointmentResource extends Resource
                     })
                     ->toggleable()
                     ->searchable(),
-                TextColumn::make('attendance')
-                    ->label('Attendance')
-                    ->getStateUsing(function ($record) {
-                        if (! $record) return 'Waiting';
-                        $raw = is_string($record->status ?? null) ? strtolower(trim($record->status)) : '';
-                        return match ($raw) {
-                            'attended'      => 'Attended',
-                            'not_attended'  => 'Not attended',
-                            default         => 'Waiting',
-                        };
-                    })
-                    ->formatStateUsing(fn ($state) => $state ?: '—')
-                    ->badge()
-                    ->color(function ($state) {
-                        return match ($state) {
-                            'Attended'     => 'success',
-                            'Not attended' => 'gray',
-                            'Waiting'      => 'warning',
-                            default        => 'primary',
-                        };
-                    })
-                    ->toggleable(),
-                TextColumn::make('deleted_at')->label('Deleted')->dateTime()->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
-                // Attendance quick filter maps to status values
-                SelectFilter::make('attendance')
-                    ->label('Attendance')
-                    ->options([
-                        'attended'     => 'Attended',
-                        'not_attended' => 'Not attended',
-                        'waiting'      => 'Waiting',
-                    ])
-                    ->default('waiting')
-                    ->query(function (Builder $query, array $data): Builder {
-                        // Filament passes the selected option under 'value'
-                        $val = $data['value'] ?? null;
-
-                        if ($val === 'attended') {
-                            return $query->where('status', 'attended');
-                        }
-                        if ($val === 'not_attended') {
-                            return $query->where('status', 'not_attended');
-                        }
-
-                        // Waiting includes explicit waiting plus legacy null or empty and pending
-                        return $query->where(function (Builder $q) {
-                            $q->whereNull('status')
-                              ->orWhere('status', '')
-                              ->orWhere('status', 'waiting')
-                              ->orWhere('status', 'pending');
-                        });
-                    })
-                    ->indicateUsing(function (array $data) {
-                        $v = $data['value'] ?? null;
-                        return match ($v) {
-                            'attended'     => 'Attended',
-                            'not_attended' => 'Not attended',
-                            default        => 'Waiting',
-                        };
-                    }),
-                 
-
-                // Single-day date picker filter for appointment date
                 Filter::make('day')
                     ->label('Date')
                     ->form([
@@ -573,64 +486,16 @@ class AppointmentResource extends Resource
                     ])
                     ->query(function (Builder $query, array $data): Builder {
                         $on = $data['on'] ?? null;
+
                         return $on ? $query->whereDate('start_at', $on) : $query;
                     })
                     ->indicateUsing(function ($state) {
                         $d = is_array($state) ? ($state['on'] ?? null) : null;
+
                         return $d ? ('Date ' . \Illuminate\Support\Carbon::parse($d)->format('d M Y')) : null;
                     }),
             ])
             ->actions([
-                \Filament\Actions\Action::make('attendance')
-                    ->label('Status')
-                    ->button()
-                    ->color('success')
-                    ->icon('heroicon-o-check-circle')
-                    ->modalHeading('Set attendance')
-                    ->form([
-                        \Filament\Forms\Components\Radio::make('attendance')
-                            ->label('Mark as')
-                            ->options([
-                                'waiting'      => 'Waiting',
-                                'attended'     => 'Attended',
-                                'not_attended' => 'Not attended',
-                            ])
-                            ->default(fn ($record) => in_array(($record->status ?? null), ['attended','not_attended','waiting'], true)
-                                ? $record->status
-                                : 'waiting')
-                            ->inline()
-                            ->required(),
-                        \Filament\Forms\Components\Textarea::make('note')
-                            ->label('Optional note')
-                            ->rows(2),
-                    ])
-                    ->action(function (\App\Models\Appointment $record, array $data): void {
-                        $att = $data['attendance'] ?? null;
-                        if ($att === 'attended') {
-                            $record->status = 'attended';
-                        } elseif ($att === 'not_attended') {
-                            $record->status = 'not_attended';
-                        } else {
-                            $record->status = 'waiting';
-                        }
-                        // Optional note persists as before
-                        try {
-                            if (\Illuminate\Support\Facades\Schema::hasColumn($record->getTable(), 'notes') && !empty($data['note'])) {
-                                $record->notes = trim((string) $data['note']);
-                            }
-                        } catch (\Throwable $e) {}
-                        $record->save();
-
-                        \Filament\Notifications\Notification::make()
-                            ->success()
-                            ->title('Status updated')
-                            ->body(match ($att) {
-                                'attended' => 'Appointment marked as Attended.',
-                                'not_attended' => 'Appointment marked as Not attended.',
-                                default => 'Appointment marked as Waiting.',
-                            })
-                            ->send();
-                    }),
                 \Filament\Actions\Action::make('view')
                     ->label('View')
                     ->button()
@@ -638,6 +503,7 @@ class AppointmentResource extends Resource
                     ->icon('heroicon-o-eye')
                     ->url(fn ($record) => static::orderDetailsUrlForRecord($record))
                     ->openUrlInNewTab(),
+
                 \Filament\Actions\Action::make('reschedule')
                     ->label('Reschedule')
                     ->button()
@@ -664,34 +530,113 @@ class AppointmentResource extends Resource
                             ->default(fn ($record) => $record->end_at),
                         Textarea::make('reason')
                             ->label('Reason for change')
-                            ->rows(3)
-                            ->required(),
+                            ->rows(3),
                     ])
                     ->action(function (Appointment $record, array $data): void {
                         $oldStart = $record->start_at;
+                        $oldEnd   = $record->end_at;
 
-                        // Update start/end
+                        // 0) Resolve related order once using the OLD appointment time
+                        //    so we do not lose the link when start_at changes.
+                        $order = static::findRelatedOrder($record);
+
+                        // 1) Update appointment start / end (keep duration if end not provided)
                         $record->start_at = $data['start_at'];
 
-                        if (!empty($data['end_at'])) {
+                        if (! empty($data['end_at'])) {
                             $record->end_at = $data['end_at'];
-                        } elseif ($record->end_at && $oldStart) {
+                        } elseif ($oldEnd && $oldStart) {
                             try {
-                                $oldEnd = \Carbon\Carbon::parse($record->end_at);
                                 $oldStartDt = \Carbon\Carbon::parse($oldStart);
-                                $duration = $oldEnd->diffInMinutes($oldStartDt);
-                                $record->end_at = \Carbon\Carbon::parse($data['start_at'])->addMinutes($duration);
+                                $oldEndDt   = \Carbon\Carbon::parse($oldEnd);
+                                $duration   = $oldEndDt->diffInMinutes($oldStartDt);
+
+                                $record->end_at = \Carbon\Carbon::parse($data['start_at'])
+                                    ->addMinutes($duration);
                             } catch (\Throwable $e) {
                                 // If parsing fails, just leave end_at as-is
                             }
                         }
 
                         $record->save();
+                        $record->refresh(); // make sure "When" column updates
 
-                        // Find related order (using existing helper)
-                        $order = static::findRelatedOrder($record);
+                        // 1.5) If we successfully found an order, hard-link it to the appointment
+                        //      so we no longer rely on the heuristic start_at match.
+                        if ($order) {
+                            try {
+                                if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'order_id') && empty($record->order_id)) {
+                                    $record->order_id = $order->getKey();
+                                }
+                            } catch (\Throwable $e) {
+                                // ignore schema errors
+                            }
 
-                        // Work out email address
+                            $ref = is_string($record->order_reference ?? null) ? trim($record->order_reference) : '';
+                            if ($ref === '' && is_string($order->reference ?? null) && trim($order->reference) !== '') {
+                                $record->order_reference = trim($order->reference);
+                            }
+
+                            $record->save();
+                            $record->refresh();
+                        }
+
+                        // 2) Optionally regenerate a Zoom link for weight management style services
+                        $joinUrl = null;
+                        if ($order && class_exists(\App\Services\ZoomMeetingService::class)) {
+                            try {
+                                // Work out the service slug from appointment fields
+                                $serviceSlug = null;
+
+                                if (is_string($record->service_slug ?? null) && trim($record->service_slug) !== '') {
+                                    $serviceSlug = trim($record->service_slug);
+                                } elseif (is_string($record->service ?? null) && trim($record->service) !== '') {
+                                    $serviceSlug = \Illuminate\Support\Str::slug((string) $record->service);
+                                } elseif (is_string($record->service_name ?? null) && trim($record->service_name) !== '') {
+                                    $serviceSlug = \Illuminate\Support\Str::slug((string) $record->service_name);
+                                }
+
+                                $weightSlugs = ['weight-management', 'weight-loss', 'mounjaro', 'wegovy'];
+
+                                if ($serviceSlug && in_array($serviceSlug, $weightSlugs, true)) {
+                                    $zoom = app(\App\Services\ZoomMeetingService::class);
+                                    $zoomInfo = $zoom->createForAppointment($record, $order);
+
+                                    if ($zoomInfo && ! empty($zoomInfo['join_url'])) {
+                                        $meta = is_array($order->meta)
+                                            ? $order->meta
+                                            : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                                        $meta['zoom'] = array_replace(
+                                            $meta['zoom'] ?? [],
+                                            [
+                                                'meeting_id' => $zoomInfo['id'] ?? null,
+                                                'join_url'   => $zoomInfo['join_url'] ?? null,
+                                                'start_url'  => $zoomInfo['start_url'] ?? null,
+                                            ]
+                                        );
+
+                                        $order->meta = $meta;
+                                        $order->save();
+
+                                        $joinUrl = (string) $zoomInfo['join_url'];
+
+                                        \Log::info('appointment.zoom.rescheduled_saved', [
+                                            'appointment' => $record->id,
+                                            'order'       => $order->getKey(),
+                                            'join_url'    => $joinUrl,
+                                        ]);
+                                    }
+                                }
+                            } catch (\Throwable $ze) {
+                                \Log::warning('appointment.zoom.rescheduled_failed', [
+                                    'appointment' => $record->id ?? null,
+                                    'error'       => $ze->getMessage(),
+                                ]);
+                            }
+                        }
+
+                        // 3) Work out email address (appointment first, then order/meta/user)
                         $email = null;
                         if (is_string($record->email ?? null) && trim($record->email) !== '') {
                             $email = trim($record->email);
@@ -701,9 +646,14 @@ class AppointmentResource extends Resource
                                 ?? data_get($meta, 'customer.email')
                                 ?? $order->email
                                 ?? optional($order->user)->email;
+                            if (is_string($email)) {
+                                $email = trim($email);
+                            } else {
+                                $email = null;
+                            }
                         }
 
-                        // Prepare email body if we have a target
+                        // 4) Send notification email if we have a target
                         if ($email) {
                             $whenOld = $oldStart
                                 ? \Carbon\Carbon::parse($oldStart)->tz('Europe/London')->format('d M Y, H:i')
@@ -732,14 +682,19 @@ class AppointmentResource extends Resource
                                 $lines[] = 'Reason for change';
                                 $lines[] = $reason;
                             }
+                            if ($joinUrl) {
+                                $lines[] = '';
+                                $lines[] = 'Your new Zoom link';
+                                $lines[] = $joinUrl;
+                            }
                             $lines[] = '';
                             $lines[] = 'If this time is not suitable, please contact the pharmacy to rearrange.';
 
                             $body = implode("\n", $lines);
 
                             try {
-                                $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
-                                $fromName    = config('mail.from.name') ?: 'Safescript Pharmacy';
+                                $fromAddress = config('mail.from.address') ?: 'info@pharmacy-express.co.uk';
+                                $fromName    = config('mail.from.name') ?: 'Pharmacy Express';
 
                                 Mail::raw($body, function ($m) use ($email, $subject, $fromAddress, $fromName) {
                                     $m->from($fromAddress, $fromName)
@@ -766,7 +721,7 @@ class AppointmentResource extends Resource
             ->defaultSort('start_at', 'asc')
             ->defaultPaginationPageOption(25)
             ->paginationPageOptions([25, 50, 100])
-            ->recordUrl(fn ($record) => static::getUrl('edit', ['record' => $record]));
+            ->recordUrl(null);
     }
 
     public static function getEloquentQuery(): Builder
@@ -774,58 +729,13 @@ class AppointmentResource extends Resource
         $base = parent::getEloquentQuery();
 
         return $base
-            // Group ALL visibility rules so later filters (like status=waiting) are ANDed against this whole set
-            ->where(function (Builder $visible) {
-                $visible
-                    ->where(function (Builder $wrap) {
-                        $wrap
-                            // Appointment already carries a real reference
-                            ->where(function (Builder $q) {
-                                $q->whereNotNull('appointments.order_reference')
-                                  ->where('appointments.order_reference', '<>', '');
-                            })
-
-                            // Or: directly linked order with a real reference
-                            ->orWhereExists(function ($sub) {
-                                $sub->select(\DB::raw('1'))
-                                    ->from('orders')
-                                    ->whereColumn('orders.id', 'appointments.order_id')
-                                    ->whereNotNull('orders.reference')
-                                    ->where('orders.reference', '<>', '');
-                            })
-
-                            // Or: stored order_reference matches an order's reference
-                            ->orWhereExists(function ($sub) {
-                                $sub->select(\DB::raw('1'))
-                                    ->from('orders')
-                                    ->whereColumn('orders.reference', 'appointments.order_reference')
-                                    ->where('orders.reference', '<>', '');
-                            })
-
-                            // Or: heuristic match by appointment time stored in order meta
-                            ->orWhereExists(function ($sub) {
-                                $sub->select(\DB::raw('1'))
-                                    ->from('orders')
-                                    // only consider real orders that have a reference
-                                    ->whereNotNull('orders.reference')
-                                    ->where('orders.reference', '<>', '')
-                                    ->where(function ($qq) {
-                                        $qq->whereRaw(
-                                            "DATE(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.appointment_start_at'))) = DATE(appointments.start_at)"
-                                        )->orWhereRaw(
-                                            "DATE(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.appointment_at'))) = DATE(appointments.start_at)"
-                                        );
-                                    })
-                                    // and keep the time reasonably close if MySQL can parse it as DATETIME
-                                    ->where(function ($qq) {
-                                        $qq->orWhereRaw(
-                                            "ABS(TIMESTAMPDIFF(MINUTE, appointments.start_at, CAST(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.appointment_start_at')) AS DATETIME))) <= 180"
-                                        )->orWhereRaw(
-                                            "ABS(TIMESTAMPDIFF(MINUTE, appointments.start_at, CAST(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.appointment_at')) AS DATETIME))) <= 180"
-                                        );
-                                    });
-                            });
-                    });
+            // Treat "pending appointments" the same way as the navigation badge:
+            // anything with a waiting / pending-style status.
+            ->where(function (Builder $q) {
+                $q->whereNull('status')
+                  ->orWhere('status', '')
+                  ->orWhere('status', 'waiting')
+                  ->orWhere('status', 'pending');
             })
             ->orderBy('start_at', 'asc')
             ->orderByDesc('id');
@@ -950,14 +860,21 @@ class AppointmentResource extends Resource
         $o = static::findRelatedOrder($record);
         if ($o) {
             $ref = $o->reference ?? $o->ref ?? null;
-            if (is_string($ref) && trim($ref) !== '') {
-                return trim($ref);
+            if (is_string($ref)) {
+                $ref = trim($ref);
+                if ($ref !== '' && $ref !== '-') {
+                    return $ref;
+                }
             }
         }
 
         // 2) Fall back to appointment's own saved reference
         $own = $record->order_reference ?? null;
-        return is_string($own) && trim($own) !== '' ? trim($own) : null;
+        if (is_string($own)) {
+            $own = trim($own);
+            return ($own !== '' && $own !== '-') ? $own : null;
+        }
+        return null;
     }
 
     protected static function resolveOrderItem($record): ?string

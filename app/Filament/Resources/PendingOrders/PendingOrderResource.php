@@ -439,7 +439,39 @@ class PendingOrderResource extends Resource
 
                         return $full ?: '—';
                     })
-                    ->searchable()
+                    ->searchable(true, function (Builder $query, string $search): Builder {
+                        $like = '%' . $search . '%';
+
+                        return $query->where(function (Builder $q) use ($like) {
+                            // Search common name/email shapes inside meta JSON
+                            $q->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.firstName')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.first_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.lastName')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.last_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.full_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email')) LIKE ?", [$like])
+
+                              // Patient/customer nested shapes
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.first_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.last_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.first_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.last_name')) LIKE ?", [$like])
+                              ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.name')) LIKE ?", [$like])
+
+                              // Related user model (first_name/last_name/email)
+                              ->orWhereHas('user', function ($uq) use ($like) {
+                                  $uq->where('first_name', 'like', $like)
+                                     ->orWhere('last_name', 'like', $like)
+                                     ->orWhereRaw("concat_ws(' ', first_name, last_name) like ?", [$like])
+                                     ->orWhere('email', 'like', $like);
+                              })
+
+                              // Direct order reference search
+                              ->orWhere('reference', 'like', $like);
+                        });
+                    })
                     ->toggleable(),
             ])
             ->filters([
@@ -2437,7 +2469,7 @@ class PendingOrderResource extends Resource
     {
         return [
             'index' => ListPendingOrders::route('/'),
-            'edit' => EditPendingOrder::route('/{record}/edit'),
+      
         ];
     }
 

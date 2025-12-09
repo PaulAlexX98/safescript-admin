@@ -168,7 +168,6 @@ class PatientsTable
                         if (is_string($pc)    && trim($pc)    !== '') $parts[] = trim($pc);
                         return $parts ? implode(', ', $parts) : '—';
                     })
-                    ->searchable()
                     ->toggleable(),
 
                 TextColumn::make('shipping_address')
@@ -193,7 +192,6 @@ class PatientsTable
                         if (is_string($pc)    && trim($pc)    !== '') $parts[] = trim($pc);
                         return $parts ? implode(', ', $parts) : '—';
                     })
-                    ->searchable()
                     ->toggleable(),
             ])
             ->defaultSort('id', 'desc')
