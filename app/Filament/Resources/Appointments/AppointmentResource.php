@@ -729,42 +729,13 @@ class AppointmentResource extends Resource
         $base = parent::getEloquentQuery();
 
         return $base
-            // Only show waiting / pending-style appointments
+            // Treat "pending appointments" the same way as the navigation badge:
+            // anything with a waiting / pending-style status.
             ->where(function (Builder $q) {
                 $q->whereNull('status')
                   ->orWhere('status', '')
                   ->orWhere('status', 'waiting')
                   ->orWhere('status', 'pending');
-            })
-            // And only if there is a meaningful reference on the appointment or its linked order
-            ->where(function (Builder $visible) {
-                $visible
-                    // Appointment already carries a non-empty reference
-                    ->where(function (Builder $q) {
-                        $q->whereNotNull('appointments.order_reference')
-                          ->where('appointments.order_reference', '<>', '')
-                          ->where('appointments.order_reference', '<>', '-');
-                    })
-
-                    // Or: directly linked order with a real reference
-                    ->orWhereExists(function ($sub) {
-                        $sub->select(\DB::raw('1'))
-                            ->from('orders')
-                            ->whereColumn('orders.id', 'appointments.order_id')
-                            ->whereNotNull('orders.reference')
-                            ->where('orders.reference', '<>', '')
-                            ->where('orders.reference', '<>', '-');
-                    })
-
-                    // Or: stored order_reference matches an order's reference
-                    ->orWhereExists(function ($sub) {
-                        $sub->select(\DB::raw('1'))
-                            ->from('orders')
-                            ->whereColumn('orders.reference', 'appointments.order_reference')
-                            ->whereNotNull('orders.reference')
-                            ->where('orders.reference', '<>', '')
-                            ->where('orders.reference', '<>', '-');
-                    });
             })
             ->orderBy('start_at', 'asc')
             ->orderByDesc('id');
