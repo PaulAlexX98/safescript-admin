@@ -1528,6 +1528,14 @@ class ApprovedOrderResource extends Resource
                                 $action->getLivewire()->dispatch('refreshTable');
                                 $action->success();
                             }),
+
+                            \Filament\Actions\Action::make('heidi_transcribe')
+                                ->label('Heidi Transcribe')
+                                ->button()
+                                ->color('info')
+                                ->icon('heroicon-o-link')
+                                ->url('https://scribe.heidihealth.com/')
+                                ->openUrlInNewTab(),
                     ]),
             ]);
     }

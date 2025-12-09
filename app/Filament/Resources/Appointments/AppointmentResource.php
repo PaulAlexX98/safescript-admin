@@ -310,7 +310,7 @@ class AppointmentResource extends Resource
                     ->label('Patient')
                     ->getStateUsing(function ($record) {
                         if (! $record) {
-                            return '—';
+                            return '';
                         }
 
                         // 1) Explicit patient_name on the appointment
@@ -376,9 +376,9 @@ class AppointmentResource extends Resource
                             }
                         }
 
-                        // 4) Last resort: show appointment email
+                        // 4) Last resort: show appointment email (or nothing if truly unknown)
                         $email = is_string($record->email ?? null) ? trim($record->email) : '';
-                        return $email !== '' ? $email : '—';
+                        return $email !== '' ? $email : '';
                     })
                     ->searchable(true, function (Builder $query, string $search): Builder {
                         $like = '%' . $search . '%';
@@ -520,14 +520,7 @@ class AppointmentResource extends Resource
                             ->minutesStep(5)
                             ->required()
                             ->default(fn ($record) => $record->start_at),
-                        DateTimePicker::make('end_at')
-                            ->label('New end')
-                            ->native(false)
-                            ->displayFormat('d M Y, H:i')
-                            ->timezone('Europe/London')
-                            ->seconds(false)
-                            ->minutesStep(5)
-                            ->default(fn ($record) => $record->end_at),
+                        
                         Textarea::make('reason')
                             ->label('Reason for change')
                             ->rows(3),
