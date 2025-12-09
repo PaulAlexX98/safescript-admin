@@ -836,8 +836,17 @@ class PendingOrderResource extends Resource
                                                         if (! $record) { return '—'; }
 
                                                         $norm = function ($v) {
-                                                            if (in_array($v, [true, 1, '1', 'true', 'yes', 'YES', 'Yes'], true)) return 'Yes';
-                                                            if (in_array($v, [false, 0, '0', 'false', 'no', 'NO', 'No'], true)) return 'No';
+                                                            // Treat any "yes" style value as Yes
+                                                            if (in_array($v, [true, 1, '1', 'true', 'yes', 'YES', 'Yes'], true)) {
+                                                                return 'Yes';
+                                                            }
+
+                                                            // Only treat an explicit string "no" as No (not generic falsy like 0 / false)
+                                                            if (in_array($v, ['no', 'NO', 'No'], true)) {
+                                                                return 'No';
+                                                            }
+
+                                                            // Anything else is treated as unknown and will fall back to "—"
                                                             return null;
                                                         };
 
