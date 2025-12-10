@@ -1457,6 +1457,10 @@ class ConsultationFormController extends Controller
 
         $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
 
+        // Determine if this is a weight management style service once and reuse
+        $svc = $session->service_slug ?: \Illuminate\Support\Str::slug((string) $session->service);
+        $isWeight = in_array($svc, ['weight-management', 'weight-loss', 'mounjaro', 'wegovy'], true);
+
         $email = data_get($meta, 'email')
             ?? optional($order->patient)->email
             ?? optional($order->user)->email
@@ -1487,8 +1491,7 @@ class ConsultationFormController extends Controller
 
         // Attach static GLP-1 guides for weight management services
         try {
-            $svc = $session->service_slug ?: \Illuminate\Support\Str::slug((string) $session->service);
-            if (in_array($svc, ['weight-management', 'weight-loss', 'mounjaro', 'wegovy'], true)) {
+            if ($isWeight) {
                 $guideDir = storage_path('app/public/guides/weight-management');
                 $files = [
                     $guideDir . '/GLP-1 WEIGHT MANAGEMENT_ CLINICAL LIFESTYLE, NUTRITION & MOVEMENT GUIDE.docx.pdf' => 'GLP-1 Lifestyle Nutrition Movement.pdf',
@@ -1530,6 +1533,25 @@ class ConsultationFormController extends Controller
                     'path' => $invPath,
                     'name' => 'Invoice.pdf',
                 ];
+            }
+
+            // Notification of treatment letter for the GP – weight management services only
+            if ($isWeight) {
+                $notPaths = [
+                    $baseDir . '/' . $ref . '_notification-of-treatment.pdf',
+                    $baseDir . '/' . $ref . '_notification-of-treatment-issued.pdf',
+                    $baseDir . '/' . $ref . '_notification.pdf',
+                ];
+
+                foreach ($notPaths as $np) {
+                    if (is_file($np)) {
+                        $attachments[] = [
+                            'path' => $np,
+                            'name' => 'Notification-of-treatment.pdf',
+                        ];
+                        break;
+                    }
+                }
             }
         }
 
@@ -1617,8 +1639,48 @@ class ConsultationFormController extends Controller
             }
         }
 
+        // Optional Notification of Treatment PDF – attach only for weight management services
+        if ($isWeight) {
+            if (!empty($pdfMeta['notification_of_treatment'])) {
+                $abs = $resolvePath($pdfMeta['notification_of_treatment']);
+                if ($abs) {
+                    $attachments[] = [
+                        'path' => $abs,
+                        'name' => 'Notification-of-treatment.pdf',
+                    ];
+                }
+            } elseif (!empty($pdfMeta['notification'])) {
+                $abs = $resolvePath($pdfMeta['notification']);
+                if ($abs) {
+                    $attachments[] = [
+                        'path' => $abs,
+                        'name' => 'Notification-of-treatment.pdf',
+                    ];
+                }
+            }
+        }
+
         $subject = 'Your order has been approved';
-        $body = "Hi {$name}\n\nYour order {$ref} has been approved and confirmed by the pharmacist\nIf you did not request this order please contact the pharmacy immediately";
+
+        $body = "Dear Patient,\n\n"
+            . "Your order has been approved. Please see the attached documents, which include:\n\n";
+
+        if ($isWeight) {
+            $body .= "Nutrition and lifestyle advice\n"
+                . "What to expect\n"
+                . "Starter pack information\n"
+                . "Your record of supply\n"
+                . "Your invoice\n"
+                . "Notification of treatment to your GP\n\n"
+                . "You will also find a letter addressed to your GP. This letter is a notification of your treatment and it is very important that it is forwarded to your GP. Please ensure you send this on to them at your earliest convenience.\n\n";
+        } else {
+            $body .= "Your record of supply\n"
+                . "Your invoice\n\n";
+        }
+
+        $body .= "If you have any questions or experience any issues, please don’t hesitate to contact us by email or via WhatsApp through our website.\n\n"
+            . "Thank you.\n\n"
+            . "W M Malik MRPharmS";
 
         if ($zoomUrl) {
             $body .= "\n\nYour video consultation link\n{$zoomUrl}\n";

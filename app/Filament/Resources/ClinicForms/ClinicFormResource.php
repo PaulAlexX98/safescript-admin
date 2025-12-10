@@ -71,20 +71,6 @@ class ClinicFormResource extends Resource
                     ->badge()
                     ->sortable(),
 
-                TextColumn::make('raf_version')
-                    ->label('RAF v.')
-                    ->sortable()
-                    ->toggleable(),
-
-                BadgeColumn::make('raf_status')
-                    ->label('RAF Status')
-                    ->colors([
-                        'success' => 'published',
-                        'warning' => 'draft',
-                    ])
-                    ->sortable()
-                    ->toggleable(),
-
                 TextColumn::make('updated_at')
                     ->label('Updated')
                     ->dateTime('d-m-Y')
@@ -114,6 +100,27 @@ class ClinicFormResource extends Resource
                     ->icon('heroicon-m-wrench-screwdriver')
                     ->url(fn ($record) => RafBuilder::getUrl(['record' => $record]))
                     ->visible(fn ($record) => ($record->type ?? null) === 'raf'),
+                Action::make('duplicate')
+                    ->label('Duplicate')
+                    ->icon('heroicon-m-square-2-stack')
+                    ->requiresConfirmation()
+                    ->action(function (ClinicForm $record): void {
+                        $copy = $record->replicate();
+
+                        // Prefix the name so it is clear this is a copy
+                        if (is_string($copy->name ?? null) && trim($copy->name) !== '') {
+                            $copy->name = trim('Copy of ' . $copy->name);
+                        }
+
+                        // Persist the new record (keeps raf_version and raf_status identical to the source)
+                        $copy->push();
+
+                        \Filament\Notifications\Notification::make()
+                            ->success()
+                            ->title('Form duplicated')
+                            ->body('A copy of this form has been created.')
+                            ->send();
+                    }),
                 DeleteAction::make(),
             ])
             ->toolbarActions([

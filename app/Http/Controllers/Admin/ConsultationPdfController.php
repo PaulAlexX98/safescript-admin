@@ -206,6 +206,11 @@ class ConsultationPdfController extends Controller
                 'view'     => 'pdf.invoice',
                 'filename' => $ref . '_invoice.pdf',
             ],
+            [
+                'key'      => 'notification_of_treatment',
+                'view'     => 'pdf.notification-of-treatment',
+                'filename' => $ref . '_notification-of-treatment-issued.pdf',
+            ],
         ];
 
         $meta['pdfs'] = is_array($meta['pdfs'] ?? null) ? $meta['pdfs'] : [];

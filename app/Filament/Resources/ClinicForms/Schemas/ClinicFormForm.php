@@ -41,7 +41,7 @@ class ClinicFormForm
                         Builder::make('schema')
                             ->label('Form canvas')
                             ->addActionLabel('Add to form structure')
-        
+                            ->cloneable()
                             ->blocks([
                                 // Sections
                                 Block::make('section')->label('Section')->schema([
