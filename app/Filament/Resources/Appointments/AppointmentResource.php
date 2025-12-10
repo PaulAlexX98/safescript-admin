@@ -722,6 +722,8 @@ class AppointmentResource extends Resource
         $base = parent::getEloquentQuery();
 
         return $base
+            // Only show appointments that have a scheduled time
+            ->whereNotNull('start_at')
             // Treat "pending appointments" the same way as the navigation badge:
             // anything with a waiting / pending-style status.
             ->where(function (Builder $q) {
@@ -729,26 +731,6 @@ class AppointmentResource extends Resource
                   ->orWhere('status', '')
                   ->orWhere('status', 'waiting')
                   ->orWhere('status', 'pending');
-            })
-            // Only show appointments that have a related order with a real (non-empty) status
-            ->where(function (Builder $q) {
-                $q
-                    // 1) Direct link via order_id
-                    ->whereExists(function ($sub) {
-                        $sub->select(\DB::raw('1'))
-                            ->from('orders')
-                            ->whereColumn('orders.id', 'appointments.order_id')
-                            ->whereNotNull('orders.status')
-                            ->where('orders.status', '<>', '');
-                    })
-                    // 2) Or match via stored order_reference
-                    ->orWhereExists(function ($sub) {
-                        $sub->select(\DB::raw('1'))
-                            ->from('orders')
-                            ->whereColumn('orders.reference', 'appointments.order_reference')
-                            ->whereNotNull('orders.status')
-                            ->where('orders.status', '<>', '');
-                    });
             })
             ->orderBy('start_at', 'asc')
             ->orderByDesc('id');
