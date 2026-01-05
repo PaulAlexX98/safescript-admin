@@ -103,6 +103,13 @@ class AppointmentResource extends Resource
                     ->label('Last name')
                     ->maxLength(191)
                     ->columnSpan(6),
+                
+                \Filament\Forms\Components\TextInput::make('email')
+                    ->label('Email')
+                    ->email()
+                    ->maxLength(191)
+                    ->required()
+                    ->columnSpan(12),
 
                 \Filament\Forms\Components\TextInput::make('service')
                     ->label('Service')
@@ -455,28 +462,6 @@ class AppointmentResource extends Resource
                         });
                     }),
 
-                TextColumn::make('order_status')
-                    ->label('Order status')
-                    ->getStateUsing(function ($record) {
-                        $o = static::findRelatedOrder($record);
-                        if (! $o) {
-                            return '—';
-                        }
-                        $st = is_string($o->status ?? null) ? trim(strtolower($o->status)) : '';
-                        return $st !== '' ? ucfirst($st) : '—';
-                    })
-                    ->badge()
-                    ->color(function ($state) {
-                        return match (strtolower($state)) {
-                            'approved'  => 'success',
-                            'completed' => 'success',
-                            'pending'   => 'warning',
-                            'rejected'  => 'danger',
-                            default     => 'gray',
-                        };
-                    })
-                    ->toggleable()
-                    ->searchable(),
             ])
             ->filters([
                 Filter::make('day')
@@ -708,6 +693,23 @@ class AppointmentResource extends Resource
                             ->success()
                             ->title('Appointment rescheduled')
                             ->body('The appointment has been updated' . ($email ? ' and the patient has been notified at '.$email : '.'))
+                            ->send();
+                    }),
+
+                \Filament\Actions\Action::make('delete')
+                    ->label('Delete')
+                    ->button()
+                    ->color('danger')
+                    ->icon('heroicon-o-trash')
+                    ->requiresConfirmation()
+                    ->modalHeading('Delete appointment')
+                    ->modalDescription('This will permanently delete the appointment. This action cannot be undone.')
+                    ->action(function (Appointment $record): void {
+                        $record->delete();
+
+                        Notification::make()
+                            ->success()
+                            ->title('Appointment deleted')
                             ->send();
                     }),
             ])

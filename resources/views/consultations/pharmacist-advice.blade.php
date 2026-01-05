@@ -404,6 +404,17 @@
       .voice-dot{width:8px;height:8px;border-radius:999px;background:#9ca3af;display:inline-block}
       .voice-btn[aria-pressed="true"] + .voice-status .voice-dot{background:#22c55e;animation:voicepulse 1.2s infinite}
       @keyframes voicepulse{0%{transform:scale(1);opacity:.6}50%{transform:scale(1.35);opacity:1}100%{transform:scale(1);opacity:.6}}
+      /* Pretty checkbox (no :has dependency) */
+      .cf-check-row{display:flex;align-items:flex-start;gap:10px}
+      .cf-check-wrap{display:inline-flex;align-items:flex-start;gap:10px;cursor:pointer;user-select:none}
+      .cf-check-input{position:absolute;opacity:0;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+      .cf-check-box{width:20px;height:20px;border-radius:6px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.03);display:inline-flex;align-items:center;justify-content:center;transition:background .15s ease,border-color .15s ease,box-shadow .15s ease;flex:0 0 auto;margin-top:2px}
+      .cf-check-box::after{content:'';width:10px;height:6px;border-left:2px solid transparent;border-bottom:2px solid transparent;transform:rotate(-45deg);margin-top:-1px;opacity:0;transition:opacity .15s ease,border-color .15s ease}
+      .cf-check-label{font-size:14px;color:#e5e7eb;line-height:1.5}
+      .cf-check-help{font-size:12px;color:#9ca3af;margin-top:6px}
+      .cf-check-input:focus-visible + .cf-check-box{outline:2px solid rgba(34,197,94,.6);outline-offset:2px}
+      .cf-check-input:checked + .cf-check-box{border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.12);box-shadow:0 0 0 2px rgba(34,197,94,.10)}
+      .cf-check-input:checked + .cf-check-box::after{border-color:rgba(34,197,94,1);opacity:1}
     </style>
 @endonce
 
@@ -587,12 +598,18 @@
                             </div>
                         @elseif ($type === 'checkbox')
                             <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
-                                <div class="cf-checkbox-row">
+                                @php
+                                    $isChecked = ($val === 1 || $val === true || (is_string($val) && in_array(strtolower($val), ['1','on','yes','true','checked','done'], true)));
+                                @endphp
+                                <div class="cf-check-row">
                                     <input type="hidden" name="{{ $name }}" value="0">
-                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" value="1" class="rounded-md bg-gray-800/70 border-gray-700 focus:ring-2 mt-0.5" {{ ($val === 1 || $val === true || (is_string($val) && in_array(strtolower($val), ['1','on','yes','true','checked','done'], true))) ? 'checked' : '' }} {!! $disabledAttr !!}>
-                                    <label for="{{ $name }}" class="text-sm text-gray-200 cursor-pointer select-none leading-6">{{ $label }}</label>
+                                    <label for="{{ $name }}" class="cf-check-wrap">
+                                        <input type="checkbox" id="{{ $name }}" name="{{ $name }}" value="1" class="cf-check-input" {{ $isChecked ? 'checked' : '' }} {!! $disabledAttr !!}>
+                                        <span class="cf-check-box" aria-hidden="true"></span>
+                                        <span class="cf-check-label">{{ $label }}</span>
+                                    </label>
                                 </div>
-                                @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
+                                @if($help)<p class="cf-check-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @elseif ($type === 'date')
                             <div class="{{ $fieldCard }}" {!! $wrapperAttr !!}>
@@ -627,6 +644,7 @@
                 </div>
                 </div>
             @endforeach
+            
 
             {{-- Admin Notes (from Record of Supply logic) --}}
             <div class="cf-section-card">
@@ -663,9 +681,12 @@
 
         <div class="cf-section-card">
             <div class="cf-field-card">
-                <div class="cf-checkbox-row">
-                    <input type="checkbox" id="__cf_check_all" class="rounded-md mt-0.5">
-                    <label for="__cf_check_all" class="text-sm cursor-pointer select-none leading-6">Select all checkboxes</label>
+                <div class="cf-check-row">
+                    <label for="__cf_check_all" class="cf-check-wrap">
+                        <input type="checkbox" id="__cf_check_all" class="cf-check-input">
+                        <span class="cf-check-box" aria-hidden="true"></span>
+                        <span class="cf-check-label">Select all checkboxes</span>
+                    </label>
                 </div>
             </div>
         </div>

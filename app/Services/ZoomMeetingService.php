@@ -78,9 +78,52 @@ class ZoomMeetingService
             $start = now()->addMinutes(15);
         }
 
+        // Build a patient name for the Zoom topic (appointment fields first, then order/meta fallback)
+        $patientName = '';
+
+        $first = is_string($appointment->first_name ?? null) ? trim((string) $appointment->first_name) : '';
+        $last  = is_string($appointment->last_name ?? null) ? trim((string) $appointment->last_name) : '';
+        $patientName = trim($first . ' ' . $last);
+
+        if ($patientName === '' && $order) {
+            $of = is_string($order->first_name ?? null) ? trim((string) $order->first_name) : '';
+            $ol = is_string($order->last_name ?? null) ? trim((string) $order->last_name) : '';
+            $patientName = trim($of . ' ' . $ol);
+
+            if ($patientName === '') {
+                $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                $mf = data_get($meta, 'patient.firstName')
+                    ?? data_get($meta, 'patient.first_name')
+                    ?? data_get($meta, 'firstName')
+                    ?? data_get($meta, 'first_name');
+
+                $ml = data_get($meta, 'patient.lastName')
+                    ?? data_get($meta, 'patient.last_name')
+                    ?? data_get($meta, 'lastName')
+                    ?? data_get($meta, 'last_name');
+
+                $mf = is_string($mf) ? trim($mf) : '';
+                $ml = is_string($ml) ? trim($ml) : '';
+
+                $patientName = trim($mf . ' ' . $ml);
+
+                if ($patientName === '') {
+                    $full = data_get($meta, 'patient.name')
+                        ?? data_get($meta, 'full_name')
+                        ?? data_get($meta, 'name');
+
+                    $patientName = is_string($full) ? trim($full) : '';
+                }
+            }
+        }
+
         $topic = 'Weight management consultation';
+        if ($patientName !== '') {
+            $topic .= ' for ' . $patientName;
+        }
         if ($order && $order->reference) {
-            $topic .= ' ' . $order->reference;
+            $topic .= ' (' . $order->reference . ')';
         }
 
         $payload = [

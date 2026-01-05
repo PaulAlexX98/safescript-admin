@@ -24,173 +24,82 @@ class AppointmentsCalendarWidget extends CalendarWidget
         $rawEnd   = is_callable([$info, 'end'])   ? $info->end()   : (property_exists($info, 'end')   ? $info->end   : null);
 
         // Fallback guards
-        if (!$rawStart) { $rawStart = now()->startOfMonth()->toDateString(); }
-        if (!$rawEnd)   { $rawEnd   = now()->endOfMonth()->addDay()->toDateString(); } // FullCalendar passes end-exclusive
+        if (! $rawStart) {
+            $rawStart = now()->startOfMonth()->toDateString();
+        }
+        if (! $rawEnd) {
+            // FullCalendar passes end-exclusive
+            $rawEnd = now()->endOfMonth()->addDay()->toDateString();
+        }
 
         $start = Carbon::parse($rawStart);
-        // end from FullCalendar is exclusive; subtract a micro to make it inclusive for SQL between
         $end   = Carbon::parse($rawEnd)->subSecond();
 
-        // Month view usually requests ~4–6 weeks. Treat 28+ days as "month".
-        $isMonthView = $start->diffInDays($end) >= 28;
-
-        // Aggregate map for month counts when needed
+        // Aggregate map for day counts
         $counts = [];
         $addCount = function (string $date, int $n = 1) use (&$counts) {
             $counts[$date] = ($counts[$date] ?? 0) + $n;
         };
 
-        $events = [];
-
         // Helper to build the Appointments index URL with filters.
         $buildUrl = function (string $date) {
             $query = [
                 'filters' => [
-                    'day' => ['value' => $date],
+                    'day' => ['on' => $date],
                 ],
                 'sort' => 'start_at:asc',
             ];
-            return url('/admin/appointments') . '?' . http_build_query($query);
+
+            return url('/admin/appointments');
         };
 
-        // ----- Primary source: appointments table -----
+        // 1) appointments table counts (match the Appointments list filters)
         if (Schema::hasTable('appointments') && Schema::hasColumn('appointments', 'start_at')) {
-            if ($isMonthView) {
-                // Aggregate count per day for the month grid.
-                $rows = DB::table('appointments')
-                    ->selectRaw('DATE(start_at) as d, COUNT(*) as c')
-                    ->whereBetween('start_at', [$start, $end])
-                    ->where(function ($q) {
-                        $q->whereNull('status')
-                          ->orWhere('status', '')
-                          ->orWhere('status', 'waiting')
-                          ->orWhere('status', 'pending');
-                    })
-                    ->groupBy('d')
-                    ->get();
+            $q = DB::table('appointments')
+                ->selectRaw('DATE(start_at) as d, COUNT(*) as c')
+                ->whereNotNull('start_at')
+                ->whereBetween('start_at', [$start, $end]);
 
-                foreach ($rows as $r) {
-                    if (!empty($r->d)) {
-                        $addCount($r->d, (int) $r->c);
-                    }
-                }
-            } else {
-                // Week/Day views: render individual timed events.
-                $cols = Schema::getColumnListing('appointments');
-                $rows = DB::table('appointments')
-                    ->whereBetween('start_at', [$start, $end])
-                    ->where(function ($q) {
-                        $q->whereNull('status')
-                          ->orWhere('status', '')
-                          ->orWhere('status', 'waiting')
-                          ->orWhere('status', 'pending');
-                    })
-                    ->orderBy('start_at')
-                    ->get([
-                        'id',
-                        'start_at',
-                        'end_at',
-                        in_array('service', $cols) ? 'service' : DB::raw("'' as service"),
-                        in_array('first_name', $cols) ? 'first_name' : DB::raw("NULL as first_name"),
-                        in_array('last_name', $cols)  ? 'last_name'  : DB::raw("NULL as last_name"),
-                    ]);
-
-                foreach ($rows as $r) {
-                    $name = trim(trim((string)($r->first_name ?? '')) . ' ' . trim((string)($r->last_name ?? '')));
-                    $svc  = is_string($r->service ?? null) ? ucwords(str_replace(['-', '_'], ' ', $r->service)) : null;
-
-                    $parts = [];
-                    if ($name !== '') $parts[] = $name;
-                    if ($svc) $parts[] = $svc;
-                    $title = $parts ? implode(' · ', $parts) : 'Appointment';
-
-                    $date = Carbon::parse($r->start_at)->toDateString();
-
-                    $events[] = CalendarEvent::make()
-                        ->title($title)
-                        ->start($r->start_at)
-                        ->end($r->end_at ?: $r->start_at) // fall back to zero-length if no end
-                        ->allDay(false)
-                        ->url($buildUrl($date));
-                }
+            // Soft deletes (match Resource default)
+            if (Schema::hasColumn('appointments', 'deleted_at')) {
+                $q->whereNull('deleted_at');
             }
-        }
 
-        // When showing the month grid, also include counts from orders.appointment_at
-        if ($isMonthView && Schema::hasTable('orders') && Schema::hasColumn('orders', 'appointment_at')) {
-            $rows = DB::table('orders')
-                ->selectRaw('DATE(appointment_at) as d, COUNT(*) as c')
-                ->whereNotNull('appointment_at')
-                ->whereBetween('appointment_at', [$start, $end])
-                ->when(Schema::hasColumn('orders', 'status'), fn ($q) => $q->where('status', 'pending'))
-                ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->where('booking_status', 'pending'))
-                ->groupBy('d')
-                ->get();
+            // Status filter (null/empty/waiting/pending)
+            if (Schema::hasColumn('appointments', 'status')) {
+                $q->where(function ($qq) {
+                    $qq->whereNull('status')
+                       ->orWhere('status', '')
+                       ->orWhere('status', 'waiting')
+                       ->orWhere('status', 'pending');
+                });
+            }
+
+            $rows = $q->groupBy('d')->get();
 
             foreach ($rows as $r) {
-                if (!empty($r->d)) {
+                if (! empty($r->d)) {
                     $addCount($r->d, (int) $r->c);
                 }
             }
         }
 
-        // If we have any counts, convert them to CalendarEvent items
-        if ($isMonthView && !empty($counts)) {
+
+        $events = [];
+
+        if (! empty($counts)) {
             ksort($counts);
+
             foreach ($counts as $date => $count) {
+                // FullCalendar all-day end is exclusive; use +1 day
+                $endDate = Carbon::parse($date)->addDay()->toDateString();
+
                 $events[] = CalendarEvent::make()
                     ->title((string) $count)
                     ->start($date)
-                    ->end($date)
+                    ->end($endDate)
                     ->allDay(true)
                     ->url($buildUrl($date));
-            }
-        }
-
-        // ----- Fallback: orders.appointment_at (non-month views OR when appointments produced nothing) -----
-        if (Schema::hasTable('orders') && Schema::hasColumn('orders', 'appointment_at') && (!$isMonthView ? true : empty($events))) {
-            if ($isMonthView) {
-                $rows = DB::table('orders')
-                    ->selectRaw('DATE(appointment_at) as d, COUNT(*) as c')
-                    ->whereNotNull('appointment_at')
-                    ->whereBetween('appointment_at', [$start, $end])
-                    ->when(Schema::hasColumn('orders', 'status'), fn ($q) => $q->where('status', 'pending'))
-                    ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->where('booking_status', 'pending'))
-                    ->groupBy('d')
-                    ->get();
-
-                foreach ($rows as $r) {
-                    $date = $r->d;
-                    $events[] = CalendarEvent::make()
-                        ->title((string) $r->c)
-                        ->start($date)
-                        ->end($date)          // ensure end is initialised
-                        ->allDay(true)
-                        ->url($buildUrl($date));
-                }
-            } else {
-                $rows = DB::table('orders')
-                    ->whereNotNull('appointment_at')
-                    ->whereBetween('appointment_at', [$start, $end])
-                    ->when(Schema::hasColumn('orders', 'status'), fn ($q) => $q->where('status', 'pending'))
-                    ->when(Schema::hasColumn('orders', 'booking_status'), fn ($q) => $q->where('booking_status', 'pending'))
-                    ->orderBy('appointment_at')
-                    ->get([
-                        'appointment_at',
-                        DB::raw("COALESCE(JSON_UNQUOTE(JSON_EXTRACT(meta,'$.service_slug')), JSON_UNQUOTE(JSON_EXTRACT(meta,'$.service')), '') as service"),
-                    ]);
-
-                foreach ($rows as $r) {
-                    $date = Carbon::parse($r->appointment_at)->toDateString();
-                    $svc  = is_string($r->service ?? null) ? ucwords(str_replace(['-', '_'], ' ', $r->service)) : null;
-
-                    $events[] = CalendarEvent::make()
-                        ->title($svc ?: 'Appointment')
-                        ->start($r->appointment_at)
-                        ->end($r->appointment_at)
-                        ->allDay(false)
-                        ->url($buildUrl($date));
-                }
             }
         }
 
@@ -205,82 +114,184 @@ class AppointmentsCalendarWidget extends CalendarWidget
             'headerToolbar' => [
                 'left'   => 'prevYear,prev,next,nextYear today',
                 'center' => 'title',
-                'right'  => 'dayGridMonth,timeGridWeek,timeGridDay,listWeek',
+                'right'  => 'dayGridMonth',
             ],
             'buttonText' => [
                 'today'       => 'Today',
                 'dayGridMonth'=> 'Month',
-                'timeGridWeek'=> 'Week',
-                'timeGridDay' => 'Day',
-                'listWeek'    => 'List',
             ],
             'navLinks'     => true,
             'dayMaxEvents' => false,
+            'eventContent' => $this->js(<<<'JS'
+                (arg) => {
+                    const n = String(arg?.event?.title ?? '').trim();
+                    if (!n) return { html: '' };
+                    return { html: `<span class="pe-cal-count" aria-label="${n} appointments">${n}</span>` };
+                }
+            JS),
 
-            // Click on any empty day cell to open Appointments list filtered to that date
             'dateClick' => $this->js(<<<'JS'
                 (info) => {
                     const d = info.dateStr;
-                    const url = `/admin/appointments?filters[day][value]=${encodeURIComponent(d)}&sort=start_at:asc`;
+                    const url = `/admin/appointments?filters[day][on]=${encodeURIComponent(d)}&sort=start_at:asc`;
                     window.location.href = url;
                 }
             JS),
 
-            // Neutral styling without hiding controls
             'viewDidMount' => $this->js(<<<'JS'
                 (arg) => {
-                    const root = (arg && arg.el) ? arg.el : document;
-                    if (!root || root.__peNeutralStyle) return;
+                    const styleId = 'pe-appointments-calendar-style';
+                    if (!document.getElementById(styleId)) {
+                        const s = document.createElement('style');
+                        s.id = styleId;
+                        s.textContent = `
+                            /* Pharmacy Express calendar polish */
+                            .fc {
+                                --fc-page-bg-color: transparent !important;
+                                --fc-neutral-bg-color: transparent !important;
+                                --fc-today-bg-color: transparent !important;
+                                --fc-list-event-hover-bg-color: transparent !important;
+                                --fc-now-indicator-color: currentColor !important;
+                                --fc-border-color: rgba(255,255,255,0.10) !important;
+                                color: inherit !important;
+                            }
 
-                    const s = document.createElement('style');
-                    s.textContent = `
-                        .fc {
-                            --fc-page-bg-color: transparent !important;
-                            --fc-neutral-bg-color: transparent !important;
-                            --fc-today-bg-color: transparent !important;
-                            --fc-list-event-hover-bg-color: transparent !important;
-                            --fc-now-indicator-color: currentColor !important;
-                            color: inherit !important;
-                        }
-                        .fc .fc-toolbar-title { color: inherit !important; }
+                            .fc .fc-scrollgrid,
+                            .fc .fc-scrollgrid table {
+                                border-radius: 16px !important;
+                                overflow: hidden !important;
+                                border: 1px solid rgba(255,255,255,0.12) !important;
+                                background: rgba(255,255,255,0.03) !important;
+                            }
 
-                        /* Keep buttons visible and clickable */
-                        .fc .fc-button {
-                            background: transparent !important;
-                            border: 1px solid rgba(0,0,0,0.15) !important;
-                            box-shadow: none !important;
-                            color: inherit !important;
-                        }
-                        /* Ensure toolbar buttons are actually clickable */
-                        .fc .fc-toolbar.fc-header-toolbar {
-                            position: relative !important;
-                            z-index: 50 !important;
-                            pointer-events: auto !important;
-                        }
-                        .fc .fc-button {
-                            pointer-events: auto !important;
-                        }
+                            .fc .fc-scrollgrid td,
+                            .fc .fc-scrollgrid th {
+                                border-color: rgba(255,255,255,0.12) !important;
+                            }
 
-                        /* List views */
-                        .fc .fc-list, .fc .fc-list table { background: transparent !important; color: inherit !important; }
-                        .fc .fc-list-day, .fc .fc-list-day-cushion { background: transparent !important; color: inherit !important; }
-                        .fc .fc-list-event { background: transparent !important; color: inherit !important; border: 0 !important; }
-                        .fc .fc-list-event-graphic, .fc .fc-list-event-dot { background: transparent !important; border-color: transparent !important; }
+                            .fc .fc-col-header-cell {
+                                background: rgba(255,255,255,0.02) !important;
+                            }
 
-                        /* Time-grid / day-grid events */
-                        .fc .fc-h-event, .fc .fc-daygrid-event { background: transparent !important; border: 0 !important; }
-                        .fc .fc-h-event .fc-event-main, .fc .fc-daygrid-event .fc-event-main { color: inherit !important; }
+                            .fc .fc-col-header-cell-cushion {
+                                font-weight: 800 !important;
+                                letter-spacing: -0.01em !important;
+                                opacity: 0.9 !important;
+                                padding: 10px 8px !important;
+                            }
 
-                        /* Dots/pills in month view */
-                        .fc .fc-daygrid-event-dot { background: transparent !important; border-color: transparent !important; }
+                            .fc .fc-toolbar-title {
+                                color: inherit !important;
+                                font-weight: 900 !important;
+                                letter-spacing: -0.02em !important;
+                            }
 
-                        /* Today highlight */
-                        .fc .fc-day-today,
-                        .fc .fc-list-day.fc-day-today,
-                        .fc .fc-list-day.fc-day-today .fc-list-day-cushion { background: transparent !important; color: inherit !important; }
-                    `;
-                    (arg.el || document.body).appendChild(s);
-                    root.__peNeutralStyle = true;
+                            .fc .fc-button {
+                                background: transparent !important;
+                                border: 1px solid rgba(255,255,255,0.14) !important;
+                                box-shadow: none !important;
+                                color: inherit !important;
+                                border-radius: 999px !important;
+                                padding: 8px 12px !important;
+                                font-weight: 800 !important;
+                            }
+
+                            .fc .fc-button:hover {
+                                background: rgba(255,255,255,0.06) !important;
+                            }
+
+                            .fc .fc-button:focus {
+                                outline: none !important;
+                                box-shadow: 0 0 0 3px rgba(16,185,129,0.22) !important;
+                            }
+
+                            .fc .fc-button.fc-button-active {
+                                background: rgba(255,255,255,0.07) !important;
+                                border-color: rgba(16,185,129,0.22) !important;
+                            }
+
+                            .fc .fc-daygrid-day {
+                                position: relative !important;
+                            }
+
+                            .fc .fc-daygrid-day-frame {
+                                padding: 10px !important;
+                                min-height: 96px !important;
+                            }
+
+                            .fc .fc-daygrid-day-number {
+                                font-weight: 900 !important;
+                                font-size: 12px !important;
+                                color: inherit !important;
+                                opacity: 0.85 !important;
+                                padding: 6px 10px !important;
+                                border-radius: 999px !important;
+                                background: rgba(255,255,255,0.04) !important;
+                                border: 1px solid rgba(255,255,255,0.08) !important;
+                            }
+
+                            .fc .fc-day-today .fc-daygrid-day-number {
+                                background: rgba(16,185,129,0.12) !important;
+                                border-color: rgba(16,185,129,0.28) !important;
+                            }
+
+                            /* Remove default event bars and render a count badge */
+                            .fc .fc-daygrid-event,
+                            .fc .fc-timegrid-event {
+                                background: transparent !important;
+                                border: 0 !important;
+                                box-shadow: none !important;
+                                padding: 0 !important;
+                            }
+
+                            .fc .fc-daygrid-event-harness {
+                                position: absolute !important;
+                                top: 10px !important;
+                                right: 10px !important;
+                                left: auto !important;
+                                margin: 0 !important;
+                                z-index: 5 !important;
+                            }
+
+                            .fc .fc-daygrid-event-harness a {
+                                text-decoration: none !important;
+                            }
+
+                            .fc .fc-daygrid-event .fc-event-main {
+                                background: transparent !important;
+                                border: 0 !important;
+                                padding: 0 !important;
+                            }
+
+                            .pe-cal-count {
+                                display: inline-flex;
+                                align-items: center;
+                                justify-content: center;
+                                min-width: 30px;
+                                height: 22px;
+                                padding: 0 10px;
+                                border-radius: 999px;
+                                font-weight: 900;
+                                font-size: 12px;
+                                letter-spacing: -0.01em;
+                                color: inherit;
+                                background: rgba(16,185,129,0.12);
+                                border: 1px solid rgba(16,185,129,0.30);
+                                backdrop-filter: blur(6px);
+                            }
+
+                            .fc .fc-daygrid-event:hover .pe-cal-count {
+                                background: rgba(16,185,129,0.18);
+                                border-color: rgba(16,185,129,0.40);
+                            }
+
+                            /* Make empty days feel less harsh */
+                            .fc .fc-daygrid-day:hover {
+                                background: rgba(255,255,255,0.02) !important;
+                            }
+                        `;
+                        document.head.appendChild(s);
+                    }
                 }
             JS),
         ];
@@ -291,6 +302,4 @@ class AppointmentsCalendarWidget extends CalendarWidget
         // Bridge for Guava v2 which sometimes calls options() instead of getOptions().
         return $this->getOptions();
     }
-
-    
 }

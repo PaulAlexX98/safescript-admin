@@ -506,7 +506,16 @@
       .cf-summary{font-size:13px;margin:0}
       .cf-label{font-size:14px;display:block;margin-bottom:6px}
       .cf-help{font-size:12px;margin-top:6px}
-      .cf-checkbox-row{display:flex;align-items:center;gap:10px}
+      /* Checkbox styles (no Tailwind, no :has dependency) */
+      .cf-checkbox-row{display:flex;align-items:center;gap:12px}
+      .cf-check-option{display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+      .cf-check-input{position:absolute;opacity:0;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+      .cf-check-box{width:20px;height:20px;border-radius:8px;border:2px solid rgba(255,255,255,.35);background:rgba(255,255,255,.035);display:inline-flex;align-items:center;justify-content:center;transition:background .15s ease,border-color .15s ease,transform .08s ease}
+      .cf-check-box::after{content:'';width:9px;height:5px;border-left:3px solid rgba(34,197,94,1);border-bottom:3px solid rgba(34,197,94,1);transform:rotate(-45deg);opacity:0;margin-top:-1px;transition:opacity .15s ease}
+      .cf-check-input:focus-visible + .cf-check-box{outline:2px solid rgba(34,197,94,.6);outline-offset:2px}
+      .cf-check-input:checked + .cf-check-box{border-color:rgba(34,197,94,1);background:rgba(34,197,94,.12)}
+      .cf-check-input:checked + .cf-check-box::after{opacity:1}
+      .cf-check-text{font-size:14px;line-height:1.45}
       .cf-ul{list-style:disc;padding-left:20px;margin:0}
       .cf-ul li{margin:4px 0}
       .cf-paras p{margin:8px 0;line-height:1.6}
@@ -517,7 +526,18 @@
       .cf-textarea{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px;min-height:140px;resize:vertical}
       .cf-input:focus, .cf-textarea:focus, .cf-select:focus{outline:none;border-color:rgba(255,255,255,.28);box-shadow:0 0 0 2px rgba(255,255,255,.12)}
       .cf-thumbs{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
-      .cf-thumb{width:160px;height:160px;object-fit:cover;border-radius:8px;border:1px solid rgba(255,255,255,.14)}
+      .cf-thumb{width:200px;height:200px;object-fit:cover;border-radius:8px;border:1px solid rgba(255,255,255,.14)}
+      /* Radio pill buttons (no :has dependency) */
+      .cf-radio-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
+      .cf-radio-option{display:inline-flex}
+      .cf-radio-input{position:absolute;opacity:0;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+      .cf-radio-pill{display:inline-flex;align-items:center;gap:10px;padding:10px 16px;border-radius:9999px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.035);cursor:pointer;user-select:none;transition:background .15s ease,border-color .15s ease,transform .08s ease}
+      .cf-radio-pill:hover{background:rgba(255,255,255,.055);border-color:rgba(255,255,255,.26)}
+      .cf-radio-pill:active{transform:translateY(1px)}
+      .cf-radio-pill::before{content:'';width:18px;height:18px;border-radius:9999px;border:2px solid rgba(255,255,255,.35);box-shadow:inset 0 0 0 5px transparent;transition:border-color .15s ease,box-shadow .15s ease}
+      .cf-radio-input:focus-visible + .cf-radio-pill{outline:2px solid rgba(34,197,94,.6);outline-offset:2px}
+      .cf-radio-input:checked + .cf-radio-pill{border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.12)}
+      .cf-radio-input:checked + .cf-radio-pill::before{border-color:rgba(34,197,94,1);box-shadow:inset 0 0 0 5px rgba(34,197,94,1)}
     </style>
 @endonce
 
@@ -532,7 +552,7 @@
         </div>
     </div>
 @else
-    <form id="cf_reorder" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab=reorder">
+    <form id="cf_reorder" method="POST" action="{{ route('consultations.forms.save', ['session' => $session->id, 'form' => $form->id]) }}?tab=reorder" enctype="multipart/form-data">
         @csrf
         <input type="hidden" name="__step_slug" value="reorder">
         <input type="hidden" id="__go_next" name="__go_next" value="0">
@@ -750,16 +770,60 @@
                                     <label class="cf-label">{{ $label }}</label>
                                 @endif
                                 @php
+                                    // Normalise saved value into a comparable string
                                     $valForRadio = $val;
-                                    if (is_bool($valForRadio)) { $valForRadio = $valForRadio ? 'yes' : 'no'; }
-                                    $valSlug = is_string($valForRadio) ? \Illuminate\Support\Str::slug($valForRadio) : $valForRadio;
+
+                                    // If saved as { value: "...", label: "..." } prefer value then label
+                                    if (is_array($valForRadio)) {
+                                        if (\Illuminate\Support\Arr::isAssoc($valForRadio)) {
+                                            $valForRadio = $valForRadio['value'] ?? $valForRadio['label'] ?? reset($valForRadio);
+                                        } else {
+                                            // if it's a list, first scalar wins
+                                            foreach ($valForRadio as $vv) { if (is_scalar($vv)) { $valForRadio = $vv; break; } }
+                                        }
+                                    }
+
+                                    // Booleans / numeric-ish strings -> yes/no
+                                    if (is_bool($valForRadio)) {
+                                        $valForRadio = $valForRadio ? 'yes' : 'no';
+                                    } elseif (is_scalar($valForRadio)) {
+                                        $low = strtolower(trim((string) $valForRadio));
+                                        if (in_array($low, ['1','true','yes','checked','on','y'], true))   $valForRadio = 'yes';
+                                        elseif (in_array($low, ['0','false','no','unchecked','off','n'], true)) $valForRadio = 'no';
+                                    } else {
+                                        $valForRadio = '';
+                                    }
+
+                                    $valSlug = \Illuminate\Support\Str::slug((string) $valForRadio);
                                 @endphp
-                                <div class="flex flex-wrap items-center -m-2">
+                                <div class="cf-radio-row">
                                     @foreach($normaliseOptions($field['options'] ?? []) as $idx => $op)
-                                        @php $rid = $name.'_'.$idx; @endphp
-                                        <label for="{{ $rid }}" class="p-2 inline-flex items-center gap-2 text-sm">
-                                            <input type="radio" id="{{ $rid }}" name="{{ $name }}" value="{{ $op['value'] }}" class="rounded-full focus:ring-2" {{ ((string)$valForRadio === (string)$op['value']) || ((string)$valSlug === (string)$op['value']) || ((string)$valForRadio === (string)($op['label'] ?? '')) ? 'checked' : '' }}>
-                                            <span>{{ $op['label'] }}</span>
+                                        @php
+                                            $rid   = $name.'_'.$idx;
+                                            $opVal = (string) ($op['value'] ?? '');
+                                            $opLab = (string) ($op['label'] ?? $opVal);
+                                            $opValSlug = \Illuminate\Support\Str::slug($opVal);
+                                            $opLabSlug = \Illuminate\Support\Str::slug($opLab);
+
+                                            // Mark selected if any of the raw/slug combinations match
+                                            $selected = false;
+                                            if ($valSlug !== '') {
+                                                $selected = ($valSlug === $opValSlug) || ($valSlug === $opLabSlug);
+                                            } else {
+                                                // raw fallback compare (should rarely be needed)
+                                                $selected = ((string)$valForRadio === $opVal) || ((string)$valForRadio === $opLab);
+                                            }
+                                        @endphp
+                                        <label for="{{ $rid }}" class="cf-radio-option">
+                                            <input
+                                                type="radio"
+                                                id="{{ $rid }}"
+                                                name="{{ $name }}"
+                                                value="{{ $op['value'] }}"
+                                                class="cf-radio-input"
+                                                {{ $selected ? 'checked' : '' }}
+                                            >
+                                            <span class="cf-radio-pill">{{ $op['label'] }}</span>
                                         </label>
                                     @endforeach
                                 </div>
@@ -772,7 +836,7 @@
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <textarea id="{{ $name }}" name="{{ $name }}" rows="6" placeholder="{{ $ph }}" @if($req) required @endif class="cf-textarea">{{ $val }}</textarea>
+                                <textarea id="{{ $name }}" name="{{ $name }}" rows="6" placeholder="{{ $ph }}" data-req="{{ $req ? 1 : 0 }}" class="cf-textarea">{{ $val }}</textarea>
                                 @if($help)
                                     <p class="cf-help">{!! nl2br(e($help)) !!}</p>
                                 @endif
@@ -801,7 +865,7 @@
                                         $valSlug = is_string($vals) ? \Illuminate\Support\Str::slug($vals) : $vals;
                                     }
                                 @endphp
-                                <select id="{{ $name }}" name="{{ $name }}{{ $isMultiple ? '[]' : '' }}" @if($req) required @endif class="cf-input" {{ $isMultiple ? 'multiple' : '' }}>
+                                <select id="{{ $name }}" name="{{ $name }}{{ $isMultiple ? '[]' : '' }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" {{ $isMultiple ? 'multiple' : '' }}>
                                     @foreach($normaliseOptions($field['options'] ?? []) as $op)
                                         @php
                                             if ($isMultiple) {
@@ -823,29 +887,43 @@
                             </div>
                         @elseif ($type === 'checkbox')
                             <div {!! $wrapperAttrs !!}>
+                                @php
+                                    $checked = false;
+                                    if (is_bool($val)) {
+                                        $checked = $val;
+                                    } elseif (is_string($val)) {
+                                        $l = strtolower(trim($val));
+                                        $checked = in_array($l, ['yes','true','1','checked','on','done'], true);
+                                    } elseif (is_numeric($val)) {
+                                        $checked = ((int) $val) === 1;
+                                    }
+                                @endphp
+
                                 <div class="cf-checkbox-row">
-                                    @php
-                                        $checked = false;
-                                        if (is_bool($val)) {
-                                            $checked = $val;
-                                        } elseif (is_string($val)) {
-                                            $l = strtolower(trim($val));
-                                            $checked = in_array($l, ['yes','true','1','checked','on','done'], true);
-                                        } elseif (is_numeric($val)) {
-                                            $checked = ((int) $val) === 1;
-                                        }
-                                    @endphp
-                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" class="rounded-md focus:ring-2 mt-0.5" {{ $checked ? 'checked' : '' }}>
-                                    <label for="{{ $name }}" class="text-sm cursor-pointer select-none leading-6">{{ $label }}</label>
+                                    <label class="cf-check-option" for="{{ $name }}">
+                                        <input
+                                            type="checkbox"
+                                            id="{{ $name }}"
+                                            name="{{ $name }}"
+                                            class="cf-check-input"
+                                            data-req="{{ $req ? 1 : 0 }}"
+                                            {{ $checked ? 'checked' : '' }}
+                                        >
+                                        <span class="cf-check-box" aria-hidden="true"></span>
+                                        <span class="cf-check-text">{{ $label }}</span>
+                                    </label>
                                 </div>
-                                @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
+
+                                @if($help)
+                                    <p class="cf-help">{!! nl2br(e($help)) !!}</p>
+                                @endif
                             </div>
                         @elseif ($type === 'date')
                             <div {!! $wrapperAttrs !!}>
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <input type="date" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" @if($req) required @endif class="cf-input" />
+                                <input type="date" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" />
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @elseif ($type === 'file' || $type === 'file_upload' || $type === 'image')
@@ -925,7 +1003,7 @@
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <input type="file" id="{{ $name }}" name="{{ $name }}{{ $multiple ? '[]' : '' }}" @if($accept) accept="{{ $accept }}" @endif @if($multiple) multiple @endif class="cf-file-input" />
+                                <input type="file" id="{{ $name }}" name="{{ $name }}{{ $multiple ? '[]' : '' }}" @if($accept) accept="{{ $accept }}" @endif @if($multiple) multiple @endif class="cf-file-input" data-has-initial="{{ !empty($initialThumbs) ? '1' : '0' }}" />
                                 <label for="{{ $name }}" class="cf-file cf-file-btn">Choose Files</label>
 
                                 {{-- Existing thumbnails from saved value --}}
@@ -948,7 +1026,7 @@
                                 @if($label)
                                     <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
                                 @endif
-                                <input type="text" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" placeholder="{{ $ph }}" @if($req) required @endif class="cf-input" />
+                                <input type="text" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" placeholder="{{ $ph }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" />
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @endif
@@ -1059,6 +1137,22 @@
         return true;
     }
   }
+  function setReqAndDisabledFor(node, visible){
+    var inputs = node.querySelectorAll('input, select, textarea');
+    inputs.forEach(function(el){
+      var wantsReq = el.getAttribute('data-req') === '1';
+      if (el.type === 'file' && el.getAttribute('data-has-initial') === '1') {
+          wantsReq = false;
+      }
+      if (visible) {
+        el.disabled = false;
+        if (wantsReq) el.setAttribute('required','required'); else el.removeAttribute('required');
+      } else {
+        el.disabled = true;
+        el.removeAttribute('required');
+      }
+    });
+  }
   function evaluate(){
     var nodes = form.querySelectorAll('.cf-conditional');
     nodes.forEach(function(node){
@@ -1071,6 +1165,13 @@
       var val = getValue(field);
       var ok = matches({type:type, values:vals, field:field}, val);
       node.style.display = ok ? '' : 'none';
+      setReqAndDisabledFor(node, ok);
+    });
+    var allCards = form.querySelectorAll('.cf-field-card');
+    allCards.forEach(function(card){
+      if (!card.classList.contains('cf-conditional')){
+        setReqAndDisabledFor(card, true);
+      }
     });
   }
   function hookFilePreviews(){

@@ -77,6 +77,7 @@ class AdminPanelProvider extends PanelProvider
                 \Guava\Calendar\CalendarPlugin::make(),
             ])
             ->widgets([
+                \App\Filament\Widgets\WeightManagementAlertsWidget::class,
                 \App\Filament\Widgets\AppointmentsCalendarWidget::class,
                 \App\Filament\Widgets\KpiStats::class,
                 \App\Filament\Widgets\BookingStatusTable::class,

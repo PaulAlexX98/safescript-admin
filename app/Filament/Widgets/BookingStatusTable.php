@@ -27,17 +27,23 @@ class BookingStatusTable extends Base
     private function getCurrentRange(): array
     {
         $p = $this->period ?? 'monthly';
+        $now = Carbon::now();
+
         return match ($p) {
-            'weekly'  => [Carbon::now()->startOfWeek(), Carbon::now()->endOfWeek()],
-            'yearly'  => [Carbon::now()->startOfYear(), Carbon::now()->endOfYear()],
-            default   => [Carbon::now()->startOfMonth(), Carbon::now()->endOfMonth()],
+            // Rolling windows (as labelled in the UI)
+            'weekly'  => [$now->copy()->subWeeks(12)->startOfDay(), $now->copy()->endOfDay()],
+            'yearly'  => [$now->copy()->subYears(5)->startOfDay(), $now->copy()->endOfDay()],
+            default   => [$now->copy()->subMonths(12)->startOfDay(), $now->copy()->endOfDay()],
         };
     }
 
     private function dateColumnForStatus(string $statusKey): ?string
     {
         if ($statusKey === 'completed') {
-            if (Schema::hasColumn('orders', 'paid_at')) return 'orders.paid_at';
+            // Use an actual completion timestamp, not payment time
+            if (Schema::hasColumn('orders', 'completed_at')) return 'orders.completed_at';
+            if (Schema::hasColumn('orders', 'approved_at')) return 'orders.approved_at';
+            if (Schema::hasColumn('orders', 'updated_at')) return 'orders.updated_at';
             return Schema::hasColumn('orders', 'created_at') ? 'orders.created_at' : null;
         }
         if ($statusKey === 'rejected') {
@@ -53,23 +59,26 @@ class BookingStatusTable extends Base
     {
         // Strict groups. Prefer booking_status when present. No pending states included.
         if ($statusKey === 'completed') {
-            $q->where(function ($w) {
-                // Only truly completed or paid
-                if (Schema::hasColumn('orders', 'booking_status')) {
-                    $w->orWhere('orders.booking_status', 'completed');
-                }
-                if (Schema::hasColumn('orders', 'payment_status')) {
-                    $w->orWhere('orders.payment_status', 'paid');
-                }
-                if (Schema::hasColumn('orders', 'status')) {
-                    $w->orWhereIn('orders.status', ['completed', 'fulfilled']);
-                }
-            });
+            // Match the Completed orders list exactly.
+            // Do NOT treat paid orders as completed.
+            if (Schema::hasColumn('orders', 'status')) {
+                $q->where('orders.status', 'completed');
+                return;
+            }
+
+            // Fallback if this project uses booking_status instead of status
+            if (Schema::hasColumn('orders', 'booking_status')) {
+                $q->whereIn('orders.booking_status', ['approved', 'completed']);
+                return;
+            }
+
             return;
         }
 
         if ($statusKey === 'rejected') {
             $q->where(function ($w) {
+                $w->whereRaw('1=0');
+
                 if (Schema::hasColumn('orders', 'booking_status')) {
                     $w->orWhere('orders.booking_status', 'rejected');
                 }
@@ -82,6 +91,8 @@ class BookingStatusTable extends Base
 
         if ($statusKey === 'unpaid') {
             $q->where(function ($w) {
+                $w->whereRaw('1=0');
+
                 if (Schema::hasColumn('orders', 'booking_status')) {
                     // Only explicit unpaid; DO NOT include pending approval
                     $w->orWhere('orders.booking_status', 'unpaid');
@@ -185,13 +196,8 @@ class BookingStatusTable extends Base
                 $q->whereBetween($dateCol, [$start, $end]);
             }
 
-            if ($key === 'completed') {
-                // Your original strict rule that was correct before
-                $q->where('status', 'completed');
-            } else {
-                // Use normalised mapping for rejected and unpaid
-                $this->applyOrderStatusFilter($q, $key);
-            }
+            // Use normalised mapping for all statuses so counts match dashboard widgets
+            $this->applyOrderStatusFilter($q, $key);
 
             return [$key => (int) $q->count()];
         });

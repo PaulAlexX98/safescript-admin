@@ -92,7 +92,7 @@ class RevenueBookingsChart extends ChartWidget
                 $end   = $d->copy()->endOfDay();
                 $labels[] = $d->format('d M');
                 $revenue[] = $this->revenueSumForRange($start, $end);
-                $bookings[] = DB::table('appointments')->whereBetween('created_at', [$start, $end])->count();
+                $bookings[] = $this->bookingsCountForRange($start, $end);
             }
         }
 
@@ -102,7 +102,7 @@ class RevenueBookingsChart extends ChartWidget
                 $end   = now()->endOfWeek()->subWeeks($i);
                 $labels[] = 'W' . $start->format('W');
                 $revenue[] = $this->revenueSumForRange($start, $end);
-                $bookings[] = DB::table('appointments')->whereBetween('created_at', [$start, $end])->count();
+                $bookings[] = $this->bookingsCountForRange($start, $end);
             }
         }
 
@@ -112,7 +112,7 @@ class RevenueBookingsChart extends ChartWidget
                 $end   = now()->endOfMonth()->subMonths($i);
                 $labels[] = $start->format('M Y');
                 $revenue[] = $this->revenueSumForRange($start, $end);
-                $bookings[] = DB::table('appointments')->whereBetween('created_at', [$start, $end])->count();
+                $bookings[] = $this->bookingsCountForRange($start, $end);
             }
         }
 
@@ -122,7 +122,7 @@ class RevenueBookingsChart extends ChartWidget
                 $end   = now()->endOfYear()->subYears($i);
                 $labels[] = $start->format('Y');
                 $revenue[] = $this->revenueSumForRange($start, $end);
-                $bookings[] = DB::table('appointments')->whereBetween('created_at', [$start, $end])->count();
+                $bookings[] = $this->bookingsCountForRange($start, $end);
             }
         }
 
@@ -142,9 +142,29 @@ class RevenueBookingsChart extends ChartWidget
             return 0;
         }
 
+        // Use a completion-like timestamp when available
+        $dateCol = null;
+        if (Schema::hasColumn($t, 'completed_at')) {
+            $dateCol = 'completed_at';
+        } elseif (Schema::hasColumn($t, 'paid_at')) {
+            $dateCol = 'paid_at';
+        } elseif (Schema::hasColumn($t, 'created_at')) {
+            $dateCol = 'created_at';
+        }
+
         $q = DB::table($t);
-        if (Schema::hasColumn($t, 'created_at')) {
-            $q->whereBetween('created_at', [$start, $end]);
+
+        if ($dateCol) {
+            $q->whereBetween($dateCol, [$start, $end]);
+        }
+
+        // Only count completed orders (avoid inflating revenue with merely-paid/pending records)
+        if (Schema::hasColumn($t, 'status')) {
+            $q->where('status', 'completed');
+        } elseif (Schema::hasColumn($t, 'booking_status')) {
+            $q->whereIn('booking_status', ['approved', 'completed']);
+        } elseif (Schema::hasColumn($t, 'payment_status')) {
+            $q->where('payment_status', 'paid');
         }
 
         if (Schema::hasColumn($t, 'total')) {
@@ -174,5 +194,44 @@ class RevenueBookingsChart extends ChartWidget
         }
 
         return 0;
+    }
+
+    private function bookingsCountForRange(Carbon $start, Carbon $end): int
+    {
+        $t = 'orders';
+        if (! Schema::hasTable($t)) {
+            return 0;
+        }
+
+        // Use an order completion-like timestamp when available so counts align with completed orders
+        $dateCol = null;
+        if (Schema::hasColumn($t, 'completed_at')) {
+            $dateCol = 'completed_at';
+        } elseif (Schema::hasColumn($t, 'approved_at')) {
+            $dateCol = 'approved_at';
+        } elseif (Schema::hasColumn($t, 'created_at')) {
+            $dateCol = 'created_at';
+        }
+
+        $q = DB::table($t);
+
+        if ($dateCol) {
+            $q->whereBetween($dateCol, [$start, $end]);
+        }
+
+        // Match your Completed Orders list exactly
+        if (Schema::hasColumn($t, 'status')) {
+            $q->where('status', 'completed');
+        } elseif (Schema::hasColumn($t, 'booking_status')) {
+            // Fallback if status column isn't used
+            $q->whereIn('booking_status', ['approved', 'completed']);
+        }
+
+        // Soft deletes
+        if (Schema::hasColumn($t, 'deleted_at')) {
+            $q->whereNull('deleted_at');
+        }
+
+        return (int) $q->count();
     }
 }

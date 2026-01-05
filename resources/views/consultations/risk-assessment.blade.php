@@ -551,7 +551,20 @@
       .cf-summary{font-size:13px;margin:0}
       .cf-label{font-size:14px;display:block;margin-bottom:6px}
       .cf-help{font-size:12px;margin-top:6px}
-      .cf-checkbox-row{display:flex;align-items:center;gap:10px}
+      .cf-checkbox-row{display:flex;align-items:flex-start;gap:12px;margin-top:6px}
+      /* Checkbox pill (no :has dependency) */
+      .cf-check-option{display:inline-flex}
+      .cf-check-input{position:absolute;opacity:0;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+      .cf-check-pill{display:inline-flex;align-items:center;gap:10px;padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.035);cursor:pointer;user-select:none;transition:background .15s ease,border-color .15s ease,transform .08s ease}
+      .cf-check-pill:hover{background:rgba(255,255,255,.055);border-color:rgba(255,255,255,.26)}
+      .cf-check-pill:active{transform:translateY(1px)}
+      .cf-check-box{width:20px;height:20px;border-radius:6px;border:2px solid rgba(255,255,255,.35);display:inline-flex;align-items:center;justify-content:center;transition:border-color .15s ease,background .15s ease}
+      .cf-check-box::after{content:'✓';font-size:14px;line-height:1;color:#fff;opacity:0;transform:translateY(-1px);transition:opacity .15s ease}
+      .cf-check-text{font-size:14px;line-height:1.4}
+      .cf-check-input:focus-visible + .cf-check-pill{outline:2px solid rgba(34,197,94,.6);outline-offset:2px}
+      .cf-check-input:checked + .cf-check-pill{border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.12)}
+      .cf-check-input:checked + .cf-check-pill .cf-check-box{border-color:rgba(34,197,94,1);background:rgba(34,197,94,1)}
+      .cf-check-input:checked + .cf-check-pill .cf-check-box::after{opacity:1}
       .cf-ul{list-style:disc;padding-left:20px;margin:0}
       .cf-ul li{margin:4px 0}
       .cf-paras p{margin:8px 0;line-height:1.6}
@@ -563,6 +576,17 @@
       .cf-input:focus, .cf-textarea:focus, .cf-select:focus{outline:none;border-color:rgba(255,255,255,.28);box-shadow:0 0 0 2px rgba(255,255,255,.12)}
       .cf-thumbs{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
       .cf-thumb{width:200px;height:200px;object-fit:cover;border-radius:8px;border:1px solid rgba(255,255,255,.14)}
+      /* Radio pill buttons (no :has dependency) */
+      .cf-radio-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
+      .cf-radio-option{display:inline-flex}
+      .cf-radio-input{position:absolute;opacity:0;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+      .cf-radio-pill{display:inline-flex;align-items:center;gap:10px;padding:10px 16px;border-radius:9999px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.035);cursor:pointer;user-select:none;transition:background .15s ease,border-color .15s ease,transform .08s ease}
+      .cf-radio-pill:hover{background:rgba(255,255,255,.055);border-color:rgba(255,255,255,.26)}
+      .cf-radio-pill:active{transform:translateY(1px)}
+      .cf-radio-pill::before{content:'';width:18px;height:18px;border-radius:9999px;border:2px solid rgba(255,255,255,.35);box-shadow:inset 0 0 0 5px transparent;transition:border-color .15s ease,box-shadow .15s ease}
+      .cf-radio-input:focus-visible + .cf-radio-pill{outline:2px solid rgba(34,197,94,.6);outline-offset:2px}
+      .cf-radio-input:checked + .cf-radio-pill{border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.12)}
+      .cf-radio-input:checked + .cf-radio-pill::before{border-color:rgba(34,197,94,1);box-shadow:inset 0 0 0 5px rgba(34,197,94,1)}
     </style>
 @endonce
 
@@ -786,7 +810,7 @@
 
                                     $valSlug = \Illuminate\Support\Str::slug((string) $valForRadio);
                                 @endphp
-                                <div class="flex flex-wrap items-center -m-2">
+                                <div class="cf-radio-row">
                                     @foreach($normaliseOptions($field['options'] ?? []) as $idx => $op)
                                         @php
                                             $rid   = $name.'_'.$idx;
@@ -804,9 +828,16 @@
                                                 $selected = ((string)$valForRadio === $opVal) || ((string)$valForRadio === $opLab);
                                             }
                                         @endphp
-                                        <label for="{{ $rid }}" class="p-2 inline-flex items-center gap-2 text-sm">
-                                            <input type="radio" id="{{ $rid }}" name="{{ $name }}" value="{{ $op['value'] }}" class="rounded-full focus:ring-2" {{ $selected ? 'checked' : '' }}>
-                                            <span>{{ $op['label'] }}</span>
+                                        <label for="{{ $rid }}" class="cf-radio-option">
+                                            <input
+                                                type="radio"
+                                                id="{{ $rid }}"
+                                                name="{{ $name }}"
+                                                value="{{ $op['value'] }}"
+                                                class="cf-radio-input"
+                                                {{ $selected ? 'checked' : '' }}
+                                            >
+                                            <span class="cf-radio-pill">{{ $op['label'] }}</span>
                                         </label>
                                     @endforeach
                                 </div>
@@ -882,8 +913,13 @@
                                             $checked = ((int) $val) === 1;
                                         }
                                     @endphp
-                                    <input type="checkbox" id="{{ $name }}" name="{{ $name }}" class="rounded-md focus:ring-2 mt-0.5" {{ $checked ? 'checked' : '' }}>
-                                    <label for="{{ $name }}" class="text-sm cursor-pointer select-none leading-6">{{ $label }}</label>
+                                    <label for="{{ $name }}" class="cf-check-option">
+                                        <input type="checkbox" id="{{ $name }}" name="{{ $name }}" class="cf-check-input" {{ $checked ? 'checked' : '' }}>
+                                        <span class="cf-check-pill">
+                                            <span class="cf-check-box"></span>
+                                            <span class="cf-check-text">{{ $label }}</span>
+                                        </span>
+                                    </label>
                                 </div>
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
