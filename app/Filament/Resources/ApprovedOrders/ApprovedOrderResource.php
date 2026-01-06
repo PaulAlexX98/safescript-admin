@@ -587,6 +587,105 @@ class ApprovedOrderResource extends Resource
                                     })
                                     ->html(),
                             ]),
+
+                        Section::make('Order history')
+                            ->collapsible()
+                            ->collapsed(false)
+                            ->schema([
+                                ViewEntry::make('order_history_view')
+                                    ->hiddenLabel()
+                                    ->view('filament.partials.order-history-table')
+                                    ->getStateUsing(function ($record) {
+                                        if (! $record) return ['rows' => []];
+
+                                        $uid = $record->user_id ?: optional($record->user)->id;
+                                        $pid = $record->patient_id;
+
+                                        $q = \App\Models\Order::query()
+                                            ->where('status', 'completed')
+                                            ->where(function ($w) use ($uid, $pid) {
+                                                if ($uid) {
+                                                    $w->orWhere('user_id', $uid)
+                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.user_id') = ?", [$uid])
+                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.user.id') = ?", [$uid]);
+                                                }
+                                                if ($pid && \Schema::hasColumn('orders', 'patient_id')) {
+                                                    $w->orWhere('patient_id', $pid)
+                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.patient_id') = ?", [$pid])
+                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.patient.id') = ?", [$pid]);
+                                                }
+                                            });
+
+                                        $orders = $q->latest('id')->limit(25)->get();
+
+                                        $money = function ($o) {
+                                            if (isset($o->products_total_minor) && is_numeric($o->products_total_minor)) {
+                                                return '£' . number_format(((int) $o->products_total_minor) / 100, 2);
+                                            }
+                                            $m = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
+                                            $val = data_get($m, 'products_total_minor') ?? data_get($m, 'totalMinor') ?? data_get($m, 'amountMinor');
+                                            if (is_numeric($val)) return '£' . number_format(((int) $val) / 100, 2);
+                                            $sum = 0;
+                                            foreach ((array) (data_get($m, 'items') ?? data_get($m, 'lines') ?? []) as $it) {
+                                                if (!is_array($it)) continue;
+                                                $qty   = (int) ($it['qty'] ?? $it['quantity'] ?? 1) ?: 1;
+                                                $minor = $it['totalMinor'] ?? $it['lineTotalMinor'] ?? $it['amountMinor'] ?? null;
+                                                if ($minor === null && isset($it['unitMinor'])) $minor = (int) $it['unitMinor'] * $qty;
+                                                if (is_numeric($minor)) $sum += (int) $minor;
+                                            }
+                                            return $sum > 0 ? '£' . number_format($sum / 100, 2) : '—';
+                                        };
+
+                                        $fmtDate = fn($dt) => tap($dt, function (&$x) {
+                                            try { $x = \Carbon\Carbon::parse($x)->format('d-m-Y H:i'); } catch (\Throwable) {}
+                                        });
+
+                                        $itemsSummary = function ($o) {
+                                            $m = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
+                                            $cands = [data_get($m, 'items'), data_get($m, 'lines'), data_get($m, 'products'), data_get($m, 'line_items')];
+                                            $items = collect($cands)->first(fn($c) => is_array($c) && count($c)) ?? [];
+
+                                            if (empty($items)) {
+                                                $name = data_get($m, 'product_name') ?? data_get($m, 'selectedProduct.name');
+                                                if (!$name) return '—';
+                                                $qty = (int) (data_get($m, 'qty') ?? data_get($m, 'quantity') ?? 1) ?: 1;
+                                                $opt = data_get($m, 'selectedProduct.variations') ?? data_get($m, 'selectedProduct.optionLabel')
+                                                    ?? data_get($m, 'variant') ?? data_get($m, 'dose') ?? data_get($m, 'strength');
+                                                if (is_array($opt)) $opt = ($opt['label'] ?? $opt['value'] ?? '');
+                                                return e(trim("$qty × $name" . ($opt ? " $opt" : '')));
+                                            }
+
+                                            $labels = [];
+                                            foreach ($items as $it) {
+                                                $qty = (int) ($it['qty'] ?? $it['quantity'] ?? 1) ?: 1;
+                                                $name = $it['name'] ?? $it['title'] ?? $it['product_name'] ?? 'Item';
+                                                $opt = data_get($it, 'variations') ?? data_get($it, 'variation') ?? data_get($it, 'optionLabel')
+                                                    ?? data_get($it, 'variant') ?? data_get($it, 'dose') ?? data_get($it, 'strength') ?? data_get($it, 'option');
+                                                if (is_array($opt)) $opt = $opt['label'] ?? $opt['value'] ?? implode(' ', array_filter(array_map('strval', $opt)));
+                                                $labels[] = e(trim("$qty × $name" . ($opt ? " $opt" : '')));
+                                                if (count($labels) >= 2) break;
+                                            }
+                                            $html = implode('<br>', $labels);
+                                            $more = max(0, count($items) - 2);
+                                            if ($more) $html .= "<br><span class=\"oh-more\">+{$more} more</span>";
+                                            return $html ?: '—';
+                                        };
+
+                                        $rows = [];
+                                        foreach ($orders as $o) {
+                                            $rows[] = [
+                                                'ref'     => e($o->reference ?? ('#' . $o->id)),
+                                                'created' => $fmtDate($o->created_at) ?? '',
+                                                'items'   => $itemsSummary($o), // already escaped with <br>
+                                                'total'   => $money($o),
+                                                'url'     => "/admin/orders/completed-orders/{$o->id}/details",
+                                            ];
+                                        }
+
+                                        return ['rows' => $rows];
+                                    }),
+                            ]),
+
                         Section::make(function ($record) {
                             $items = [];
                             $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
