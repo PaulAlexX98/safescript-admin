@@ -28,6 +28,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use App\Models\Order;
 use App\Models\PendingOrder;
+use Illuminate\Support\Arr;
 
 class AppointmentResource extends Resource
 {
@@ -75,24 +76,120 @@ class AppointmentResource extends Resource
                     ->maxLength(191)
                     ->columnSpan(9),
 
-                \Filament\Forms\Components\DateTimePicker::make('start_at')
-                    ->label('Start')
+                \Filament\Forms\Components\Hidden::make('start_at')
+                    ->required(),
+
+                \Filament\Forms\Components\DatePicker::make('start_date')
+                    ->label('Date')
                     ->native(false)
-                    ->displayFormat('d M Y, H:i')
-                    ->timezone('Europe/London')
-                    ->seconds(false)
-                    ->minutesStep(5)
                     ->required()
+                    ->live()
+                    ->dehydrated(false)
+                    ->afterStateHydrated(function ($state, \Filament\Schemas\Components\Utilities\Set $set, $record) {
+                        if (! $record || empty($record->start_at)) {
+                            return;
+                        }
+                        try {
+                            $dt = \Carbon\Carbon::parse($record->start_at)->tz('Europe/London');
+                            $set('start_date', $dt->format('Y-m-d'));
+                        } catch (\Throwable $e) {
+                        }
+                    })
+                    ->afterStateUpdated(function ($state, \Filament\Schemas\Components\Utilities\Get $get, \Filament\Schemas\Components\Utilities\Set $set) {
+                        $date = $get('start_date');
+                        $time = $get('start_time');
+                        if (! $date || ! $time) {
+                            $set('start_at', null);
+                            return;
+                        }
+                        try {
+                            $dt = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, 'Europe/London');
+                            $set('start_at', $dt->format('Y-m-d H:i:s'));
+                        } catch (\Throwable $e) {
+                            $set('start_at', null);
+                        }
+                    })
                     ->columnSpan(6),
 
-                \Filament\Forms\Components\DateTimePicker::make('end_at')
-                    ->label('End')
+                \Filament\Forms\Components\Select::make('start_time')
+                    ->label('Time')
                     ->native(false)
-                    ->displayFormat('d M Y, H:i')
-                    ->timezone('Europe/London')
-                    ->seconds(false)
-                    ->minutesStep(5)
+                    ->options(function () {
+                        $opts = [];
+
+                        // 08:00 to 18:00 inclusive in 15-minute steps
+                        for ($h = 8; $h <= 18; $h++) {
+                            $hh = str_pad((string) $h, 2, '0', STR_PAD_LEFT);
+
+                            // only allow 18:00 (no 18:15 etc)
+                            if ($h === 18) {
+                                $t = $hh . ':00';
+                                $opts[$t] = $t;
+                                continue;
+                            }
+
+                            for ($m = 0; $m < 60; $m += 15) {
+                                $mm = str_pad((string) $m, 2, '0', STR_PAD_LEFT);
+                                $t = $hh . ':' . $mm;
+                                $opts[$t] = $t;
+                            }
+                        }
+
+                        return $opts;
+                    })
+                    ->searchable()
+                    ->required()
+                    ->live()
+                    ->dehydrated(false)
+                    ->afterStateHydrated(function ($state, \Filament\Schemas\Components\Utilities\Set $set, $record) {
+                        if (! $record || empty($record->start_at)) {
+                            return;
+                        }
+                        try {
+                            $dt = \Carbon\Carbon::parse($record->start_at)->tz('Europe/London');
+                            $t = $dt->format('H:i');
+
+                            [$hh, $mm] = array_pad(explode(':', $t, 2), 2, null);
+                            $h = is_numeric($hh) ? (int) $hh : -1;
+                            $m = is_numeric($mm) ? (int) $mm : -1;
+
+                            $ok = false;
+
+                            if ($h >= 8 && $h <= 17 && $m >= 0 && $m < 60 && ($m % 15 === 0)) {
+                                $ok = true;
+                            }
+
+                            if ($h === 18 && $m === 0) {
+                                $ok = true;
+                            }
+
+                            $set('start_time', $ok ? $t : null);
+                        } catch (\Throwable $e) {
+                        }
+                    })
+                    ->afterStateUpdated(function ($state, \Filament\Schemas\Components\Utilities\Get $get, \Filament\Schemas\Components\Utilities\Set $set) {
+                        $date = $get('start_date');
+                        $time = $get('start_time');
+                        if (! $date || ! $time) {
+                            $set('start_at', null);
+                            return;
+                        }
+                        try {
+                            $dt = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, 'Europe/London');
+                            $set('start_at', $dt->format('Y-m-d H:i:s'));
+                        } catch (\Throwable $e) {
+                            $set('start_at', null);
+                        }
+                    })
                     ->columnSpan(6),
+
+                \Filament\Forms\Components\Toggle::make('online_consultation')
+                    ->label('Online consultation')
+                    ->helperText('When on, the patient email includes a Zoom link')
+                    ->default(false)
+                    ->live()
+                    ->dehydrated(fn () => \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'online_consultation'))
+                    ->columnSpan(12),
 
                 \Filament\Forms\Components\TextInput::make('first_name')
                     ->label('First name')
@@ -417,6 +514,18 @@ class AppointmentResource extends Resource
                         });
                     }),
 
+                TextColumn::make('zoom_start')
+                    ->label('Zoom')
+                    ->alignCenter()
+                    ->getStateUsing(fn ($record) => static::zoomHostUrlFor($record))
+                    ->formatStateUsing(fn ($state) => filled($state) ? 'Start' : '—')
+                    ->url(fn ($record) => static::zoomHostUrlFor($record))
+                    ->openUrlInNewTab()
+                    ->icon('heroicon-o-video-camera')
+                    ->color(fn ($state) => filled($state) ? 'success' : 'gray')
+                    ->badge()
+                    ->sortable(false),
+
                 TextColumn::make('service')
                     ->label('Service')
                     ->getStateUsing(function ($record) {
@@ -496,16 +605,114 @@ class AppointmentResource extends Resource
                     ->icon('heroicon-o-calendar')
                     ->modalHeading('Reschedule appointment')
                     ->form([
-                        DateTimePicker::make('start_at')
-                            ->label('New start')
+                        // Hidden field that the action reads from ($data['start_at'])
+                        \Filament\Forms\Components\Hidden::make('start_at')
+                            ->required(),
+
+                        // Same date picker behaviour as Create Appointment
+                        DatePicker::make('start_date')
+                            ->label('Date')
                             ->native(false)
-                            ->displayFormat('d M Y, H:i')
-                            ->timezone('Europe/London')
-                            ->seconds(false)
-                            ->minutesStep(5)
                             ->required()
-                            ->default(fn ($record) => $record->start_at),
-                        
+                            ->live()
+                            ->dehydrated(false)
+                            ->afterStateHydrated(function ($state, \Filament\Schemas\Components\Utilities\Set $set, $record) {
+                                if (! $record || empty($record->start_at)) {
+                                    return;
+                                }
+                                try {
+                                    $dt = \Carbon\Carbon::parse($record->start_at)->tz('Europe/London');
+                                    $set('start_date', $dt->format('Y-m-d'));
+                                } catch (\Throwable $e) {
+                                }
+                            })
+                            ->afterStateUpdated(function ($state, \Filament\Schemas\Components\Utilities\Get $get, \Filament\Schemas\Components\Utilities\Set $set) {
+                                $date = $get('start_date');
+                                $time = $get('start_time');
+                                if (! $date || ! $time) {
+                                    $set('start_at', null);
+                                    return;
+                                }
+                                try {
+                                    $dt = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, 'Europe/London');
+                                    $set('start_at', $dt->format('Y-m-d H:i:s'));
+                                } catch (\Throwable $e) {
+                                    $set('start_at', null);
+                                }
+                            }),
+
+                        // Same time picker options and validation as Create Appointment
+                        Select::make('start_time')
+                            ->label('Time')
+                            ->native(false)
+                            ->options(function () {
+                                $opts = [];
+
+                                // 08:00 to 18:00 inclusive in 15-minute steps
+                                for ($h = 8; $h <= 18; $h++) {
+                                    $hh = str_pad((string) $h, 2, '0', STR_PAD_LEFT);
+
+                                    // only allow 18:00 (no 18:15 etc)
+                                    if ($h === 18) {
+                                        $t = $hh . ':00';
+                                        $opts[$t] = $t;
+                                        continue;
+                                    }
+
+                                    for ($m = 0; $m < 60; $m += 15) {
+                                        $mm = str_pad((string) $m, 2, '0', STR_PAD_LEFT);
+                                        $t = $hh . ':' . $mm;
+                                        $opts[$t] = $t;
+                                    }
+                                }
+
+                                return $opts;
+                            })
+                            ->searchable()
+                            ->required()
+                            ->live()
+                            ->dehydrated(false)
+                            ->afterStateHydrated(function ($state, \Filament\Schemas\Components\Utilities\Set $set, $record) {
+                                if (! $record || empty($record->start_at)) {
+                                    return;
+                                }
+                                try {
+                                    $dt = \Carbon\Carbon::parse($record->start_at)->tz('Europe/London');
+                                    $t = $dt->format('H:i');
+
+                                    [$hh, $mm] = array_pad(explode(':', $t, 2), 2, null);
+                                    $h = is_numeric($hh) ? (int) $hh : -1;
+                                    $m = is_numeric($mm) ? (int) $mm : -1;
+
+                                    $ok = false;
+
+                                    if ($h >= 8 && $h <= 17 && $m >= 0 && $m < 60 && ($m % 15 === 0)) {
+                                        $ok = true;
+                                    }
+
+                                    if ($h === 18 && $m === 0) {
+                                        $ok = true;
+                                    }
+
+                                    $set('start_time', $ok ? $t : null);
+                                } catch (\Throwable $e) {
+                                }
+                            })
+                            ->afterStateUpdated(function ($state, \Filament\Schemas\Components\Utilities\Get $get, \Filament\Schemas\Components\Utilities\Set $set) {
+                                $date = $get('start_date');
+                                $time = $get('start_time');
+                                if (! $date || ! $time) {
+                                    $set('start_at', null);
+                                    return;
+                                }
+                                try {
+                                    $dt = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, 'Europe/London');
+                                    $set('start_at', $dt->format('Y-m-d H:i:s'));
+                                } catch (\Throwable $e) {
+                                    $set('start_at', null);
+                                }
+                            }),
+
                         Textarea::make('reason')
                             ->label('Reason for change')
                             ->rows(3),
@@ -807,7 +1014,7 @@ class AppointmentResource extends Resource
     // -- Helper methods for Ref/Item/URL placeholders and actions --
     // -- Helper methods for Ref/Item/URL placeholders and actions --
 
-    protected static function findRelatedOrder($record): ?\App\Models\Order
+    public static function findRelatedOrder($record): ?\App\Models\Order
     {
         if (! $record) return null;
 
@@ -819,15 +1026,27 @@ class AppointmentResource extends Resource
             }
         } catch (\Throwable $e) {}
 
-        // 1.5) Match by stored order_reference if present
+        // 1.5) Match by reference value saved on the appointment row
         try {
-            $ref = is_string($record->order_reference ?? null) ? trim($record->order_reference) : '';
+            $ref = '';
+
+            if (is_string($record->order_reference ?? null)) {
+                $ref = trim((string) $record->order_reference);
+            }
+
+            // Admin created appointments often store the reference in `reference`, not `order_reference`
+            if ($ref === '' && is_string($record->reference ?? null)) {
+                $ref = trim((string) $record->reference);
+            }
+
             if ($ref !== '') {
                 $o = \App\Models\Order::query()
                     ->where('reference', $ref)
                     ->orderByDesc('id')
                     ->first();
-                if ($o) return $o;
+                if ($o) {
+                    return $o;
+                }
             }
         } catch (\Throwable $e) {}
 
@@ -835,15 +1054,47 @@ class AppointmentResource extends Resource
         try {
             if (!empty($record->start_at)) {
                 $s = \Carbon\Carbon::parse($record->start_at);
-                $isoUtc = $s->copy()->setTimezone('UTC')->toIso8601String();
-                $ymsLon = $s->copy()->setTimezone('Europe/London')->format('Y-m-d H:i:s');
 
-                foreach (['appointment_start_at','appointment_at'] as $key) {
+                $utc = $s->copy()->setTimezone('UTC');
+                $lon = $s->copy()->setTimezone('Europe/London');
+
+                $candidates = array_values(array_unique(array_filter([
+                    // ISO variants
+                    $utc->toIso8601String(),
+                    $lon->toIso8601String(),
+
+                    // MySQL-ish variants
+                    $utc->format('Y-m-d H:i:s'),
+                    $lon->format('Y-m-d H:i:s'),
+                    $utc->format('Y-m-d H:i'),
+                    $lon->format('Y-m-d H:i'),
+
+                    // Explicit Zulu format (often used in JS)
+                    $utc->format('Y-m-d\\TH:i:s\\Z'),
+                ], fn ($v) => is_string($v) && trim($v) !== '')));
+
+                $keysToTry = [
+                    'appointment_start_at',
+                    'appointment_at',
+                    'appointment_start',
+                    'appointment_datetime',
+                    'appointmentDateTime',
+                ];
+
+                foreach ($keysToTry as $key) {
+                    $placeholders = implode(',', array_fill(0, count($candidates), '?'));
+
                     $ord = \App\Models\Order::query()
-                        ->whereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.$key')) in (?,?)", [$isoUtc, $ymsLon])
+                        ->whereRaw(
+                            "JSON_UNQUOTE(JSON_EXTRACT(meta, '$.$key')) in ($placeholders)",
+                            $candidates
+                        )
                         ->orderByDesc('id')
                         ->first();
-                    if ($ord) return $ord;
+
+                    if ($ord) {
+                        return $ord;
+                    }
                 }
             }
         } catch (\Throwable $e) {}
@@ -866,11 +1117,16 @@ class AppointmentResource extends Resource
         }
 
         // 2) Fall back to appointment's own saved reference
-        $own = $record->order_reference ?? null;
-        if (is_string($own)) {
-            $own = trim($own);
-            return ($own !== '' && $own !== '-') ? $own : null;
+        foreach (['order_reference', 'reference'] as $field) {
+            $own = $record->{$field} ?? null;
+            if (is_string($own)) {
+                $own = trim($own);
+                if ($own !== '' && $own !== '-') {
+                    return $own;
+                }
+            }
         }
+
         return null;
     }
 
@@ -937,5 +1193,473 @@ class AppointmentResource extends Resource
 
         // Keep the original completed details path which you confirmed is correct
         return url("/admin/orders/completed-orders/{$order->id}/details");
+    }
+
+    protected static function zoomHostUrlFor($record): ?string
+    {
+        try {
+            if (! $record) {
+                return null;
+            }
+
+            // 1) Direct scalar fields on the appointment
+            foreach (['zoom_start_url', 'zoom_host_url', 'host_zoom_url', 'zoom_url', 'zoom_start', 'zoom_host', 'zoom_link'] as $k) {
+                try {
+                    if (isset($record->{$k}) && is_string($record->{$k}) && trim($record->{$k}) !== '') {
+                        return trim($record->{$k});
+                    }
+                } catch (\Throwable $e) {
+                    // ignore
+                }
+            }
+
+            // 1b) Common appointment-level JSON / array shapes (casts) like `zoom`, `zoom_info`, `zoomInfo`
+            foreach (['zoom', 'zoom_info', 'zoomInfo', 'zoom_meeting', 'meeting', 'video'] as $k) {
+                try {
+                    if (! isset($record->{$k})) {
+                        continue;
+                    }
+
+                    $val = $record->{$k};
+
+                    if (is_string($val)) {
+                        $decoded = json_decode($val, true);
+                        if (is_array($decoded)) {
+                            $val = $decoded;
+                        }
+                    }
+
+                    if (is_array($val)) {
+                        $url = $val['start_url'] ?? $val['host_url'] ?? $val['startUrl'] ?? $val['hostUrl'] ?? null;
+                        if (is_string($url) && trim($url) !== '') {
+                            return trim($url);
+                        }
+
+                        $join = $val['join_url'] ?? $val['joinUrl'] ?? null;
+                        if (is_string($join) && trim($join) !== '') {
+                            return trim($join);
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    // ignore
+                }
+            }
+
+            // 1c) Appointment meta.zoom.* (this is now the primary source for admin-created appointments)
+            try {
+                if (isset($record->meta)) {
+                    $ameta = $record->meta;
+
+                    if (is_string($ameta)) {
+                        $decoded = json_decode($ameta, true);
+                        if (is_array($decoded)) {
+                            $ameta = $decoded;
+                        }
+                    }
+
+                    if (is_array($ameta)) {
+                        $url = Arr::get($ameta, 'zoom.start_url')
+                            ?? Arr::get($ameta, 'zoom.host_url')
+                            ?? Arr::get($ameta, 'zoom.startUrl')
+                            ?? Arr::get($ameta, 'zoom.hostUrl');
+
+                        if (is_string($url) && trim($url) !== '') {
+                            return trim($url);
+                        }
+
+                        $join = Arr::get($ameta, 'zoom.join_url')
+                            ?? Arr::get($ameta, 'zoom.joinUrl');
+
+                        if (is_string($join) && trim($join) !== '') {
+                            return trim($join);
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                // ignore
+            }
+
+            // 2) Try to resolve a related Order first, then a PendingOrder (admin-created appointments often map to pending_orders)
+            $orderLike = static::findRelatedOrder($record);
+            if (! $orderLike) {
+                $orderLike = static::findRelatedPendingOrder($record);
+            }
+
+            // 3) Extract from meta / zoomInfo shapes
+            $meta = null;
+            $zoomInfo = null;
+
+            if ($orderLike) {
+                $meta = $orderLike->meta ?? null;
+                $zoomInfo = $orderLike->zoomInfo ?? $orderLike->zoom_info ?? null;
+            }
+
+            // Appointment may also have its own meta fields
+            foreach (['meta', 'metadata', 'data', 'payload'] as $mk) {
+                try {
+                    if ($meta === null && isset($record->{$mk})) {
+                        $meta = $record->{$mk};
+                    }
+                } catch (\Throwable $e) {
+                    // ignore
+                }
+            }
+
+            // Normalise meta
+            if (is_string($meta)) {
+                $decoded = json_decode($meta, true);
+                if (is_array($decoded)) {
+                    $meta = $decoded;
+                }
+            }
+
+            if (is_string($zoomInfo)) {
+                $decoded = json_decode($zoomInfo, true);
+                if (is_array($decoded)) {
+                    $zoomInfo = $decoded;
+                }
+            }
+
+            if (is_array($meta)) {
+                $url =
+                    Arr::get($meta, 'zoomInfo.start_url') ??
+                    Arr::get($meta, 'zoomInfo.host_url') ??
+                    Arr::get($meta, 'zoom_info.start_url') ??
+                    Arr::get($meta, 'zoom_info.host_url') ??
+                    Arr::get($meta, 'zoom.start_url') ??
+                    Arr::get($meta, 'zoom.host_url') ??
+                    Arr::get($meta, 'zoom.startUrl') ??
+                    Arr::get($meta, 'zoom.hostUrl') ??
+                    Arr::get($meta, 'zoom_start_url') ??
+                    Arr::get($meta, 'zoom_host_url');
+
+                if (! empty($url) && is_string($url)) {
+                    return trim($url);
+                }
+
+                // Sometimes only join_url is stored – do not prefer it, but use as last resort so the button appears.
+                $join =
+                    Arr::get($meta, 'zoomInfo.join_url') ??
+                    Arr::get($meta, 'zoom_info.join_url') ??
+                    Arr::get($meta, 'zoom.join_url') ??
+                    Arr::get($meta, 'zoom.joinUrl') ??
+                    Arr::get($meta, 'zoom_join_url');
+
+                if (! empty($join) && is_string($join)) {
+                    return trim($join);
+                }
+
+                // Fallback: recursively scan meta for ANY Zoom URL, even if stored under unknown keys
+                $candidates = [];
+                $walk = function ($v) use (&$walk, &$candidates) {
+                    if (is_string($v)) {
+                        $s = trim($v);
+                        if ($s !== '' && str_contains($s, 'zoom.us')) {
+                            $candidates[] = $s;
+                        }
+                        return;
+                    }
+                    if (is_array($v)) {
+                        foreach ($v as $vv) {
+                            $walk($vv);
+                        }
+                    }
+                };
+
+                $walk($meta);
+
+                if (! empty($candidates)) {
+                    // Prefer host/start URLs (they often contain zak= or start)
+                    foreach ($candidates as $u) {
+                        if (str_contains($u, 'zak=') || str_contains($u, 'start')) {
+                            return $u;
+                        }
+                    }
+                    return $candidates[0];
+                }
+            }
+
+            if (is_array($zoomInfo)) {
+                $url = Arr::get($zoomInfo, 'start_url') ?? Arr::get($zoomInfo, 'host_url') ?? Arr::get($zoomInfo, 'startUrl') ?? Arr::get($zoomInfo, 'hostUrl');
+                if (! empty($url) && is_string($url)) {
+                    return trim($url);
+                }
+
+                $join = Arr::get($zoomInfo, 'join_url') ?? Arr::get($zoomInfo, 'joinUrl');
+                if (! empty($join) && is_string($join)) {
+                    return trim($join);
+                }
+
+                // Fallback scan within zoomInfo for any Zoom URL
+                $candidates = [];
+                $walk = function ($v) use (&$walk, &$candidates) {
+                    if (is_string($v)) {
+                        $s = trim($v);
+                        if ($s !== '' && str_contains($s, 'zoom.us')) {
+                            $candidates[] = $s;
+                        }
+                        return;
+                    }
+                    if (is_array($v)) {
+                        foreach ($v as $vv) {
+                            $walk($vv);
+                        }
+                    }
+                };
+                $walk($zoomInfo);
+
+                if (! empty($candidates)) {
+                    foreach ($candidates as $u) {
+                        if (str_contains($u, 'zak=') || str_contains($u, 'start')) {
+                            return $u;
+                        }
+                    }
+                    return $candidates[0];
+                }
+            }
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
+        return null;
+    }
+
+    // --- Custom helpers for PCAO reference and Zoom storage ---
+    public static function generatePcaoRef(): string
+    {
+        try {
+            $rand = random_int(0, 999999);
+        } catch (\Throwable $e) {
+            $rand = mt_rand(0, 999999);
+        }
+
+        return 'PCAO' . str_pad((string) $rand, 6, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * Ensure there is a stored Zoom host URL that the table column can read.
+     *
+     * For admin-created appointments, there may be no Order row yet. In that case,
+     * we create/update a matching PendingOrder by reference and store `meta.zoom.start_url`.
+     */
+    public static function ensureZoomStoredForAppointment(\App\Models\Appointment $record): void
+    {
+        if (! $record) {
+            return;
+        }
+
+        // Only for online consultations.
+        if (! (bool) ($record->online_consultation ?? false)) {
+            return;
+        }
+
+        // If we already have a URL that would show in the column, do nothing.
+        try {
+            if (filled(static::zoomHostUrlFor($record))) {
+                return;
+            }
+        } catch (\Throwable $e) {
+        }
+
+        if (! class_exists(\App\Services\ZoomMeetingService::class)) {
+            return;
+        }
+
+        $realOrder = null;
+        try {
+            $realOrder = static::findRelatedOrder($record);
+        } catch (\Throwable $e) {
+        }
+
+        // Create a lightweight Order model if we don't have a real one yet.
+        $orderForZoom = $realOrder ?: new \App\Models\Order();
+
+        if (! $realOrder) {
+            $ref = static::resolveOrderRef($record)
+                ?? (is_string($record->order_reference ?? null) ? trim((string) $record->order_reference) : '');
+
+            if ($ref !== '') {
+                $orderForZoom->reference = $ref;
+            }
+
+            if (is_string($record->first_name ?? null)) {
+                $orderForZoom->first_name = $record->first_name;
+            }
+
+            if (is_string($record->last_name ?? null)) {
+                $orderForZoom->last_name = $record->last_name;
+            }
+
+            if (is_string($record->email ?? null)) {
+                $orderForZoom->email = $record->email;
+            }
+
+            $orderForZoom->meta = [
+                'service'         => $record->service_name ?? $record->service ?? null,
+                'appointment_at'  => $record->start_at ? \Carbon\Carbon::parse($record->start_at)->toIso8601String() : null,
+                'patient'         => [
+                    'first_name' => $record->first_name ?? null,
+                    'last_name'  => $record->last_name ?? null,
+                    'email'      => $record->email ?? null,
+                ],
+            ];
+        }
+
+        try {
+            $zoom = app(\App\Services\ZoomMeetingService::class);
+            $zoomInfo = $zoom->createForAppointment($record, $orderForZoom);
+
+            if (! is_array($zoomInfo)) {
+                return;
+            }
+
+            $startUrl = $zoomInfo['start_url'] ?? $zoomInfo['startUrl'] ?? null;
+            $joinUrl  = $zoomInfo['join_url'] ?? $zoomInfo['joinUrl'] ?? null;
+
+            if (! is_string($startUrl) || trim($startUrl) === '') {
+                return;
+            }
+
+            $payload = [
+                'meeting_id' => $zoomInfo['id'] ?? $zoomInfo['meeting_id'] ?? null,
+                'join_url'   => is_string($joinUrl) ? $joinUrl : null,
+                'start_url'  => $startUrl,
+                'saved_at'   => now()->toIso8601String(),
+            ];
+
+            // If we have a real order, store it there.
+            if ($realOrder) {
+                $meta = is_array($realOrder->meta) ? $realOrder->meta : (json_decode($realOrder->meta ?? '[]', true) ?: []);
+                $meta['zoom'] = array_replace($meta['zoom'] ?? [], $payload);
+                $realOrder->meta = $meta;
+                $realOrder->save();
+                return;
+            }
+
+            // Otherwise, create/update a PendingOrder so the Appointment table column can resolve the host URL.
+            $ref = static::resolveOrderRef($record)
+                ?? (is_string($record->order_reference ?? null) ? trim((string) $record->order_reference) : '');
+
+            if ($ref === '') {
+                return;
+            }
+
+            try {
+                $pending = \App\Models\PendingOrder::query()->where('reference', $ref)->latest('id')->first();
+
+                if (! $pending) {
+                    $pending = new \App\Models\PendingOrder();
+                    $pending->reference = $ref;
+                }
+
+                $pMeta = is_array($pending->meta) ? $pending->meta : (json_decode($pending->meta ?? '[]', true) ?: []);
+
+                // Keep a few useful bits for debugging/traceability.
+                $pMeta['appointment_at'] = $pMeta['appointment_at'] ?? ($record->start_at ? \Carbon\Carbon::parse($record->start_at)->toIso8601String() : null);
+                $pMeta['service']        = $pMeta['service'] ?? ($record->service_name ?? $record->service ?? null);
+                $pMeta['patient']        = $pMeta['patient'] ?? [
+                    'first_name' => $record->first_name ?? null,
+                    'last_name'  => $record->last_name ?? null,
+                    'email'      => $record->email ?? null,
+                ];
+
+                $pMeta['zoom'] = array_replace($pMeta['zoom'] ?? [], $payload);
+
+                $pending->meta = $pMeta;
+                $pending->save();
+            } catch (\Throwable $pe) {
+                \Log::warning('appointment.zoom.pending_save_failed', [
+                    'ref'   => $ref,
+                    'appt'  => $record->id ?? null,
+                    'error' => $pe->getMessage(),
+                ]);
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('appointment.zoom.ensure_failed', [
+                'appt'  => $record->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    // --- End custom helpers ---
+
+    protected static function findRelatedPendingOrder($record): ?\App\Models\PendingOrder
+    {
+        if (! $record) {
+            return null;
+        }
+
+        // 1) Match by a reference value saved on the appointment row
+        try {
+            $ref = '';
+
+            if (is_string($record->order_reference ?? null)) {
+                $ref = trim((string) $record->order_reference);
+            }
+
+            // Admin created appointments often store the reference in `reference`
+            if ($ref === '' && is_string($record->reference ?? null)) {
+                $ref = trim((string) $record->reference);
+            }
+
+            if ($ref !== '') {
+                $p = \App\Models\PendingOrder::query()
+                    ->where('reference', $ref)
+                    ->orderByDesc('id')
+                    ->first();
+                if ($p) {
+                    return $p;
+                }
+            }
+        } catch (\Throwable $e) {
+        }
+
+        // 2) Heuristic by matching appointment time stored in pending order meta
+        try {
+            if (! empty($record->start_at)) {
+                $s = \Carbon\Carbon::parse($record->start_at);
+
+                $utc = $s->copy()->setTimezone('UTC');
+                $lon = $s->copy()->setTimezone('Europe/London');
+
+                $candidates = array_values(array_unique(array_filter([
+                    $utc->toIso8601String(),
+                    $lon->toIso8601String(),
+                    $utc->format('Y-m-d H:i:s'),
+                    $lon->format('Y-m-d H:i:s'),
+                    $utc->format('Y-m-d H:i'),
+                    $lon->format('Y-m-d H:i'),
+                    $utc->format('Y-m-d\\TH:i:s\\Z'),
+                ], fn ($v) => is_string($v) && trim($v) !== '')));
+
+                $keysToTry = [
+                    'appointment_start_at',
+                    'appointment_at',
+                    'appointment_start',
+                    'appointment_datetime',
+                    'appointmentDateTime',
+                ];
+
+                foreach ($keysToTry as $key) {
+                    $placeholders = implode(',', array_fill(0, count($candidates), '?'));
+
+                    $p = \App\Models\PendingOrder::query()
+                        ->whereRaw(
+                            "JSON_UNQUOTE(JSON_EXTRACT(meta, '$.$key')) in ($placeholders)",
+                            $candidates
+                        )
+                        ->orderByDesc('id')
+                        ->first();
+
+                    if ($p) {
+                        return $p;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+        }
+
+        return null;
     }
 }

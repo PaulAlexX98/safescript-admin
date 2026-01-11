@@ -631,6 +631,7 @@
                 'label' => $label,
                 'options' => is_array($opts) ? $opts : [],
                 'section' => $secToUse,
+                'type' => $type,
             ];
         }
 
@@ -648,11 +649,14 @@
     $optionsByIdx = [];
     $sectionsByKey = [];
     $sectionsByIdx = [];
+    $typesByKey = [];
+    $typesByIdx = [];
 
     foreach ($inputNodes as $idx => $field) {
         $k = $field['key'];
         $lbl = $field['label'] ?? null;
         $opt = $field['options'] ?? [];
+        $t = $field['type'] ?? null;
 
         if ($lbl !== null) {
             $labelsByIdx['q_' . $idx] = $lbl;
@@ -676,6 +680,10 @@
                 $sectionsByKey[$field['key']] = $sec;
             }
         }
+        if (is_string($t) && $t !== '') {
+            $typesByIdx['q_' . $idx] = $t;
+            if ($k) $typesByKey[$k] = $t;
+        }
     }
 
     
@@ -683,6 +691,7 @@
     $labels = $labelsByIdx + $labelsByKey; // index labels, overridden by explicit keys
     $options = $optionsByIdx + $optionsByKey;
     $sections = ($sectionsByIdx ?? []) + ($sectionsByKey ?? []);
+    $types = $typesByIdx + $typesByKey;
 
     // Seed labels from QA keys if schema did not provide them
     if (empty($labels) && !empty($qa)) {
@@ -903,7 +912,7 @@
     };
 
     // 5) Pretty printer: decode JSON, show filenames, map options
-    $pretty = function ($key, $val) use ($options, $makePublicUrl, $makePreviewDataUrl) {
+    $pretty = function ($key, $val) use ($options, $types, $makePublicUrl, $makePreviewDataUrl) {
         $map = $options[$key] ?? [];
 
         // Decode JSON string values
@@ -1017,6 +1026,14 @@
         if (is_scalar($val)) {
             $s = (string) $val;
 
+            // Checkbox/toggle/yesno agreement rendering
+            $fieldType = isset($types[$key]) ? strtolower((string) $types[$key]) : '';
+            if (in_array($fieldType, ['checkbox','toggle','switch','yesno'], true)) {
+                $low = strtolower(trim($s));
+                if ($low === '1' || $low === 'true' || $low === 'yes' || $low === 'on') return 'Agreed';
+                if ($low === '0' || $low === 'false' || $low === 'no' || $low === 'off') return 'Not agreed';
+            }
+
             // If backend stored the file answer as just a string path instead of an array (legacy/edge case),
             // try to render it like an uploaded image/link.
             // Example: "intakes/raf/ZuK8y9aE9ktSIKhJdZ8Wmzcnl09g6p6wnmFvWesg.png"
@@ -1093,74 +1110,104 @@
           .pe-qa dd { color:#e5e7eb; margin:0; word-break:break-word; }
         </style>
 
+        @php
+            $groups = [];
+            $groupOrder = [];
+
+            foreach (array_values($qa) as $idx => $row) {
+                $key = $row['key'] ?? ($row['question'] ?? 'q_'.$idx);
+
+                $placeholder = function ($s) {
+                    return is_string($s) && preg_match('/^\s*Question\s+\d+\s*$/i', $s);
+                };
+
+                if (isset($row['label']) && is_string($row['label']) && trim($row['label']) !== '' && ! $placeholder($row['label'])) {
+                    $label = (string) $row['label'];
+                } elseif (isset($labels[$key])) {
+                    $label = $labels[$key];
+                } elseif (preg_match('/^q_(\d+)$/', (string) $key, $m) && isset($labels['q_'.$m[1]])) {
+                    $label = $labels['q_'.$m[1]];
+                } elseif (isset($row['question']) && is_string($row['question']) && trim($row['question']) !== '' && ! $placeholder($row['question'])) {
+                    $label = (string) $row['question'];
+                } else {
+                    $savedQ = (string) ($row['question'] ?? '');
+                    $label = preg_match('/^Question\s+\d+$/i', $savedQ)
+                        ? ucwords(str_replace(['_', '-'], ' ', (string) $key))
+                        : ($savedQ ?: ucwords(str_replace(['_', '-'], ' ', (string) $key)));
+                }
+
+                // Slug based override to handle underscore vs hyphen and similar key differences
+                if (!empty($labelsBySlug ?? [])) {
+                    $keySlug = \Illuminate\Support\Str::slug((string) $key);
+                    $qSlug   = isset($row['question']) ? \Illuminate\Support\Str::slug((string) $row['question']) : null;
+
+                    if ($keySlug !== '' && isset($labelsBySlug[$keySlug])) {
+                        $label = $labelsBySlug[$keySlug];
+                    } elseif ($qSlug !== null && $qSlug !== '' && isset($labelsBySlug[$qSlug])) {
+                        $label = $labelsBySlug[$qSlug];
+                    }
+                }
+
+                $answer = array_key_exists('raw', $row) && $row['raw'] !== null && $row['raw'] !== ''
+                    ? $row['raw']
+                    : ($row['answer'] ?? null);
+
+                // Resolve section name by key then by q_N, then by label lookup
+                $sectionName = null;
+                if (isset($sections[$key])) {
+                    $sectionName = $sections[$key];
+                } elseif (preg_match('/^q_(\d+)$/', (string) $key, $m) && isset($sections['q_'.$m[1]])) {
+                    $sectionName = $sections['q_'.$m[1]];
+                }
+
+                if (!$sectionName && is_string($label) && $label !== '') {
+                    $norm = strtolower(trim(preg_replace('/\s+/', ' ', strip_tags($label))));
+                    if ($norm !== '' && isset($sectionsByLabel[$norm])) {
+                        $sectionName = $sectionsByLabel[$norm];
+                    }
+                }
+
+                // Pretty section title always convert slugs like about-you to About You
+                $sectionTitlePretty = $sectionName
+                    ? ucwords(str_replace(['_', '-'], ' ', strip_tags($sectionName)))
+                    : 'General';
+
+                // Group key ensures repeated titles merge even if case differs
+                $sectionGroupKey = \Illuminate\Support\Str::slug((string) $sectionTitlePretty) ?: 'general';
+
+                if (!isset($groups[$sectionGroupKey])) {
+                    $groups[$sectionGroupKey] = [
+                        'title' => $sectionTitlePretty,
+                        'rows' => [],
+                    ];
+                    $groupOrder[] = $sectionGroupKey;
+                }
+
+                $groups[$sectionGroupKey]['rows'][] = [
+                    'key' => $key,
+                    'label' => $label,
+                    'answer' => $answer,
+                ];
+            }
+        @endphp
+
         <div class="pe-qa">
-            @php $__prevSection = null; @endphp
-            @foreach ($qa as $row)
+            @foreach ($groupOrder as $gk)
                 @php
-                    $key = $row['key'] ?? ($row['question'] ?? 'q_'.$loop->index);
-                    $placeholder = function ($s) {
-                        return is_string($s) && preg_match('/^\s*Question\s+\d+\s*$/i', $s);
-                    };
-                    if (isset($row['label']) && is_string($row['label']) && trim($row['label']) !== '' && ! $placeholder($row['label'])) {
-                        $label = (string) $row['label'];
-                    } elseif (isset($labels[$key])) {
-                        $label = $labels[$key];
-                    } elseif (preg_match('/^q_(\\d+)$/', (string) $key, $m) && isset($labels['q_'.$m[1]])) {
-                        $label = $labels['q_'.$m[1]];
-                    } elseif (isset($row['question']) && is_string($row['question']) && trim($row['question']) !== '' && ! $placeholder($row['question'])) {
-                        $label = (string) $row['question'];
-                    } else {
-                        $savedQ = (string) ($row['question'] ?? '');
-                        $label = preg_match('/^Question\s+\d+$/i', $savedQ)
-                            ? ucwords(str_replace(['_', '-'], ' ', (string) $key))
-                            : ($savedQ ?: ucwords(str_replace(['_', '-'], ' ', (string) $key)));
-                    }
-
-                    // Slug based override to handle underscore vs hyphen and similar key differences
-                    if (!empty($labelsBySlug ?? [])) {
-                        $keySlug = \Illuminate\Support\Str::slug((string) $key);
-                        $qSlug   = isset($row['question']) ? \Illuminate\Support\Str::slug((string) $row['question']) : null;
-
-                        if ($keySlug !== '' && isset($labelsBySlug[$keySlug])) {
-                            $label = $labelsBySlug[$keySlug];
-                        } elseif ($qSlug !== null && $qSlug !== '' && isset($labelsBySlug[$qSlug])) {
-                            $label = $labelsBySlug[$qSlug];
-                        }
-                    }
-
-                    $answer = array_key_exists('raw', $row) && $row['raw'] !== null && $row['raw'] !== ''
-                        ? $row['raw']
-                        : ($row['answer'] ?? null);
+                    $gTitle = $groups[$gk]['title'] ?? 'General';
+                    $gRows = $groups[$gk]['rows'] ?? [];
                 @endphp
 
-                @php
-                    $sectionName = null;
-                    if (isset($sections[$key])) {
-                        $sectionName = $sections[$key];
-                    } elseif (preg_match('/^q_(\\d+)$/', (string) $key, $m) && isset($sections['q_'.$m[1]])) {
-                        $sectionName = $sections['q_'.$m[1]];
-                    }
-                    if (!$sectionName && is_string($label) && $label !== '') {
-                        $norm = strtolower(trim(preg_replace('/\\s+/', ' ', strip_tags($label))));
-                        if ($norm !== '' && isset($sectionsByLabel[$norm])) {
-                            $sectionName = $sectionsByLabel[$norm];
-                        }
-                    }
-                    // Pretty section title always  convert slugs like about-you to About You
-                    $sectionTitlePretty = $sectionName ? ucwords(str_replace(['_', '-'], ' ', strip_tags($sectionName))) : null;
-                @endphp
+                <div class="pe-qa__sep"></div>
+                <div class="pe-qa__title">{{ $gTitle }}</div>
+                <div class="pe-qa__sep"></div>
 
-                @if ($sectionTitlePretty && $sectionTitlePretty !== $__prevSection)
-                    <div class="pe-qa__sep"></div>
-                    <div class="pe-qa__title">{{ $sectionTitlePretty }}</div>
-                    <div class="pe-qa__sep"></div>
-                    @php $__prevSection = $sectionTitlePretty; @endphp
-                @endif
-
-                <dl class="pe-qa__row">
-                    <dt>{{ $label }}</dt>
-                    <dd>{!! $pretty($key, $answer) !!}</dd>
-                </dl>
+                @foreach ($gRows as $r)
+                    <dl class="pe-qa__row">
+                        <dt>{{ $r['label'] }}</dt>
+                        <dd>{!! $pretty($r['key'], $r['answer']) !!}</dd>
+                    </dl>
+                @endforeach
             @endforeach
         </div>
     @endif

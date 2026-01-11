@@ -136,9 +136,9 @@ class ZoomMeetingService
                 'join_before_host'   => false,
                 'waiting_room'       => true,
                 'approval_type'      => 0,
-                'mute_upon_entry'    => true,
+                'mute_upon_entry'    => false,
                 'audio'              => 'both',
-                'auto_recording'     => 'none',
+                'auto_recording'     => 'local',
             ],
         ];
 

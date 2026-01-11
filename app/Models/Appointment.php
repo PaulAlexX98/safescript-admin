@@ -15,12 +15,13 @@ class Appointment extends Model
         'patient_name', 'first_name', 'last_name',
         'service_slug', 'service_name', 'service',
         'status', 'order_id', 'order_reference',
-        'email',
+        'email','online_consultation',
     ];
 
     protected $casts = [
         'start_at' => 'datetime',
         'end_at'   => 'datetime',
+        'online_consultation' => 'bool',
     ];
 
     /**

@@ -73,6 +73,9 @@ class ClinicFormForm
                                     Toggle::make('required')->label('Required')->default(false),
                                     Toggle::make('hidden')->label('Hidden')->default(false),
                                     Toggle::make('disabled')->label('Disabled')->default(false),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
@@ -94,6 +97,9 @@ class ClinicFormForm
                                     TextInput::make('placeholder')->label('Placeholder Text'),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     Toggle::make('required')->label('Required')->default(false),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
@@ -117,6 +123,9 @@ class ClinicFormForm
                                     TextInput::make('max')->numeric()->label('Max'),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     Toggle::make('required')->label('Required')->default(false),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
@@ -140,6 +149,9 @@ class ClinicFormForm
                                     Toggle::make('required')->label('Required')->default(false),
                                     Toggle::make('hidden')->label('Hidden')->default(false),
                                     Toggle::make('disabled')->label('Disabled')->default(false),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
@@ -161,6 +173,9 @@ class ClinicFormForm
                                     TextInput::make('placeholder')->label('Placeholder Text')->default('dd-mm-yyyy'),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     Toggle::make('required')->label('Required')->default(false),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
@@ -187,6 +202,9 @@ class ClinicFormForm
                                     Toggle::make('multiple')->label('Allow multiple')->default(false),
                                     Toggle::make('required')->label('Required')->default(false),
                                     Textarea::make('help')->label('Help Text')->rows(2),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
@@ -203,17 +221,16 @@ class ClinicFormForm
                                 ]),
                                 Block::make('radio')->label('Radio Buttons')->schema([
                                     TextInput::make('label')
-                                        ->label('Field Label')
-                                        ->reactive()
-                                        ->afterStateUpdated(function ($set, $state) {
-                                            $set('key', Str::slug((string) $state));
-                                        }),
+                                        ->label('Field Label'),
                                     Repeater::make('options')->label('Options')->schema([
                                         TextInput::make('value')->label('Value')->required(),
                                         TextInput::make('label')->label('Label')->required(),
                                     ])->addActionLabel('Add option')->reorderable()->default([]),
                                     Toggle::make('required')->label('Required')->default(false),
                                     Textarea::make('help')->label('Help Text')->rows(2),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
@@ -234,6 +251,9 @@ class ClinicFormForm
                                         ->reactive(),
                                     Textarea::make('help')->label('Help Text')->rows(2),
                                     Toggle::make('required')->label('Required')->default(false),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
@@ -261,6 +281,9 @@ class ClinicFormForm
                                         ->placeholder('image/*,application/pdf')
                                         ->helperText('Comma-separated, e.g. application/pdf,image/*')
                                         ->default('image/*,application/pdf'),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
@@ -284,6 +307,9 @@ class ClinicFormForm
                                         ->view('forms.components.signature-pad'),
                                     Textarea::make('help')->label('Help Text')->rows(2)->default('Draw your signature above'),
                                     Toggle::make('required')->label('Required')->default(true),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
@@ -303,6 +329,9 @@ class ClinicFormForm
                                     TextInput::make('label')
                                         ->label('Block label')
                                         ->reactive(),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     RichEditor::make('content')
                                         ->label('Content')
                                         ->toolbarButtons([
@@ -416,6 +445,9 @@ class ClinicFormForm
                                         ->reactive(),
                                     FileUpload::make('image')->image()->directory('clinic-forms/blocks')->required(),
                                     TextInput::make('alt')->label('Alt text'),
+                                    TextInput::make('section')
+                                        ->label('Section override')
+                                        ->helperText('Optional. Use a section key like imported. Leave blank to follow the nearest Section block'),
                                     TextInput::make('key')
                                         ->label('Field key')
                                         ->helperText('Stable key used for conditions')
@@ -488,6 +520,113 @@ class ClinicFormForm
                                         try {
                                             $raw = $data['json'] ?? '';
                                             $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+
+                                            // Support importing an already-built schema map (uuid => {type, data}) or schema list ([{type,data},...])
+                                            $isSchemaList = is_array($decoded) && array_is_list($decoded) && isset($decoded[0]['type']) && isset($decoded[0]['data']);
+                                            $isSchemaMap  = is_array($decoded) && !array_is_list($decoded);
+                                            if ($isSchemaMap) {
+                                                $first = null;
+                                                foreach ($decoded as $v) { $first = $v; break; }
+                                                $isSchemaMap = is_array($first) && isset($first['type']) && array_key_exists('data', $first);
+                                            }
+
+                                            if ($isSchemaList || $isSchemaMap) {
+                                                $rawBlocks = $isSchemaList ? $decoded : array_values($decoded);
+
+                                                // First pass normalise blocks and collect keys
+                                                $blocks = [];
+                                                $allKeys = [];
+
+                                                foreach ($rawBlocks as $b) {
+                                                    if (!is_array($b)) continue;
+                                                    $type = (string) ($b['type'] ?? 'text_input');
+                                                    $dataB = (array) ($b['data'] ?? []);
+
+                                                    // Ensure key exists when possible but do not overwrite existing keys
+                                                    $lbl = trim((string) ($dataB['label'] ?? ''));
+                                                    if (!isset($dataB['key']) || $dataB['key'] === null || trim((string) $dataB['key']) === '') {
+                                                        if ($lbl !== '') {
+                                                            $dataB['key'] = Str::slug($lbl);
+                                                        }
+                                                    }
+
+                                                    // Normalise options shape for select/radio (uuid-keyed maps -> list)
+                                                    if (in_array($type, ['select','radio'], true) && isset($dataB['options']) && is_array($dataB['options'])) {
+                                                        $opts = $dataB['options'];
+                                                        if (!array_is_list($opts)) {
+                                                            $opts = array_values($opts);
+                                                        }
+                                                        $outOpts = [];
+                                                        foreach ($opts as $opt) {
+                                                            if (!is_array($opt)) {
+                                                                $val = (string) $opt;
+                                                                $outOpts[] = ['value' => $val, 'label' => $val];
+                                                                continue;
+                                                            }
+                                                            $val = (string) ($opt['value'] ?? ($opt['label'] ?? ''));
+                                                            $lab = (string) ($opt['label'] ?? $val);
+                                                            if (trim($val) === '' && trim($lab) !== '') $val = $lab;
+                                                            if (trim($val) === '') continue;
+                                                            $outOpts[] = ['value' => $val, 'label' => $lab];
+                                                        }
+                                                        $dataB['options'] = $outOpts;
+                                                    }
+
+                                                    // Ensure showIf shape exists (keep values as-is)
+                                                    if (isset($dataB['showIf']) && is_array($dataB['showIf'])) {
+                                                        $dataB['showIf'] = array_merge([
+                                                            'enabled' => false,
+                                                            'in' => [],
+                                                            'truthy' => false,
+                                                            'field' => null,
+                                                            'equals' => null,
+                                                            'notEquals' => null,
+                                                        ], $dataB['showIf']);
+                                                    }
+
+                                                    // Track keys for later showIf field reconciliation
+                                                    $k = trim((string) ($dataB['key'] ?? ''));
+                                                    if ($k !== '') {
+                                                        $allKeys[$k] = true;
+                                                    }
+
+                                                    $blocks[] = [
+                                                        'type' => $type,
+                                                        'data' => $dataB,
+                                                    ];
+                                                }
+
+                                                // Second pass: fix showIf.field when it does not match any key exactly
+                                                $keySet = $allKeys;
+                                                foreach ($blocks as $i => $blk) {
+                                                    $sf = $blk['data']['showIf']['field'] ?? null;
+                                                    if (!is_string($sf) || trim($sf) === '') continue;
+                                                    $sf = trim($sf);
+
+                                                    if (isset($keySet[$sf])) continue;
+
+                                                    $candidates = [];
+                                                    $candidates[] = str_replace('_', '-', $sf);
+                                                    $candidates[] = str_replace('-', '_', $sf);
+                                                    $candidates[] = Str::slug($sf);
+
+                                                    foreach ($candidates as $cand) {
+                                                        $cand = trim((string) $cand);
+                                                        if ($cand !== '' && isset($keySet[$cand])) {
+                                                            $blocks[$i]['data']['showIf']['field'] = $cand;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+
+                                                if (empty($blocks)) {
+                                                    throw new RuntimeException('No blocks found to import.');
+                                                }
+
+                                                $set('schema', $blocks);
+                                                Notification::make()->title('Form imported')->success()->send();
+                                                return;
+                                            }
 
                                             // Accept either an array of sections or direct fields
                                             $sections = [];
@@ -614,11 +753,11 @@ class ClinicFormForm
                                                 if (in_array($s, ['no','n','false','0'], true)) return 'no';
                                                 return $slug($s);
                                             };
-                                            $normalizeShowIf = function ($showIf) use ($normValue) {
+                                            $normalizeShowIf = function ($showIf) use ($normValue, $slug) {
                                                 if (!is_array($showIf)) return null;
                                                 $out = ['enabled' => true];
                                                 if (isset($showIf['field'])) {
-                                                    $out['field'] = trim((string) $showIf['field']);
+                                                    $out['field'] = $slug(trim((string) $showIf['field']));
                                                 }
                                                 if (array_key_exists('equals', $showIf)) {
                                                     $out['equals'] = $normValue($showIf['equals']);
@@ -959,6 +1098,7 @@ class ClinicFormForm
                                             foreach (array_slice(array_values($blocks), 0, $max) as $block) {
                                                 $type = (string) \Illuminate\Support\Arr::get($block, 'type', 'field');
                                                 $label = trim((string) \Illuminate\Support\Arr::get($block, 'data.label', ''));
+                                                $secOverride = trim((string) \Illuminate\Support\Arr::get($block, 'data.section', ''));
                                                 if ($label === '') {
                                                     $label = \Illuminate\Support\Str::headline($type) . ' ' . $n;
                                                 }
@@ -967,7 +1107,8 @@ class ClinicFormForm
                                                 }
                                                 $isReq = (bool) \Illuminate\Support\Arr::get($block, 'data.required', false);
                                                 $reqBadge = $isReq ? ' <span style="display:inline-block;padding:.05rem .35rem;border-radius:.25rem;background:rgba(239,68,68,.12);color:#f87171;font-weight:600;margin-left:.35rem;">required</span>' : '';
-                                                $lines[] = $n . '. ' . e($label) . $reqBadge . ' <small style="opacity:.7">(' . e($type) . ')</small>';
+                                                $secText = $secOverride !== '' ? ' <small style="opacity:.7">section ' . e($secOverride) . '</small>' : '';
+                                                $lines[] = $n . '. ' . e($label) . $reqBadge . $secText . ' <small style="opacity:.7">(' . e($type) . ')</small>';
                                                 $n++;
                                             }
                                             $extra = count($blocks) > $max ? '<br><small style="opacity:.7">+' . (count($blocks) - $max) . ' more</small>' : '';

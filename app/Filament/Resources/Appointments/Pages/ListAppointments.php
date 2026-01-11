@@ -16,8 +16,23 @@ class ListAppointments extends ListRecords
             Actions\Action::make('Zoom meetings')
                 ->url('https://zoom.us/meeting#/upcoming')
                 ->openUrlInNewTab(),
-            Actions\CreateAction::make(),   // this is what shows “Create Appointment”
-            // keep any other actions you already had here
-        ]; // add CreateAction if you want to create from admin
+            Actions\CreateAction::make()
+                ->mutateFormDataUsing(function (array $data): array {
+                    if (! array_key_exists('online_consultation', $data)) {
+                        $data['online_consultation'] = false;
+                    }
+
+                    if (empty($data['order_reference'] ?? null)) {
+                        $data['order_reference'] = \App\Filament\Resources\Appointments\AppointmentResource::generatePcaoRef();
+                    }
+
+                    return $data;
+                })
+                ->after(function ($record): void {
+                    if ($record) {
+                        \App\Filament\Resources\Appointments\AppointmentResource::ensureZoomStoredForAppointment($record);
+                    }
+                }),
+        ];
     }
 }
