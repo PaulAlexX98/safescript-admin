@@ -40,6 +40,44 @@ class RevenueBookingsChart extends ChartWidget
         return 'line';
     }
 
+    protected function getOptions(): array
+    {
+        return [
+            'responsive' => true,
+            'maintainAspectRatio' => false,
+            'interaction' => [
+                'mode' => 'index',
+                'intersect' => false,
+            ],
+            'scales' => [
+                'y' => [
+                    'beginAtZero' => true,
+                    'ticks' => [
+                        'callback' => "function(value){ return '£' + value; }",
+                    ],
+                ],
+                'y1' => [
+                    'beginAtZero' => true,
+                    'position' => 'right',
+                    'grid' => [
+                        'drawOnChartArea' => false,
+                    ],
+                    'ticks' => [
+                        'precision' => 0,
+                    ],
+                ],
+            ],
+            'plugins' => [
+                'legend' => [
+                    'display' => true,
+                ],
+                'tooltip' => [
+                    'enabled' => true,
+                ],
+            ],
+        ];
+    }
+
     private function aggregateByPeriod(string $period, int $span): array
     {
         $t = 'orders';
@@ -56,16 +94,33 @@ class RevenueBookingsChart extends ChartWidget
 
         $now = now();
 
-        // Choose the best timestamp column to group by.
-        $dateCol = null;
-        if (Schema::hasColumn($t, 'completed_at')) {
-            $dateCol = 'completed_at';
-        } elseif (Schema::hasColumn($t, 'paid_at')) {
-            $dateCol = 'paid_at';
-        } elseif (Schema::hasColumn($t, 'approved_at')) {
-            $dateCol = 'approved_at';
-        } elseif (Schema::hasColumn($t, 'created_at')) {
-            $dateCol = 'created_at';
+        // Prefer aggregating from payments if available (matches the working revenue table logic).
+        $paymentsTable = null;
+        foreach (['payments', 'order_payments'] as $pt) {
+            if (Schema::hasTable($pt)) {
+                $paymentsTable = $pt;
+                break;
+            }
+        }
+
+        if ($paymentsTable) {
+            return $this->aggregatePaymentsByPeriod($paymentsTable, $period, $span, $now);
+        }
+
+        // Choose the best timestamp expression to group by.
+        // Some records may have completed_at null even when status is completed.
+        $dateCols = [];
+        foreach (['completed_at', 'paid_at', 'approved_at', 'created_at'] as $c) {
+            if (Schema::hasColumn($t, $c)) {
+                $dateCols[] = $c;
+            }
+        }
+
+        $dateExpr = null;
+        if (! empty($dateCols)) {
+            $dateExpr = count($dateCols) === 1
+                ? $dateCols[0]
+                : 'COALESCE(' . implode(', ', $dateCols) . ')';
         }
 
         // Build the numeric revenue expression (covers both columns and JSON meta fallbacks).
@@ -90,7 +145,6 @@ class RevenueBookingsChart extends ChartWidget
                 CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
                 CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_pence")) AS DECIMAL(12,2)) / 100,
                 CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount_pence")) AS DECIMAL(12,2)) / 100,
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
                 CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.selectedProduct.totalMinor")) AS DECIMAL(12,2)) / 100,
                 0
             ))';
@@ -108,7 +162,7 @@ class RevenueBookingsChart extends ChartWidget
         if ($period === 'day') {
             $rangeStart = $now->copy()->subDays($span - 1)->startOfDay();
             $rangeEnd = $now->copy()->endOfDay();
-            $keyExpr = "DATE({$dateCol})";
+            $keyExpr = "DATE({$dateExpr})";
 
             for ($i = $span - 1; $i >= 0; $i--) {
                 $d = $now->copy()->subDays($i);
@@ -119,7 +173,7 @@ class RevenueBookingsChart extends ChartWidget
             $rangeStart = $now->copy()->startOfWeek()->subWeeks($span - 1)->startOfDay();
             $rangeEnd = $now->copy()->endOfWeek()->endOfDay();
             // ISO week-year key
-            $keyExpr = "YEARWEEK({$dateCol}, 3)";
+            $keyExpr = "YEARWEEK({$dateExpr}, 3)";
 
             for ($i = $span - 1; $i >= 0; $i--) {
                 $w = $now->copy()->startOfWeek()->subWeeks($i);
@@ -129,7 +183,7 @@ class RevenueBookingsChart extends ChartWidget
         } elseif ($period === 'month') {
             $rangeStart = $now->copy()->startOfMonth()->subMonths($span - 1)->startOfDay();
             $rangeEnd = $now->copy()->endOfMonth()->endOfDay();
-            $keyExpr = "DATE_FORMAT({$dateCol}, '%Y-%m')";
+            $keyExpr = "DATE_FORMAT({$dateExpr}, '%Y-%m')";
 
             for ($i = $span - 1; $i >= 0; $i--) {
                 $m = $now->copy()->startOfMonth()->subMonths($i);
@@ -139,7 +193,7 @@ class RevenueBookingsChart extends ChartWidget
         } else { // year
             $rangeStart = $now->copy()->startOfYear()->subYears($span - 1)->startOfDay();
             $rangeEnd = $now->copy()->endOfYear()->endOfDay();
-            $keyExpr = "YEAR({$dateCol})";
+            $keyExpr = "YEAR({$dateExpr})";
 
             for ($i = $span - 1; $i >= 0; $i--) {
                 $y = $now->copy()->startOfYear()->subYears($i);
@@ -148,8 +202,8 @@ class RevenueBookingsChart extends ChartWidget
             }
         }
 
-        // If we somehow have no date column, return empty.
-        if (! $dateCol) {
+        // If we somehow have no date expression, return empty.
+        if (! $dateExpr) {
             return [
                 'datasets' => [
                     ['label' => 'Revenue', 'data' => array_fill(0, count($labels), 0)],
@@ -161,15 +215,16 @@ class RevenueBookingsChart extends ChartWidget
 
         $q = DB::table($t)
             ->selectRaw("{$keyExpr} as k, COUNT(*) as bookings, {$sumExpr} as revenue")
-            ->whereBetween($dateCol, [$rangeStart, $rangeEnd]);
+            ->whereBetween(DB::raw($dateExpr), [$rangeStart, $rangeEnd]);
 
-        // Match your Completed Orders logic.
-        if (Schema::hasColumn($t, 'status')) {
-            $q->where('status', 'completed');
+        // Filter logic: prefer paid orders so revenue/booking charts reflect real sales activity.
+        // Many paid orders may still be `status = pending` until reviewed, which would otherwise show as zero.
+        if (Schema::hasColumn($t, 'payment_status')) {
+            $q->where('payment_status', 'paid');
         } elseif (Schema::hasColumn($t, 'booking_status')) {
             $q->whereIn('booking_status', ['approved', 'completed']);
-        } elseif (Schema::hasColumn($t, 'payment_status')) {
-            $q->where('payment_status', 'paid');
+        } elseif (Schema::hasColumn($t, 'status')) {
+            $q->where('status', 'completed');
         }
 
         // Soft deletes.
@@ -200,8 +255,170 @@ class RevenueBookingsChart extends ChartWidget
 
         return [
             'datasets' => [
-                ['label' => 'Revenue', 'data' => $revenue],
-                ['label' => 'Bookings', 'data' => $bookings],
+                [
+                    'label' => 'Revenue',
+                    'data' => $revenue,
+                    'yAxisID' => 'y',
+                    'pointRadius' => 4,
+                    'pointHoverRadius' => 6,
+                    'borderWidth' => 2,
+                ],
+                [
+                    'label' => 'Bookings',
+                    'data' => $bookings,
+                    'yAxisID' => 'y1',
+                    'pointRadius' => 4,
+                    'pointHoverRadius' => 6,
+                    'borderWidth' => 2,
+                    'borderDash' => [6, 4],
+                ],
+            ],
+            'labels' => $labels,
+        ];
+    }
+
+    private function aggregatePaymentsByPeriod(string $pt, string $period, int $span, Carbon $now): array
+    {
+        $orders = 'orders';
+
+        // Build labels/keys and date range
+        $labels = [];
+        $keys = [];
+        $rangeStart = null;
+        $rangeEnd = null;
+        $keyExpr = null;
+
+        if ($period === 'day') {
+            $rangeStart = $now->copy()->subDays($span - 1)->startOfDay();
+            $rangeEnd = $now->copy()->endOfDay();
+            $keyExpr = "DATE({$pt}.created_at)";
+
+            for ($i = $span - 1; $i >= 0; $i--) {
+                $d = $now->copy()->subDays($i);
+                $labels[] = $d->format('d M');
+                $keys[] = $d->toDateString();
+            }
+        } elseif ($period === 'week') {
+            $rangeStart = $now->copy()->startOfWeek()->subWeeks($span - 1)->startOfDay();
+            $rangeEnd = $now->copy()->endOfWeek()->endOfDay();
+            $keyExpr = "YEARWEEK({$pt}.created_at, 3)";
+
+            for ($i = $span - 1; $i >= 0; $i--) {
+                $w = $now->copy()->startOfWeek()->subWeeks($i);
+                $labels[] = 'W' . $w->format('W');
+                $keys[] = (string) ((int) $w->format('o') * 100 + (int) $w->format('W'));
+            }
+        } elseif ($period === 'month') {
+            $rangeStart = $now->copy()->startOfMonth()->subMonths($span - 1)->startOfDay();
+            $rangeEnd = $now->copy()->endOfMonth()->endOfDay();
+            $keyExpr = "DATE_FORMAT({$pt}.created_at, '%Y-%m')";
+
+            for ($i = $span - 1; $i >= 0; $i--) {
+                $m = $now->copy()->startOfMonth()->subMonths($i);
+                $labels[] = $m->format('M Y');
+                $keys[] = $m->format('Y-m');
+            }
+        } else { // year
+            $rangeStart = $now->copy()->startOfYear()->subYears($span - 1)->startOfDay();
+            $rangeEnd = $now->copy()->endOfYear()->endOfDay();
+            $keyExpr = "YEAR({$pt}.created_at)";
+
+            for ($i = $span - 1; $i >= 0; $i--) {
+                $y = $now->copy()->startOfYear()->subYears($i);
+                $labels[] = $y->format('Y');
+                $keys[] = $y->format('Y');
+            }
+        }
+
+        // Revenue expression from payments
+        $sumExpr = null;
+        if (Schema::hasColumn($pt, 'amount_minor')) {
+            $sumExpr = 'SUM(' . $pt . '.amount_minor) / 100';
+        } elseif (Schema::hasColumn($pt, 'total_minor')) {
+            $sumExpr = 'SUM(' . $pt . '.total_minor) / 100';
+        } elseif (Schema::hasColumn($pt, 'amount')) {
+            $sumExpr = 'SUM(' . $pt . '.amount)';
+        } elseif (Schema::hasColumn($pt, 'meta')) {
+            $sumExpr = 'SUM(COALESCE(
+                CAST(JSON_UNQUOTE(JSON_EXTRACT(' . $pt . '.meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
+                CAST(JSON_UNQUOTE(JSON_EXTRACT(' . $pt . '.meta, "$.amount_minor")) AS DECIMAL(12,2)) / 100,
+                CAST(JSON_UNQUOTE(JSON_EXTRACT(' . $pt . '.meta, "$.amount")) AS DECIMAL(12,2)),
+                0
+            ))';
+        } else {
+            $sumExpr = '0';
+        }
+
+        // Bookings should be distinct orders (if possible)
+        $bookingsExpr = null;
+        if (Schema::hasColumn($pt, 'order_id')) {
+            $bookingsExpr = 'COUNT(DISTINCT ' . $pt . '.order_id)';
+        } elseif (Schema::hasColumn($pt, 'order_reference')) {
+            $bookingsExpr = 'COUNT(DISTINCT ' . $pt . '.order_reference)';
+        } else {
+            $bookingsExpr = 'COUNT(*)';
+        }
+
+        $q = DB::table($pt)
+            ->selectRaw("{$keyExpr} as k, {$bookingsExpr} as bookings, {$sumExpr} as revenue")
+            ->whereBetween($pt . '.created_at', [$rangeStart, $rangeEnd]);
+
+        // Join orders when we can, so we can reuse existing paid filters if needed
+        if (Schema::hasTable($orders)) {
+            if (Schema::hasColumn($pt, 'order_id')) {
+                $q->leftJoin($orders, $orders . '.id', '=', $pt . '.order_id');
+            } elseif (Schema::hasColumn($pt, 'order_reference') && Schema::hasColumn($orders, 'reference')) {
+                $q->leftJoin($orders, $orders . '.reference', '=', $pt . '.order_reference');
+            }
+        }
+
+        // Filter: prefer payment record status if present, otherwise fall back to orders.payment_status
+        if (Schema::hasColumn($pt, 'status')) {
+            $q->whereIn(DB::raw('LOWER(' . $pt . '.status)'), ['paid', 'succeeded', 'captured', 'approved']);
+        } elseif (Schema::hasColumn($pt, 'payment_status')) {
+            $q->where(DB::raw('LOWER(' . $pt . '.payment_status)'), 'paid');
+        } elseif (Schema::hasTable($orders) && Schema::hasColumn($orders, 'payment_status')) {
+            $q->where(DB::raw('LOWER(' . $orders . '.payment_status)'), 'paid');
+        }
+
+        $rows = $q->groupBy('k')->orderBy('k')->get();
+
+        $byKey = [];
+        foreach ($rows as $r) {
+            $k = (string) ($r->k ?? '');
+            if ($k === '') continue;
+            $byKey[$k] = [
+                'revenue' => (float) ($r->revenue ?? 0),
+                'bookings' => (int) ($r->bookings ?? 0),
+            ];
+        }
+
+        $revenue = [];
+        $bookings = [];
+        foreach ($keys as $k) {
+            $revenue[] = (float) ($byKey[(string) $k]['revenue'] ?? 0);
+            $bookings[] = (int) ($byKey[(string) $k]['bookings'] ?? 0);
+        }
+
+        return [
+            'datasets' => [
+                [
+                    'label' => 'Revenue',
+                    'data' => $revenue,
+                    'yAxisID' => 'y',
+                    'pointRadius' => 4,
+                    'pointHoverRadius' => 6,
+                    'borderWidth' => 2,
+                ],
+                [
+                    'label' => 'Bookings',
+                    'data' => $bookings,
+                    'yAxisID' => 'y1',
+                    'pointRadius' => 4,
+                    'pointHoverRadius' => 6,
+                    'borderWidth' => 2,
+                    'borderDash' => [6, 4],
+                ],
             ],
             'labels' => $labels,
         ];
@@ -214,29 +431,34 @@ class RevenueBookingsChart extends ChartWidget
             return 0;
         }
 
-        // Use a completion-like timestamp when available
-        $dateCol = null;
-        if (Schema::hasColumn($t, 'completed_at')) {
-            $dateCol = 'completed_at';
-        } elseif (Schema::hasColumn($t, 'paid_at')) {
-            $dateCol = 'paid_at';
-        } elseif (Schema::hasColumn($t, 'created_at')) {
-            $dateCol = 'created_at';
+        // Use a completion-like timestamp expression when available
+        $dateCols = [];
+        foreach (['completed_at', 'paid_at', 'approved_at', 'created_at'] as $c) {
+            if (Schema::hasColumn($t, $c)) {
+                $dateCols[] = $c;
+            }
+        }
+
+        $dateExpr = null;
+        if (! empty($dateCols)) {
+            $dateExpr = count($dateCols) === 1
+                ? $dateCols[0]
+                : 'COALESCE(' . implode(', ', $dateCols) . ')';
         }
 
         $q = DB::table($t);
 
-        if ($dateCol) {
-            $q->whereBetween($dateCol, [$start, $end]);
+        if ($dateExpr) {
+            $q->whereBetween(DB::raw($dateExpr), [$start, $end]);
         }
 
-        // Only count completed orders (avoid inflating revenue with merely-paid/pending records)
-        if (Schema::hasColumn($t, 'status')) {
-            $q->where('status', 'completed');
+        // Prefer paid orders so revenue totals match actual payments.
+        if (Schema::hasColumn($t, 'payment_status')) {
+            $q->where('payment_status', 'paid');
         } elseif (Schema::hasColumn($t, 'booking_status')) {
             $q->whereIn('booking_status', ['approved', 'completed']);
-        } elseif (Schema::hasColumn($t, 'payment_status')) {
-            $q->where('payment_status', 'paid');
+        } elseif (Schema::hasColumn($t, 'status')) {
+            $q->where('status', 'completed');
         }
 
         if (Schema::hasColumn($t, 'total')) {
@@ -259,6 +481,13 @@ class RevenueBookingsChart extends ChartWidget
             $expr = 'SUM(COALESCE(
                 CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total")) AS DECIMAL(12,2)),
                 CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.grand_total")) AS DECIMAL(12,2)),
+                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount")) AS DECIMAL(12,2)),
+                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_gbp")) AS DECIMAL(12,2)),
+                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_amount")) AS DECIMAL(12,2)),
+                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
+                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_pence")) AS DECIMAL(12,2)) / 100,
+                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount_pence")) AS DECIMAL(12,2)) / 100,
+                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.selectedProduct.totalMinor")) AS DECIMAL(12,2)) / 100,
                 0
             )) as t';
 
@@ -275,28 +504,34 @@ class RevenueBookingsChart extends ChartWidget
             return 0;
         }
 
-        // Use an order completion-like timestamp when available so counts align with completed orders
-        $dateCol = null;
-        if (Schema::hasColumn($t, 'completed_at')) {
-            $dateCol = 'completed_at';
-        } elseif (Schema::hasColumn($t, 'approved_at')) {
-            $dateCol = 'approved_at';
-        } elseif (Schema::hasColumn($t, 'created_at')) {
-            $dateCol = 'created_at';
+        // Use an order completion-like timestamp expression when available so counts align with completed orders
+        $dateCols = [];
+        foreach (['completed_at', 'paid_at', 'approved_at', 'created_at'] as $c) {
+            if (Schema::hasColumn($t, $c)) {
+                $dateCols[] = $c;
+            }
+        }
+
+        $dateExpr = null;
+        if (! empty($dateCols)) {
+            $dateExpr = count($dateCols) === 1
+                ? $dateCols[0]
+                : 'COALESCE(' . implode(', ', $dateCols) . ')';
         }
 
         $q = DB::table($t);
 
-        if ($dateCol) {
-            $q->whereBetween($dateCol, [$start, $end]);
+        if ($dateExpr) {
+            $q->whereBetween(DB::raw($dateExpr), [$start, $end]);
         }
 
-        // Match your Completed Orders list exactly
-        if (Schema::hasColumn($t, 'status')) {
-            $q->where('status', 'completed');
+        // Prefer paid orders so booking counts align with real activity.
+        if (Schema::hasColumn($t, 'payment_status')) {
+            $q->where('payment_status', 'paid');
         } elseif (Schema::hasColumn($t, 'booking_status')) {
-            // Fallback if status column isn't used
             $q->whereIn('booking_status', ['approved', 'completed']);
+        } elseif (Schema::hasColumn($t, 'status')) {
+            $q->where('status', 'completed');
         }
 
         // Soft deletes

@@ -78,6 +78,8 @@ class AppointmentResource extends Resource
 
                 \Filament\Forms\Components\Hidden::make('start_at')
                     ->required(),
+                \Filament\Forms\Components\Hidden::make('end_at')
+                    ->dehydrated(fn () => \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'end_at')),
 
                 \Filament\Forms\Components\DatePicker::make('start_date')
                     ->label('Date')
@@ -100,13 +102,16 @@ class AppointmentResource extends Resource
                         $time = $get('start_time');
                         if (! $date || ! $time) {
                             $set('start_at', null);
+                            $set('end_at', null);
                             return;
                         }
                         try {
                             $dt = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, 'Europe/London');
                             $set('start_at', $dt->format('Y-m-d H:i:s'));
+                            $set('end_at', $dt->copy()->addMinutes(20)->format('Y-m-d H:i:s'));
                         } catch (\Throwable $e) {
                             $set('start_at', null);
+                            $set('end_at', null);
                         }
                     })
                     ->columnSpan(6),
@@ -172,13 +177,16 @@ class AppointmentResource extends Resource
                         $time = $get('start_time');
                         if (! $date || ! $time) {
                             $set('start_at', null);
+                            $set('end_at', null);
                             return;
                         }
                         try {
                             $dt = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, 'Europe/London');
                             $set('start_at', $dt->format('Y-m-d H:i:s'));
+                            $set('end_at', $dt->copy()->addMinutes(20)->format('Y-m-d H:i:s'));
                         } catch (\Throwable $e) {
                             $set('start_at', null);
+                            $set('end_at', null);
                         }
                     })
                     ->columnSpan(6),
@@ -725,21 +733,24 @@ class AppointmentResource extends Resource
                         //    so we do not lose the link when start_at changes.
                         $order = static::findRelatedOrder($record);
 
-                        // 1) Update appointment start / end (keep duration if end not provided)
+                        // 1) Update appointment start / end (default to 20 minutes if we don't have an existing duration)
                         $record->start_at = $data['start_at'];
 
                         if (! empty($data['end_at'])) {
                             $record->end_at = $data['end_at'];
-                        } elseif ($oldEnd && $oldStart) {
+                        } else {
                             try {
-                                $oldStartDt = \Carbon\Carbon::parse($oldStart);
-                                $oldEndDt   = \Carbon\Carbon::parse($oldEnd);
-                                $duration   = $oldEndDt->diffInMinutes($oldStartDt);
+                                $duration = 20;
 
-                                $record->end_at = \Carbon\Carbon::parse($data['start_at'])
-                                    ->addMinutes($duration);
+                                if ($oldEnd && $oldStart) {
+                                    $oldStartDt = \Carbon\Carbon::parse($oldStart);
+                                    $oldEndDt   = \Carbon\Carbon::parse($oldEnd);
+                                    $duration   = max(1, $oldEndDt->diffInMinutes($oldStartDt));
+                                }
+
+                                $record->end_at = \Carbon\Carbon::parse($data['start_at'])->addMinutes($duration);
                             } catch (\Throwable $e) {
-                                // If parsing fails, just leave end_at as-is
+                                // If parsing fails, leave end_at as-is
                             }
                         }
 

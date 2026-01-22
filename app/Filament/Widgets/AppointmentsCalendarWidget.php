@@ -43,14 +43,16 @@ class AppointmentsCalendarWidget extends CalendarWidget
 
         // Helper to build the Appointments index URL with filters.
         $buildUrl = function (string $date) {
-            $query = [
+            $on = trim($date) . ' 00:00:00';
+
+            $query = http_build_query([
                 'filters' => [
-                    'day' => ['on' => $date],
+                    'day' => ['on' => $on],
                 ],
                 'sort' => 'start_at:asc',
-            ];
+            ]);
 
-            return url('/admin/appointments');
+            return url('/admin/appointments') . '?' . $query;
         };
 
         // 1) appointments table counts (match the Appointments list filters)
@@ -91,13 +93,10 @@ class AppointmentsCalendarWidget extends CalendarWidget
             ksort($counts);
 
             foreach ($counts as $date => $count) {
-                // FullCalendar all-day end is exclusive; use +1 day
-                $endDate = Carbon::parse($date)->addDay()->toDateString();
-
                 $events[] = CalendarEvent::make()
                     ->title((string) $count)
                     ->start($date)
-                    ->end($endDate)
+                    ->end($date)
                     ->allDay(true)
                     ->url($buildUrl($date));
             }
@@ -132,8 +131,23 @@ class AppointmentsCalendarWidget extends CalendarWidget
 
             'dateClick' => $this->js(<<<'JS'
                 (info) => {
-                    const d = info.dateStr;
-                    const url = `/admin/appointments?filters[day][on]=${encodeURIComponent(d)}&sort=start_at:asc`;
+                    // Guard: only redirect on an actual user interaction.
+                    // Some integrations can trigger dateClick on initial mount without a click.
+                    if (!info?.jsEvent) return;
+
+                    let d = String(info?.dateStr ?? '').trim();
+
+                    // FullCalendar can sometimes include time; the Filament filter expects YYYY-MM-DD only.
+                    if (d.includes('T')) d = d.split('T')[0];
+                    if (d.includes(' ')) d = d.split(' ')[0];
+
+                    // Fallback: derive from Date object
+                    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) && info?.date) {
+                        d = new Date(info.date).toISOString().slice(0, 10);
+                    }
+
+                    const on = `${d} 00:00:00`;
+                    const url = `/admin/appointments?filters[day][on]=${encodeURIComponent(on)}&sort=start_at:asc`;
                     window.location.href = url;
                 }
             JS),
