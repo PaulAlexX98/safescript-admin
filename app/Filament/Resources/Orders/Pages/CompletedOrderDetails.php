@@ -26,6 +26,7 @@ use Illuminate\Support\Facades\Log;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Select;
 
 class CompletedOrderDetails extends ViewRecord
 {
@@ -423,6 +424,257 @@ class CompletedOrderDetails extends ViewRecord
                     }
                 })
                 ->button(),
+            Action::make('add_consultation_note')
+                ->label('Add consultation note')
+                ->icon('heroicon-o-pencil-square')
+                ->color('warning')
+                ->modalHeading('Add consultation note')
+                ->form([
+                    Textarea::make('note')
+                        ->label('Consultation note')
+                        ->rows(8)
+                        ->required(),
+                ])
+                ->action(function (array $data) {
+                    $note = trim((string) ($data['note'] ?? ''));
+                    if ($note === '') {
+                        Notification::make()->danger()->title('Note is required')->send();
+                        return;
+                    }
+
+                    $rec = $this->record;
+                    $meta = is_array($rec->meta) ? $rec->meta : (json_decode($rec->meta ?? '[]', true) ?: []);
+                    if (!is_array($meta)) $meta = [];
+
+                    $normalise = function ($v): array {
+                        $arr = is_array($v) ? $v : ($v == null ? [] : [$v]);
+                        $out = [];
+
+                        foreach ($arr as $x) {
+                            if (is_array($x)) {
+                                $n = trim((string) (data_get($x, 'note') ?? data_get($x, 'text') ?? data_get($x, 'message') ?? ''));
+                                $at = data_get($x, 'at') ?? data_get($x, 'created_at') ?? data_get($x, 'createdAt') ?? data_get($x, 'ts') ?? null;
+                                if ($n !== '') {
+                                    $out[] = [
+                                        'note' => $n,
+                                        'at'   => $at ? (string) $at : null,
+                                    ];
+                                }
+                                continue;
+                            }
+
+                            $n = is_string($x) ? trim($x) : trim((string) $x);
+                            if ($n !== '') {
+                                $out[] = [
+                                    'note' => $n,
+                                    'at'   => null,
+                                ];
+                            }
+                        }
+
+                        return $out;
+                    };
+
+                    $existing = $normalise(
+                        $rec->consultation_notes
+                        ?? $rec->consultant_notes
+                        ?? data_get($meta, 'consultation_notes')
+                        ?? data_get($meta, 'consultant_notes')
+                        ?? []
+                    );
+
+                    $existing[] = [
+                        'note' => $note,
+                        'at'   => now('UTC')->toIso8601String(),
+                    ];
+
+                    // De-dupe by note + timestamp
+                    $seen = [];
+                    $deduped = [];
+                    foreach ($existing as $row) {
+                        $n = trim((string) data_get($row, 'note'));
+                        $a = (string) (data_get($row, 'at') ?? '');
+                        if ($n === '') continue;
+
+                        $k = $n . '|' . $a;
+                        if (isset($seen[$k])) continue;
+
+                        $seen[$k] = true;
+                        $deduped[] = [
+                            'note' => $n,
+                            'at'   => $a !== '' ? $a : null,
+                        ];
+                    }
+
+                    $existing = $deduped;
+
+                    $meta['consultation_notes'] = $existing;
+                    $meta['consultant_notes'] = $existing;
+
+                    $rec->meta = $meta;
+
+                    // Optional if columns exist
+                    if (isset($rec->consultation_notes)) {
+                        $rec->consultation_notes = json_encode($existing);
+                    }
+                    if (isset($rec->consultant_notes)) {
+                        $rec->consultant_notes = json_encode($existing);
+                    }
+
+                    $rec->save();
+
+                    Notification::make()->success()->title('Consultation note added')->send();
+                })
+                ->button(),
+
+            Action::make('delete_consultation_note')
+            ->label('Delete consultation note')
+            ->icon('heroicon-o-trash')
+            ->color('danger')
+            ->modalHeading('Delete consultation note')
+            ->form([
+                Select::make('note_key')
+                    ->label('Select note')
+                    ->options(function () {
+                        $rec = $this->record;
+                        $meta = is_array($rec->meta) ? $rec->meta : (json_decode($rec->meta ?? '[]', true) ?: []);
+                        if (!is_array($meta)) $meta = [];
+
+                        $normalise = function ($v): array {
+                            $arr = is_array($v) ? $v : ($v == null ? [] : [$v]);
+                            $out = [];
+
+                            foreach ($arr as $x) {
+                                if (is_array($x)) {
+                                    $n = trim((string) (data_get($x, 'note') ?? data_get($x, 'text') ?? data_get($x, 'message') ?? ''));
+                                    $at = data_get($x, 'at') ?? data_get($x, 'created_at') ?? data_get($x, 'createdAt') ?? data_get($x, 'ts') ?? null;
+                                    if ($n !== '') {
+                                        $out[] = ['note' => $n, 'at' => $at ? (string) $at : null];
+                                    }
+                                    continue;
+                                }
+
+                                $n = is_string($x) ? trim($x) : trim((string) $x);
+                                if ($n !== '') $out[] = ['note' => $n, 'at' => null];
+                            }
+
+                            return $out;
+                        };
+
+                        $existing = $normalise(
+                            $rec->consultation_notes
+                            ?? $rec->consultant_notes
+                            ?? data_get($meta, 'consultation_notes')
+                            ?? data_get($meta, 'consultant_notes')
+                            ?? []
+                        );
+
+                        $opts = [];
+                        foreach ($existing as $row) {
+                            $n = trim((string) data_get($row, 'note'));
+                            $a = (string) (data_get($row, 'at') ?? '');
+                            if ($n === '') continue;
+
+                            $key = base64_encode($n . "\n" . $a);
+
+                            $labelNote = mb_strlen($n) > 80 ? (mb_substr($n, 0, 80) . '…') : $n;
+                            $labelAt = '';
+                            if ($a !== '') {
+                                try {
+                                    $labelAt = Carbon::parse($a)->timezone('Europe/London')->format('d-m-Y H:i');
+                                } catch (Throwable $e) {
+                                    $labelAt = $a;
+                                }
+                            }
+
+                            $opts[$key] = $labelAt !== '' ? ($labelAt . '  ' . $labelNote) : $labelNote;
+                        }
+
+                        return $opts;
+                    })
+                    ->searchable()
+                    ->required(),
+            ])
+            ->action(function (array $data) {
+                $key = (string) ($data['note_key'] ?? '');
+                if ($key === '') {
+                    Notification::make()->danger()->title('Select a note')->send();
+                    return;
+                }
+
+                $decoded = base64_decode($key, true);
+                if ($decoded === false) $decoded = '';
+                [$noteText, $noteAt] = array_pad(explode("\n", $decoded, 2), 2, '');
+                $noteText = trim((string) $noteText);
+                $noteAt = trim((string) $noteAt);
+
+                if ($noteText === '') {
+                    Notification::make()->danger()->title('Invalid note selection')->send();
+                    return;
+                }
+
+                $rec = $this->record;
+                $meta = is_array($rec->meta) ? $rec->meta : (json_decode($rec->meta ?? '[]', true) ?: []);
+                if (!is_array($meta)) $meta = [];
+
+                $normalise = function ($v): array {
+                    $arr = is_array($v) ? $v : ($v == null ? [] : [$v]);
+                    $out = [];
+
+                    foreach ($arr as $x) {
+                        if (is_array($x)) {
+                            $n = trim((string) (data_get($x, 'note') ?? data_get($x, 'text') ?? data_get($x, 'message') ?? ''));
+                            $at = data_get($x, 'at') ?? data_get($x, 'created_at') ?? data_get($x, 'createdAt') ?? data_get($x, 'ts') ?? null;
+                            if ($n !== '') $out[] = ['note' => $n, 'at' => $at ? (string) $at : null];
+                            continue;
+                        }
+
+                        $n = is_string($x) ? trim($x) : trim((string) $x);
+                        if ($n !== '') $out[] = ['note' => $n, 'at' => null];
+                    }
+
+                    return $out;
+                };
+
+                $existing = $normalise(
+                    $rec->consultation_notes
+                    ?? $rec->consultant_notes
+                    ?? data_get($meta, 'consultation_notes')
+                    ?? data_get($meta, 'consultant_notes')
+                    ?? []
+                );
+
+                $filtered = [];
+                $removed = false;
+
+                foreach ($existing as $row) {
+                    $n = trim((string) data_get($row, 'note'));
+                    $a = trim((string) (data_get($row, 'at') ?? ''));
+
+                    if (!$removed && $n === $noteText && ($noteAt === '' || $a === $noteAt)) {
+                        $removed = true;
+                        continue;
+                    }
+
+                    if ($n !== '') $filtered[] = ['note' => $n, 'at' => $a !== '' ? $a : null];
+                }
+
+                $meta['consultation_notes'] = $filtered;
+                $meta['consultant_notes'] = $filtered;
+
+                $rec->meta = $meta;
+
+                if (isset($rec->consultation_notes)) $rec->consultation_notes = json_encode($filtered);
+                if (isset($rec->consultant_notes)) $rec->consultant_notes = json_encode($filtered);
+
+                $rec->save();
+
+                Notification::make()
+                    ->success()
+                    ->title($removed ? 'Consultation note deleted' : 'No matching note found')
+                    ->send();
+            })
+            ->button(),
         ];
     }
 
@@ -575,6 +827,7 @@ class CompletedOrderDetails extends ViewRecord
         if ($items && !is_numeric(array_key_first($items)) && isset($items['name'])) $items = [$items];
 
         return $schema->components([
+    
             // Row 1: Customer, Payment, Status
             Section::make('Order Overview')
                 ->extraAttributes(['class' => 'bg-transparent shadow-none ring-0 border-0'])
@@ -1048,6 +1301,80 @@ class CompletedOrderDetails extends ViewRecord
                 ])
                 ->columnSpanFull(),
 
+            Section::make('Consultation notes')
+    ->collapsible()
+    ->collapsed(false)
+    ->columnSpanFull()
+    ->schema([
+        RepeatableEntry::make('consultation_notes_block')
+            ->hiddenLabel()
+            ->state(function ($record) {
+                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                $raw =
+                    $record->consultation_notes
+                    ?? $record->consultant_notes
+                    ?? data_get($meta, 'consultation_notes')
+                    ?? data_get($meta, 'consultant_notes')
+                    ?? [];
+
+                if (is_string($raw)) {
+                    $decoded = json_decode($raw, true);
+                    if (is_array($decoded)) $raw = $decoded;
+                }
+
+                $arr = is_array($raw) ? $raw : ($raw == null ? [] : [$raw]);
+                $out = [];
+
+                foreach ($arr as $x) {
+                    if (is_array($x)) {
+                        $note = trim((string) (data_get($x, 'note') ?? data_get($x, 'text') ?? data_get($x, 'message') ?? ''));
+                        $at   = data_get($x, 'at') ?? data_get($x, 'created_at') ?? data_get($x, 'createdAt') ?? data_get($x, 'ts') ?? null;
+
+                        if ($note !== '') {
+                            $out[] = [
+                                'note' => $note,
+                                'at'   => $at ? (string) $at : null,
+                            ];
+                        }
+                        continue;
+                    }
+
+                    $note = is_string($x) ? trim($x) : trim((string) $x);
+                    if ($note !== '') {
+                        $out[] = [
+                            'note' => $note,
+                            'at'   => null,
+                        ];
+                    }
+                }
+
+                return $out;
+            })
+            ->schema([
+                TextEntry::make('note')
+                    ->label('Note')
+                    ->formatStateUsing(fn ($state) => $state ? nl2br(e((string) $state)) : null)
+                    ->html(),
+
+                TextEntry::make('at')
+                    ->label('Date and time')
+                    ->visible(fn ($state) => !empty($state))
+                    ->formatStateUsing(function ($state) {
+                        if (!$state) return null;
+                        try {
+                            return Carbon::parse($state, 'UTC')->timezone('Europe/London')->format('d-m-Y H:i');
+                        } catch (Throwable $e) {
+                            try {
+                                return Carbon::parse($state)->timezone('Europe/London')->format('d-m-Y H:i');
+                            } catch (Throwable $e2) {
+                                return (string) $state;
+                            }
+                        }
+                    }),
+            ]),
+    ]),
+
             // Row 4: Admin Notes
             Section::make('Admin Notes')
                 ->extraAttributes(['class' => 'bg-transparent shadow-none ring-0 border-0'])
@@ -1056,7 +1383,25 @@ class CompletedOrderDetails extends ViewRecord
                     ->hiddenLabel()
                     ->state(function ($record) {
                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                        return (string) (data_get($meta, 'admin_notes') ?: '—');
+                        $v = data_get($meta, 'admin_notes');
+
+                        if (is_array($v)) {
+                            $lines = [];
+
+                            foreach ($v as $x) {
+                                if (is_array($x)) {
+                                    $x = data_get($x, 'note') ?? data_get($x, 'text') ?? data_get($x, 'message') ?? '';
+                                }
+                                $s = is_string($x) ? trim($x) : trim((string) $x);
+                                if ($s !== '') $lines[] = $s;
+                            }
+
+                            $lines = array_values(array_unique($lines));
+                            return count($lines) ? implode("\n", $lines) : '—';
+                        }
+
+                        $s = is_string($v) ? trim($v) : trim((string) ($v ?? ''));
+                        return $s !== '' ? $s : '—';
                     })
                     ->formatStateUsing(fn ($state) => nl2br(e($state)))
                     ->extraAttributes(function ($record) {

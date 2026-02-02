@@ -343,70 +343,11 @@
 
     $oldData = $loadAnswers($sessionLike ?? $session, $form ?? null, $stepSlug);
 
-    // Consultation notes history
-    // If your app updates the same row on save, keep a rolling history inside answers.consultation_notes_history
-    $consultationNotesHistory = [];
-    $consultationNotesHistoryRaw = [];
+    // Consultation notes help text (do not prefill textarea)
+    $consultationNotesHelp = "Use a structured approach for example SOAP or encounter based\n\nS Subjective presenting complaint history medicines allergies\nO Objective observations exam findings investigations\nA Assessment working diagnosis differentials risk stratification\nP Plan treatment prescriptions referrals safety netting follow up";
 
-    try {
-        // Prefer history stored inside saved answers
-        $rawHist = $oldData['consultation_notes_history'] ?? null;
-
-        if (is_string($rawHist) && trim($rawHist) !== '') {
-            $decoded = json_decode($rawHist, true);
-            if (is_array($decoded)) $rawHist = $decoded;
-        }
-        if (is_array($rawHist)) {
-            $consultationNotesHistoryRaw = $rawHist;
-        }
-
-        // Normalise rows for display
-        $norm = [];
-        foreach ($consultationNotesHistoryRaw as $row) {
-            if (!is_array($row)) continue;
-
-            $txt = $row['text'] ?? $row['note'] ?? $row['value'] ?? null;
-            $at  = $row['at'] ?? $row['ts'] ?? $row['time'] ?? null;
-
-            $txt = is_string($txt) ? trim($txt) : '';
-            if ($txt === '') continue;
-
-            $atObj = null;
-            try {
-                if ($at) $atObj = \Illuminate\Support\Carbon::parse($at);
-            } catch (\Throwable $e) { $atObj = null; }
-
-            $norm[] = [
-                'at' => $atObj,
-                'at_raw' => $at,
-                'at_fmt' => $atObj ? $atObj->timezone(config('app.timezone'))->format('d M Y H:i:s') : (is_string($at) ? (string) $at : ''),
-                'text' => $txt,
-            ];
-        }
-
-        usort($norm, function ($a, $b) {
-            $ta = $a['at'] instanceof \DateTimeInterface ? $a['at']->getTimestamp() : 0;
-            $tb = $b['at'] instanceof \DateTimeInterface ? $b['at']->getTimestamp() : 0;
-            return $tb <=> $ta;
-        });
-
-        // Cap raw history so it does not grow forever
-        $consultationNotesHistoryRaw = array_slice($consultationNotesHistoryRaw, 0, 50);
-
-        // Display up to 10
-        $consultationNotesHistory = array_slice($norm, 0, 10);
-
-    } catch (\Throwable $e) {
-        $consultationNotesHistory = [];
-        $consultationNotesHistoryRaw = [];
-    }
-
-    $consultationNotesHistoryRawJson = json_encode($consultationNotesHistoryRaw, JSON_UNESCAPED_SLASHES);
-
-    // Avoid showing latest note twice
-    $consultationNotesPrefill = !empty($consultationNotesHistory)
-        ? ''
-        : (string) ($oldData['consultation_notes'] ?? '');
+    // Prefer saved notes only (leave blank if none)
+    $consultationNotesValue = old('consultation_notes', $oldData['consultation_notes'] ?? '');
 
     // Options helper
     $normaliseOptions = function ($raw) {
@@ -510,14 +451,13 @@
                 @endphp
                 <div class="cf-section-card">
                     @if ($title)
-                        <div class="mt-3 mb-6">
+                        <div class="mb-4">
                             <h3 class="cf-title">{{ $title }}</h3>
                             @if ($summary)
                                 <p class="cf-summary">{!! nl2br(e($summary)) !!}</p>
                             @endif
                         </div>
                     @endif
-                    <div style="height:10px"></div>
 
                     <div class="cf-grid">
                     @php $fieldCard = 'cf-field-card'; @endphp
@@ -730,30 +670,14 @@
             <div class="cf-section-card">
                 <div class="cf-field-flat">
                     <label class="cf-label">Consultation notes</label>
-                    <input type="hidden" name="answers[consultation_notes]" id="answers_consultation_notes" value="{{ old('consultation_notes', $consultationNotesPrefill) }}">
-                    <input type="hidden" name="answers[consultation_notes_history]" id="answers_consultation_notes_history" value="{{ old('answers.consultation_notes_history', $consultationNotesHistoryRawJson ?? '[]') }}">
-                    @if (!empty($consultationNotesHistory))
-                        <div class="mt-3 mb-6">
-                            <div class="cf-label" style="margin-bottom:10px">Previous consultation notes</div>
-                            <div style="display:grid;gap:10px">
-                                @foreach ($consultationNotesHistory as $hn)
-                                    <div style="border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:12px;background:rgba(255,255,255,.02)">
-                                        <div style="font-size:12px;color:#9ca3af;margin-bottom:6px">{{ $hn['at_fmt'] }}</div>
-                                        <div style="white-space:pre-wrap;color:#e5e7eb;font-size:13px;line-height:1.55">{{ $hn['text'] }}</div>
-                                    </div>
-                                @endforeach
-                            </div>
-                        </div>
-                    @endif
-                    <div style="height:10px"></div>
                     <textarea
                         id="consultation_notes"
                         name="consultation_notes"
                         rows="6"
                         class="cf-textarea"
-                    >{{ old('consultation_notes', $consultationNotesPrefill) }}</textarea>
-                    <input type="hidden" name="answers[consultation_notes]" id="answers_consultation_notes" value="{{ old('consultation_notes', $consultationNotesPrefill) }}">
-                    <input type="hidden" name="answers[consultation_notes_history]" id="answers_consultation_notes_history" value="{{ old('answers.consultation_notes_history', $consultationNotesHistoryRawJson ?? '[]') }}">
+                    >{{ $consultationNotesValue }}</textarea>
+                    <input type="hidden" name="answers[consultation_notes]" id="answers_consultation_notes" value="{{ $consultationNotesValue }}">
+                    <p class="cf-help">{!! nl2br(e($consultationNotesHelp)) !!}</p>
                     <div class="voice-toolbar" id="voice_toolbar_consultation_notes">
                       <button type="button" class="voice-btn" id="voice_btn_consultation_notes" aria-pressed="false" aria-controls="consultation_notes">Start dictation</button>
                       <span id="voice_status_consultation_notes" class="voice-status"><i class="voice-dot"></i> Mic off</span>
@@ -1004,39 +928,5 @@
   ta.addEventListener('input', syncMirror);
 })();
 </script>
-</form>
-@once
-<script>
-(function(){
-  function safeParseJson(v){
-    if(!v) return [];
-    try { const out = JSON.parse(v); return Array.isArray(out) ? out : []; }
-    catch(e){ return []; }
-  }
-
-  document.addEventListener('DOMContentLoaded', function(){
-    const form = document.getElementById('cf_pharmacist-advice');
-    if(!form) return;
-
-    form.addEventListener('submit', function(){
-      const ta = document.getElementById('consultation_notes');
-      const hist = document.getElementById('answers_consultation_notes_history');
-      const hiddenNote = document.getElementById('answers_consultation_notes');
-
-      if(!ta || !hist) return;
-
-      const text = String(ta.value || '').trim();
-      if(!text) return;
-
-      if(hiddenNote) hiddenNote.value = text;
-
-      const arr = safeParseJson(hist.value);
-      arr.unshift({ at: new Date().toISOString(), text: text });
-      hist.value = JSON.stringify(arr.slice(0, 50));
-    }, { capture: true });
-  });
-})();
-</script>
-@endonce
+    </form>
 @endif
-

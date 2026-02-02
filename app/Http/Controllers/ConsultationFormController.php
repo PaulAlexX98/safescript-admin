@@ -747,6 +747,147 @@ class ConsultationFormController extends Controller
         $session->meta = $sessionMeta;
         $session->save();
 
+        // Persist admin + consultation notes into the related order meta (non-blocking)
+        try {
+            $adminNotesRaw = $request->input('admin_notes');
+            $consultNotesRaw = $request->input('consultation_notes');
+
+            $adminNotesStr = is_string($adminNotesRaw) ? trim($adminNotesRaw) : '';
+            $consultNotesStr = is_string($consultNotesRaw) ? trim($consultNotesRaw) : '';
+
+            if ($adminNotesStr !== '' || $consultNotesStr !== '') {
+                $order = null;
+
+                try {
+                    if (isset($session->order) && $session->order) {
+                        $order = $session->order;
+                    }
+                } catch (\Throwable $e) {
+                    // ignore
+                }
+
+                // Fallbacks if relationship isn't loaded/available
+                try {
+                    if (!$order && isset($session->order_id) && class_exists('App\\Models\\Order')) {
+                        $order = \App\Models\Order::find($session->order_id);
+                    }
+                } catch (\Throwable $e) {
+                    // ignore
+                }
+
+                try {
+                    if (!$order && isset($session->order_reference) && class_exists('App\\Models\\Order')) {
+                        $order = \App\Models\Order::where('reference', $session->order_reference)->first();
+                    }
+                } catch (\Throwable $e) {
+                    // ignore
+                }
+
+                if ($order) {
+                    $meta = $order->meta ?? [];
+                    if (is_string($meta)) {
+                        $meta = json_decode($meta, true) ?: [];
+                    }
+                    if (!is_array($meta)) {
+                        $meta = [];
+                    }
+
+                    $appendNote = function ($existing, string $note) {
+                        $note = trim($note);
+                        if ($note === '') {
+                            return $existing;
+                        }
+
+                        if (is_array($existing)) {
+                            $arr = array_values(array_filter(array_map(function ($v) {
+                                return is_string($v) ? trim($v) : '';
+                            }, $existing)));
+                            $arr[] = $note;
+                            return array_values(array_unique(array_filter($arr, fn ($v) => $v !== '')));
+                        }
+
+                        $s = is_string($existing) ? trim($existing) : '';
+                        if ($s === '') {
+                            return [$note];
+                        }
+                        if ($s === $note) {
+                            return [$note];
+                        }
+                        return array_values(array_unique([$s, $note]));
+                    };
+
+                    $appendNoteWithTs = function ($existing, string $note) {
+                        $note = trim($note);
+                        if ($note === '') {
+                            return $existing;
+                        }
+
+                        $at = now()->toIso8601String();
+                        $newItem = ['note' => $note, 'at' => $at];
+
+                        // Normalise existing into an array of {note, at}
+                        $items = [];
+
+                        if (is_array($existing)) {
+                            foreach ($existing as $v) {
+                                if (is_array($v)) {
+                                    $n = data_get($v, 'note') ?? data_get($v, 'text') ?? data_get($v, 'message') ?? '';
+                                    $n = is_string($n) ? trim($n) : '';
+                                    if ($n === '') continue;
+
+                                    $t = data_get($v, 'at') ?? data_get($v, 'ts') ?? data_get($v, 'created_at') ?? null;
+                                    $t = is_string($t) ? trim($t) : (is_null($t) ? null : (string) $t);
+
+                                    $items[] = ['note' => $n, 'at' => $t ?: null];
+                                } else {
+                                    $s = is_string($v) ? trim($v) : '';
+                                    if ($s === '') continue;
+                                    $items[] = ['note' => $s, 'at' => null];
+                                }
+                            }
+                        } else {
+                            $s = is_string($existing) ? trim($existing) : '';
+                            if ($s !== '') {
+                                $items[] = ['note' => $s, 'at' => null];
+                            }
+                        }
+
+                        // De-dupe by note text (keep first occurrence)
+                        $seen = [];
+                        $deduped = [];
+                        foreach ($items as $it) {
+                            $k = (string) ($it['note'] ?? '');
+                            if ($k === '') continue;
+                            if (isset($seen[$k])) continue;
+                            $seen[$k] = true;
+                            $deduped[] = $it;
+                        }
+
+                        if (!isset($seen[$note])) {
+                            $deduped[] = $newItem;
+                        }
+
+                        return array_values($deduped);
+                    };
+
+                    if ($adminNotesStr !== '') {
+                        $meta['admin_notes'] = $appendNote($meta['admin_notes'] ?? [], $adminNotesStr);
+                    }
+
+                    if ($consultNotesStr !== '') {
+                        $meta['consultation_notes'] = $appendNoteWithTs($meta['consultation_notes'] ?? [], $consultNotesStr);
+                        // Keep both keys in sync since some pages read consultant_notes
+                        $meta['consultant_notes'] = $meta['consultation_notes'];
+                    }
+
+                    $order->meta = $meta;
+                    $order->save();
+                }
+            }
+        } catch (\Throwable $e) {
+            // Notes persistence is non-blocking
+        }
+
         // 6b) If we were asked to complete the consultation, mark the session (and order) complete
         //     and prefer redirecting to an appropriate "done" page.
         $redirectAfterComplete = null;
