@@ -4,9 +4,11 @@ namespace App\Http\Controllers;
 
 use Log;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Http\Request;
 use App\Models\ClinicForm;
 use App\Models\ConsultationFormResponse;
+use App\Models\User;
 use Illuminate\Support\Str;
 use Illuminate\Support\Arr;
 use Illuminate\Validation\Rule;
@@ -17,6 +19,8 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\HtmlString;
 use App\Models\ConsultationSession;
+use App\Models\Order;
+
 
 class ConsultationFormController extends Controller
 {
@@ -89,6 +93,96 @@ class ConsultationFormController extends Controller
 
         // Delegate to the canonical saver
         return $this->save($request, $session->id, $form);
+    }
+
+    private function coerceConsultationNoteText($raw): string
+    {
+        if ($raw === null) return '';
+
+        if (is_string($raw)) {
+            $trim = trim($raw);
+            if ($trim === '') return '';
+
+            $decoded = json_decode($trim, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                $raw = $decoded;
+            } else {
+                return $trim;
+            }
+        }
+
+        if (is_array($raw)) {
+            if (empty($raw)) return '';
+
+            $last = end($raw);
+
+            if (is_string($last)) return trim($last);
+
+            if (is_array($last)) {
+                $t = $last['note'] ?? $last['text'] ?? $last['value'] ?? $last['content'] ?? null;
+                return is_scalar($t) ? trim((string) $t) : '';
+            }
+
+            return is_scalar($last) ? trim((string) $last) : '';
+        }
+
+        return is_scalar($raw) ? trim((string) $raw) : '';
+    }
+
+    private function appendUserConsultationNote(?User $user, string $noteText, ?string $reference = null): void
+    {
+        try {
+            $noteText = trim($noteText);
+            if ($noteText === '' || !$user) return;
+
+            if (!Schema::hasColumn('users', 'consultation_notes')) return;
+
+            $existing = $user->consultation_notes ?? null;
+
+            if (is_string($existing)) {
+                $decoded = json_decode(trim($existing), true);
+                $existing = (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) ? $decoded : [];
+            }
+
+            if (!is_array($existing)) $existing = [];
+
+            $row = [
+                'note' => $noteText,
+                'at' => now('UTC')->toIso8601String(),
+            ];
+
+            if ($reference) $row['reference'] = $reference;
+
+            $existing[] = $row;
+
+            $seen = [];
+            $clean = [];
+
+            foreach ($existing as $r) {
+                if (!is_array($r)) continue;
+
+                $n = trim((string)($r['note'] ?? ''));
+                if ($n === '') continue;
+
+                $at = trim((string)($r['at'] ?? $r['created_at'] ?? $r['timestamp'] ?? ''));
+                $ref = trim((string)($r['reference'] ?? ''));
+
+                $key = strtolower(preg_replace('/\s+/', ' ', $n)) . '|' . $at . '|' . $ref;
+                if (isset($seen[$key])) continue;
+
+                $seen[$key] = true;
+
+                $clean[] = [
+                    'note' => $n,
+                    'at' => $at !== '' ? $at : now('UTC')->toIso8601String(),
+                ] + ($ref !== '' ? ['reference' => $ref] : []);
+            }
+
+            $user->consultation_notes = json_encode($clean, JSON_UNESCAPED_SLASHES);
+            $user->save();
+        } catch (\Throwable $e) {
+            \Log::warning('consultation.save.user_notes_failed', ['message' => $e->getMessage()]);
+        }
     }
 
     public function save(Request $request, $sessionId, ClinicForm $form)
@@ -747,13 +841,159 @@ class ConsultationFormController extends Controller
         $session->meta = $sessionMeta;
         $session->save();
 
+        // Persist last known weight for this patient so we can prefill next orders
+        try {
+            // Only do this for RAF-like steps
+            $isRafLike = ($derivedFormType === 'raf')
+                || (str_contains((string) $derivedFormType, 'raf'))
+                || ($stepSlug === 'raf')
+                || (str_contains((string) $stepSlug, 'raf'));
+
+            if ($isRafLike && $userId) {
+                $weightRaw = null;
+
+                // Prefer explicit keys first
+                $candidates = ['weight', 'weight_kg', 'current_weight', 'weightkg', 'body_weight', 'your_weight'];
+                foreach ($candidates as $k) {
+                    $v = data_get($persistData, $k);
+                    if (is_string($v)) {
+                        $vv = trim($v);
+                        if ($vv !== '') {
+                            $weightRaw = $vv;
+                            break;
+                        }
+                    } elseif (is_numeric($v)) {
+                        $weightRaw = (string) $v;
+                        break;
+                    }
+                }
+
+                // If not found, try a best-effort scan for any key containing "weight" but avoid target/goal
+                if ($weightRaw === null && is_array($persistData)) {
+                    foreach ($persistData as $k => $v) {
+                        $ks = is_string($k) ? strtolower($k) : '';
+                        if ($ks === '' || !str_contains($ks, 'weight')) {
+                            continue;
+                        }
+                        if (str_contains($ks, 'target') || str_contains($ks, 'goal')) {
+                            continue;
+                        }
+                        if (is_string($v)) {
+                            $vv = trim($v);
+                            if ($vv !== '') {
+                                $weightRaw = $vv;
+                                break;
+                            }
+                        } elseif (is_numeric($v)) {
+                            $weightRaw = (string) $v;
+                            break;
+                        }
+                    }
+                }
+
+                if ($weightRaw !== null) {
+                    $rawLower = strtolower($weightRaw);
+
+                    // Extract a number from the raw string
+                    $num = null;
+                    if (is_numeric($weightRaw)) {
+                        $num = (float) $weightRaw;
+                    } else {
+                        if (preg_match('/([0-9]+(?:\.[0-9]+)?)/', $weightRaw, $m)) {
+                            $num = (float) $m[1];
+                        }
+                    }
+
+                    // Derive unit and normalise to kg when possible
+                    $unit = null;
+                    $kg = null;
+
+                    if ($num !== null) {
+                        if (str_contains($rawLower, 'kg') || str_contains($rawLower, 'kilogram')) {
+                            $unit = 'kg';
+                            $kg = $num;
+                        } elseif (str_contains($rawLower, 'lb') || str_contains($rawLower, 'lbs') || str_contains($rawLower, 'pound')) {
+                            $unit = 'lb';
+                            $kg = $num * 0.45359237;
+                        } elseif (str_contains($rawLower, 'st') || str_contains($rawLower, 'stone')) {
+                            $unit = 'st';
+                            $kg = $num * 6.35029318;
+                        } else {
+                            // Heuristic: assume kg for realistic adult ranges
+                            $unit = 'kg';
+                            $kg = $num;
+                        }
+                    }
+
+                    // Clamp obviously invalid values
+                    if ($kg !== null) {
+                        if ($kg < 20 || $kg > 400) {
+                            $kg = null;
+                        }
+                    }
+
+                    // Save into user meta so we don't need DB schema changes
+                    $user = User::query()->find($userId);
+                    if ($user) {
+                        $userMeta = is_array($user->meta) ? $user->meta : (json_decode($user->meta ?? '[]', true) ?: []);
+                        if (!is_array($userMeta)) {
+                            $userMeta = [];
+                        }
+
+                        data_set($userMeta, 'health.last_weight.raw', $weightRaw);
+                        if ($kg !== null) {
+                            data_set($userMeta, 'health.last_weight.kg', round($kg, 1));
+                        }
+                        if ($unit) {
+                            data_set($userMeta, 'health.last_weight.unit', $unit);
+                        }
+                        data_set($userMeta, 'health.last_weight.at', now()->toIso8601String());
+
+                        $user->meta = $userMeta;
+                        $user->save();
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // Non-blocking: never fail the form save because weight persistence failed
+            \Log::warning('consultation.save.weight_persist_failed', ['message' => $e->getMessage()]);
+        }
+
         // Persist admin + consultation notes into the related order meta (non-blocking)
         try {
             $adminNotesRaw = $request->input('admin_notes');
             $consultNotesRaw = $request->input('consultation_notes');
 
             $adminNotesStr = is_string($adminNotesRaw) ? trim($adminNotesRaw) : '';
-            $consultNotesStr = is_string($consultNotesRaw) ? trim($consultNotesRaw) : '';
+            $consultNotesStr = $this->coerceConsultationNoteText($consultNotesRaw);
+            
+            if ($consultNotesStr !== '') {
+                $refForNote = null;
+                try {
+                    $refForNote = (string) ($order->reference ?? ($session->order_reference ?? $session->reference ?? ''));
+                } catch (\Throwable $e) {
+                    $refForNote = null;
+                }
+
+                $userForNote = null;
+
+                try {
+                    if (isset($session->user_id) && $session->user_id) {
+                        $userForNote = User::query()->find($session->user_id);
+                    }
+                } catch (\Throwable $e) {
+                    $userForNote = null;
+                }
+
+                try {
+                    if (!$userForNote && $order && isset($order->user_id) && $order->user_id) {
+                        $userForNote = User::query()->find($order->user_id);
+                    }
+                } catch (\Throwable $e) {
+                }
+
+                $this->appendUserConsultationNote($userForNote, $consultNotesStr, $refForNote);
+            }
 
             if ($adminNotesStr !== '' || $consultNotesStr !== '') {
                 $order = null;
@@ -1867,7 +2107,7 @@ class ConsultationFormController extends Controller
             report($e);
         }
     }
-
+    
     /**
      * REORDER step viewer
      * Opens the Reorder form for the given consultation session.

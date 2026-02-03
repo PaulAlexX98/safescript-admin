@@ -50,6 +50,7 @@ class User extends Authenticatable implements FilamentUser
             'scr_verified_at' => 'datetime',
             'id_verified' => 'boolean',
             'id_verified_at' => 'datetime',
+            'consultation_notes' => 'array',
 
         ];
     }

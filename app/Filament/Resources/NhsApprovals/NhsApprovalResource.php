@@ -4,35 +4,28 @@ namespace App\Filament\Resources\NhsApprovals;
 
 use App\Filament\Resources\NhsApprovals\Pages\ListNhsApprovals;
 use App\Filament\Resources\NhsApprovals\Pages\ViewNhsApproval;
-use App\Filament\Resources\NhsApprovals\Tables\NhsApprovalsTable;
-use App\Models\NhsApproval;
+use App\Models\NhsApplication;
 use BackedEnum;
-use UnitEnum;
+use Filament\Actions\Action;
+use Filament\Forms\Components\Textarea;
+use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
+use Filament\Schemas\Components\Grid;
+use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
-use Filament\Support\Icons\Heroicon;
+use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
-
-use App\Models\NhsApplication;
-use Filament\Forms;
-use Filament\Tables;
 use Illuminate\Support\Arr;
-use Illuminate\Support\Str;
-
-use Filament\Actions\Action;
-use Filament\Infolists\Components\TextEntry;
-use Filament\Infolists\Components\RepeatableEntry;
-use Filament\Infolists\Components\ViewEntry;
-use Filament\Schemas\Components\Grid;
-use Filament\Schemas\Components\Section;
 use Illuminate\Support\HtmlString;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
 
 class NhsApprovalResource extends Resource
 {
     protected static ?string $model = NhsApplication::class;
-    
+
     protected static BackedEnum|string|null $navigationIcon = 'heroicon-o-shield-check';
     protected static ?string $navigationLabel = 'NHS approval';
     protected static ?int $navigationSort = 4;
@@ -48,7 +41,6 @@ class NhsApprovalResource extends Resource
 
     public static function getNavigationBadgeColor(): ?string
     {
-        // warning stands out for items requiring action
         return 'warning';
     }
 
@@ -73,8 +65,8 @@ class NhsApprovalResource extends Resource
 
                 Tables\Columns\TextColumn::make('full_name')
                     ->label('Name')
-                    ->getStateUsing(fn (\App\Models\NhsApplication $r) => trim(($r->first_name ?? '') . ' ' . ($r->last_name ?? '')) ?: '—')
-                    ->searchable(['first_name','last_name'])
+                    ->getStateUsing(fn (NhsApplication $r) => trim(($r->first_name ?? '') . ' ' . ($r->last_name ?? '')) ?: '—')
+                    ->searchable(['first_name', 'last_name'])
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('email')
@@ -97,8 +89,8 @@ class NhsApprovalResource extends Resource
             ->filters([
                 Tables\Filters\SelectFilter::make('status')->options([
                     'pending' => 'pending',
-                    'approved'=> 'approved',
-                    'rejected'=> 'rejected',
+                    'approved' => 'approved',
+                    'rejected' => 'rejected',
                 ])->default('pending'),
             ])
             ->actionsColumnLabel('View')
@@ -139,7 +131,7 @@ class NhsApprovalResource extends Resource
                                             return match ($s) {
                                                 'approved' => 'success',
                                                 'rejected' => 'danger',
-                                                default    => 'warning',
+                                                default => 'warning',
                                             };
                                         }),
                                     TextEntry::make('created_at')->label('Received')->dateTime('d-m-Y H:i'),
@@ -240,34 +232,55 @@ class NhsApprovalResource extends Resource
                             ->requiresConfirmation()
                             ->action(function (NhsApplication $record, Action $action) {
                                 $record->forceFill([
-                                    'status'         => 'approved',
-                                    'approved_at'    => now(),
+                                    'status' => 'approved',
+                                    'approved_at' => now(),
                                     'approved_by_id' => auth()->id(),
                                 ])->save();
-                                // close confirmation, close parent modal, refresh table and stay on index without reopening
+
+                                self::sendApprovedEmail($record);
+
                                 $action->success();
-                                try { $action->getLivewire()->dispatch('$refresh'); $action->getLivewire()->dispatch('refreshTable'); } catch (\Throwable $e) {}
+                                try {
+                                    $action->getLivewire()->dispatch('$refresh');
+                                    $action->getLivewire()->dispatch('refreshTable');
+                                } catch (\Throwable $e) {
+                                }
+
                                 return redirect(ListNhsApprovals::getUrl());
                             }),
+
                         Action::make('reject')
                             ->label('Reject')
                             ->color('danger')
                             ->icon('heroicon-o-x-mark')
                             ->form([
-                                \Filament\Forms\Components\Textarea::make('reason')
+                                Textarea::make('reason')
                                     ->label('Reason')
-                                    ->rows(3)
+                                    ->rows(4)
                                     ->required(),
                             ])
                             ->action(function (NhsApplication $record, array $data, Action $action) {
+                                $reason = trim((string) ($data['reason'] ?? ''));
+
                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                $meta['rejection_note'] = trim((string) ($data['reason'] ?? ''));
+                                $meta['rejection_note'] = $reason;
+                                $meta['rejected_at'] = now()->toISOString();
+                                $meta['rejected_by_id'] = auth()->id();
+
                                 $record->forceFill([
                                     'status' => 'rejected',
-                                    'meta'   => $meta,
+                                    'meta' => $meta,
                                 ])->save();
+
+                                self::sendRejectedEmail($record, $reason);
+
                                 $action->success();
-                                try { $action->getLivewire()->dispatch('$refresh'); $action->getLivewire()->dispatch('refreshTable'); } catch (\Throwable $e) {}
+                                try {
+                                    $action->getLivewire()->dispatch('$refresh');
+                                    $action->getLivewire()->dispatch('refreshTable');
+                                } catch (\Throwable $e) {
+                                }
+
                                 return redirect(ListNhsApprovals::getUrl());
                             }),
                     ]),
@@ -278,7 +291,7 @@ class NhsApprovalResource extends Resource
     {
         return [
             'index' => ListNhsApprovals::route('/'),
-            'view'  => ViewNhsApproval::route('/{record}'),
+            'view' => ViewNhsApproval::route('/{record}'),
         ];
     }
 
@@ -289,61 +302,127 @@ class NhsApprovalResource extends Resource
         ]);
     }
 
+    private static function sendApprovedEmail(NhsApplication $record): void
+    {
+        $to = trim((string) ($record->email ?? ''));
+        if ($to === '') return;
+
+        $name = trim((string) (($record->first_name ?? '') . ' ' . ($record->last_name ?? '')));
+        if ($name === '') $name = 'there';
+
+        $subject = 'Your NHS prescription sign up is approved';
+
+        $body = implode("\n\n", [
+            "Hello {$name},",
+            "Thank you for signing up with Pharmacy Express for your NHS prescription service.",
+            "Your application has been reviewed and approved. You can now use your account to request eligible NHS prescriptions through Pharmacy Express.",
+            "If you need to update your details or have any questions, reply to this email and our team will help.",
+            "Kind regards,\nPharmacy Express",
+        ]);
+
+        try {
+            Mail::raw($body, function ($message) use ($to, $subject) {
+                $message->to($to)->subject($subject);
+            });
+        } catch (\Throwable $e) {
+            Log::warning('Failed to send NHS approval email', [
+                'email' => $to,
+                'id' => $record->id ?? null,
+                'err' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private static function sendRejectedEmail(NhsApplication $record, string $reason): void
+    {
+        $to = trim((string) ($record->email ?? ''));
+        if ($to === '') return;
+
+        $name = trim((string) (($record->first_name ?? '') . ' ' . ($record->last_name ?? '')));
+        if ($name === '') $name = 'there';
+
+        $subject = 'Update on your NHS prescription sign up';
+
+        $reasonText = $reason !== '' ? $reason : 'A reason was not provided.';
+
+        $body = implode("\n\n", [
+            "Hello {$name},",
+            "Thank you for signing up with Pharmacy Express for your NHS prescription service.",
+            "We have reviewed your application and we are unable to approve it at this time.",
+            "Reason",
+            $reasonText,
+            "If you believe this is a mistake or you would like to resubmit with updated information, reply to this email and we will help.",
+            "Kind regards,\nPharmacy Express",
+        ]);
+
+        try {
+            Mail::raw($body, function ($message) use ($to, $subject) {
+                $message->to($to)->subject($subject);
+            });
+        } catch (\Throwable $e) {
+            Log::warning('Failed to send NHS rejection email', [
+                'email' => $to,
+                'id' => $record->id ?? null,
+                'err' => $e->getMessage(),
+            ]);
+        }
+    }
+
     private static function metaArray($raw): array
-{
-    if (is_array($raw)) return $raw;
-    if (is_string($raw) && $raw !== '') {
-        $d = json_decode($raw, true);
-        if (json_last_error() === JSON_ERROR_NONE && is_array($d)) return $d;
+    {
+        if (is_array($raw)) return $raw;
+        if (is_string($raw) && $raw !== '') {
+            $d = json_decode($raw, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($d)) return $d;
+        }
+        return [];
     }
-    return [];
-}
 
-private static function boolish($v): ?bool
-{
-    if ($v === null || $v === '') return null;
-    if (is_bool($v)) return $v;
-    if (is_numeric($v)) return ((int) $v) === 1;
-    if (is_string($v)) {
-        $lx = strtolower(trim($v));
-        if (in_array($lx, ['1','true','yes','y'], true)) return true;
-        if (in_array($lx, ['0','false','no','n'], true))  return false;
+    private static function boolish($v): ?bool
+    {
+        if ($v === null || $v === '') return null;
+        if (is_bool($v)) return $v;
+        if (is_numeric($v)) return ((int) $v) === 1;
+        if (is_string($v)) {
+            $lx = strtolower(trim($v));
+            if (in_array($lx, ['1', 'true', 'yes', 'y'], true)) return true;
+            if (in_array($lx, ['0', 'false', 'no', 'n'], true)) return false;
+        }
+        return null;
     }
-    return null;
-}
 
-private static function pickFirstTruthy(array $candidates, $default = null)
-{
-    foreach ($candidates as $x) {
-        if ($x === null) continue;
-        if (is_string($x) && trim($x) === '') continue;
-        return $x;
+    private static function pickFirstTruthy(array $candidates, $default = null)
+    {
+        foreach ($candidates as $x) {
+            if ($x === null) continue;
+            if (is_string($x) && trim($x) === '') continue;
+            return $x;
+        }
+        return $default;
     }
-    return $default;
-}
 
-
-private static function resolveUseAltDelivery(\App\Models\NhsApplication $r): bool
-{
-    $meta = self::metaArray($r->meta ?? []);
-    $candidates = [
-        $r->use_alt_delivery ?? null,
-        Arr::get($meta, 'use_alt_delivery'),
-        Arr::get($meta, 'use_alt_delivery_flag'),
-        Arr::get($meta, 'use_alt_delivery.value'),
-        Arr::get($meta, 'consents.flags.use_alt_delivery'),
-    ];
-    foreach ($candidates as $x) {
-        $b = self::boolish($x);
-        if ($b !== null) return $b;
+    private static function resolveUseAltDelivery(NhsApplication $r): bool
+    {
+        $meta = self::metaArray($r->meta ?? []);
+        $candidates = [
+            $r->use_alt_delivery ?? null,
+            Arr::get($meta, 'use_alt_delivery'),
+            Arr::get($meta, 'use_alt_delivery_flag'),
+            Arr::get($meta, 'use_alt_delivery.value'),
+            Arr::get($meta, 'consents.flags.use_alt_delivery'),
+        ];
+        foreach ($candidates as $x) {
+            $b = self::boolish($x);
+            if ($b !== null) return $b;
+        }
+        return false;
     }
-    return false;
-}
 
     private static function formatExemption($value): ?string
     {
         if ($value === null || $value === '') return null;
         if (!is_string($value)) $value = (string) $value;
+
         $map = [
             'pays' => 'The patient pays for their prescriptions',
             'over60_or_under16' => 'The patient is 60 years or over or under 16',
@@ -360,8 +439,10 @@ private static function resolveUseAltDelivery(\App\Models\NhsApplication $r): bo
             'pension_credit' => 'Pension Credit Guarantee Credit',
             'universal_credit' => 'Universal Credit and meets the eligibility criteria',
         ];
+
         $k = strtolower(trim($value));
         if (array_key_exists($k, $map)) return $map[$k];
+
         return ucwords(str_replace(['_', '-'], ' ', $k));
     }
 }

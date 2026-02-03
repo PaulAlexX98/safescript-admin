@@ -523,6 +523,90 @@ class CompletedOrderDetails extends ViewRecord
 
                     $rec->save();
 
+                    // Also store a copy on the user so notes can be seen per patient
+                    try {
+                        $u = $rec->user;
+                        if ($u) {
+                            $normaliseUser = function ($v): array {
+                                // DB column may be json-cast, array, json string, or null
+                                if (is_string($v)) {
+                                    $trim = trim($v);
+                                    if ($trim === '') return [];
+                                    $decoded = json_decode($trim, true);
+                                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                                        $v = $decoded;
+                                    } else {
+                                        $v = [$trim];
+                                    }
+                                }
+
+                                $arr = is_array($v) ? $v : ($v == null ? [] : [$v]);
+                                $out = [];
+
+                                foreach ($arr as $x) {
+                                    if (is_array($x)) {
+                                        $n = trim((string) (data_get($x, 'note') ?? data_get($x, 'text') ?? data_get($x, 'message') ?? ''));
+                                        $at = data_get($x, 'at') ?? data_get($x, 'created_at') ?? data_get($x, 'createdAt') ?? data_get($x, 'ts') ?? null;
+                                        $ref = data_get($x, 'order_reference') ?? data_get($x, 'reference') ?? null;
+                                        if ($n !== '') {
+                                            $out[] = [
+                                                'note' => $n,
+                                                'at' => $at ? (string) $at : null,
+                                                'order_reference' => $ref ? (string) $ref : null,
+                                            ];
+                                        }
+                                        continue;
+                                    }
+
+                                    $n = is_string($x) ? trim($x) : trim((string) $x);
+                                    if ($n !== '') {
+                                        $out[] = [
+                                            'note' => $n,
+                                            'at' => null,
+                                            'order_reference' => null,
+                                        ];
+                                    }
+                                }
+
+                                return $out;
+                            };
+
+                            $uExisting = $normaliseUser($u->consultation_notes ?? null);
+
+                            $uExisting[] = [
+                                'note' => $note,
+                                'at' => now('UTC')->toIso8601String(),
+                                'order_reference' => (string) ($rec->reference ?? ''),
+                            ];
+
+                            // De-dupe by note + at + reference
+                            $seenU = [];
+                            $dedupedU = [];
+                            foreach ($uExisting as $row) {
+                                $n = trim((string) data_get($row, 'note'));
+                                $a = (string) (data_get($row, 'at') ?? '');
+                                $r = (string) (data_get($row, 'order_reference') ?? '');
+                                if ($n === '') continue;
+
+                                $k = $n . '|' . $a . '|' . $r;
+                                if (isset($seenU[$k])) continue;
+
+                                $seenU[$k] = true;
+                                $dedupedU[] = [
+                                    'note' => $n,
+                                    'at' => $a !== '' ? $a : null,
+                                    'order_reference' => $r !== '' ? $r : null,
+                                ];
+                            }
+
+                            // Users table now has a real column, store JSON
+                            $u->consultation_notes = json_encode($dedupedU);
+                            $u->save();
+                        }
+                    } catch (\Throwable $e) {
+                        // ignore
+                    }
+
                     Notification::make()->success()->title('Consultation note added')->send();
                 })
                 ->button(),
@@ -668,6 +752,84 @@ class CompletedOrderDetails extends ViewRecord
                 if (isset($rec->consultant_notes)) $rec->consultant_notes = json_encode($filtered);
 
                 $rec->save();
+
+                // Also delete from user consultation_notes column if present
+                try {
+                    $u = $rec->user;
+                    if ($u) {
+                        $normaliseUser = function ($v): array {
+                            if (is_string($v)) {
+                                $trim = trim($v);
+                                if ($trim === '') return [];
+                                $decoded = json_decode($trim, true);
+                                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                                    $v = $decoded;
+                                } else {
+                                    $v = [$trim];
+                                }
+                            }
+
+                            $arr = is_array($v) ? $v : ($v == null ? [] : [$v]);
+                            $out = [];
+
+                            foreach ($arr as $x) {
+                                if (is_array($x)) {
+                                    $n = trim((string) (data_get($x, 'note') ?? data_get($x, 'text') ?? data_get($x, 'message') ?? ''));
+                                    $at = data_get($x, 'at') ?? data_get($x, 'created_at') ?? data_get($x, 'createdAt') ?? data_get($x, 'ts') ?? null;
+                                    $ref = data_get($x, 'order_reference') ?? data_get($x, 'reference') ?? null;
+                                    if ($n !== '') {
+                                        $out[] = [
+                                            'note' => $n,
+                                            'at' => $at ? (string) $at : null,
+                                            'order_reference' => $ref ? (string) $ref : null,
+                                        ];
+                                    }
+                                    continue;
+                                }
+
+                                $n = is_string($x) ? trim($x) : trim((string) $x);
+                                if ($n !== '') {
+                                    $out[] = [
+                                        'note' => $n,
+                                        'at' => null,
+                                        'order_reference' => null,
+                                    ];
+                                }
+                            }
+
+                            return $out;
+                        };
+
+                        $uExisting = $normaliseUser($u->consultation_notes ?? null);
+
+                        $uFiltered = [];
+                        $uRemoved = false;
+                        foreach ($uExisting as $row) {
+                            $n = trim((string) data_get($row, 'note'));
+                            $a = trim((string) (data_get($row, 'at') ?? ''));
+                            $r = trim((string) (data_get($row, 'order_reference') ?? ''));
+
+                            $refOk = ($r === '' || $r === (string) ($rec->reference ?? ''));
+                            if (!$uRemoved && $n === $noteText && ($noteAt === '' || $a === $noteAt) && $refOk) {
+                                $uRemoved = true;
+                                continue;
+                            }
+
+                            if ($n !== '') {
+                                $uFiltered[] = [
+                                    'note' => $n,
+                                    'at' => $a !== '' ? $a : null,
+                                    'order_reference' => $r !== '' ? $r : null,
+                                ];
+                            }
+                        }
+
+                        $u->consultation_notes = json_encode($uFiltered);
+                        $u->save();
+                    }
+                } catch (\Throwable $e) {
+                    // ignore
+                }
 
                 Notification::make()
                     ->success()

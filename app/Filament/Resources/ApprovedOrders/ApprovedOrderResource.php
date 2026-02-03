@@ -22,9 +22,9 @@ use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
+use Filament\Schemas\Schema;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
-use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Notifications\Notification;
 use Filament\Tables;
@@ -588,6 +588,246 @@ class ApprovedOrderResource extends Resource
                                     ->html(),
                             ]),
 
+                        Section::make('Consultation notes')
+                        ->columnSpanFull()
+                        ->schema([
+                            TextEntry::make('meta.consultation_notes')
+                                ->hiddenLabel()
+                                ->state(function ($record) {
+                                    $push = function (&$out, $val, ?string $prefix = null) {
+                                        if ($val === null) {
+                                            return;
+                                        }
+
+                                        if (is_string($val)) {
+                                            $trim = trim($val);
+                                            if ($trim === '') {
+                                                return;
+                                            }
+
+                                            $decoded = json_decode($trim, true);
+                                            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                                                $val = $decoded;
+                                            } else {
+                                                $out[] = $prefix ? ($prefix . "\n" . $trim) : $trim;
+                                                return;
+                                            }
+                                        }
+
+                                        if (is_array($val)) {
+                                            foreach ($val as $row) {
+                                                if ($row === null) {
+                                                    continue;
+                                                }
+
+                                                if (is_scalar($row)) {
+                                                    $s = trim((string) $row);
+                                                    if ($s !== '') {
+                                                        $out[] = $prefix ? ($prefix . "\n" . $s) : $s;
+                                                    }
+                                                    continue;
+                                                }
+
+                                                if (is_array($row)) {
+                                                    $text = $row['note'] ?? $row['text'] ?? $row['value'] ?? $row['content'] ?? null;
+                                                    $dt   = $row['created_at'] ?? $row['createdAt'] ?? $row['at'] ?? $row['timestamp'] ?? null;
+
+                                                    $text = is_scalar($text) ? trim((string) $text) : '';
+                                                    if ($text === '') {
+                                                        continue;
+                                                    }
+
+                                                    $line = $text;
+                                                    if ($dt) {
+                                                        try {
+                                                            $line = Carbon::parse($dt)->format('d M Y, H:i') . "\n" . $text;
+                                                        } catch (Throwable $e) {
+                                                        }
+                                                    }
+
+                                                    $out[] = $prefix ? ($prefix . "\n" . $line) : $line;
+                                                    continue;
+                                                }
+                                            }
+                                            return;
+                                        }
+
+                                        if (is_scalar($val)) {
+                                            $s = trim((string) $val);
+                                            if ($s !== '') {
+                                                $out[] = $prefix ? ($prefix . "\n" . $s) : $s;
+                                            }
+                                        }
+                                    };
+
+                                    $notes = [];
+
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                    $push($notes, data_get($meta, 'consultation_notes'));
+                                    $push($notes, data_get($meta, 'consultationNotes'));
+                                    $push($notes, data_get($meta, 'consultant_notes'));
+                                    $push($notes, data_get($meta, 'consultantNotes'));
+                                    $push($notes, data_get($meta, 'consultation.notes'));
+                                    $push($notes, data_get($meta, 'consultationNotesText'));
+                                    $push($notes, $record->consultation_notes ?? null);
+                                    $push($notes, $record->consultant_notes ?? null);
+
+                                    $order = null;
+                                    try {
+                                        $order = Order::where('reference', $record->reference)->latest()->first();
+                                        if ($order) {
+                                            $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                                            $push($notes, $order->consultation_notes ?? null);
+                                            $push($notes, $order->consultant_notes ?? null);
+                                            $push($notes, data_get($om, 'consultation_notes'));
+                                            $push($notes, data_get($om, 'consultationNotes'));
+                                            $push($notes, data_get($om, 'consultant_notes'));
+                                            $push($notes, data_get($om, 'consultantNotes'));
+
+                                            $push($notes, data_get($om, 'formsQA.consultation.notes'));
+                                            $push($notes, data_get($om, 'formsQA.consultation.consultation_notes'));
+                                            $push($notes, data_get($om, 'formsQA.raf.consultation_notes'));
+                                            $push($notes, data_get($om, 'formsQA.raf.consultationNotes'));
+                                            $push($notes, data_get($om, 'consultation.notes'));
+                                            $push($notes, data_get($om, 'consultation.consultation_notes'));
+                                        }
+                                    } catch (Throwable $e) {
+                                    }
+
+                                    try {
+                                        $sid = data_get($meta, 'consultation_session_id')
+                                            ?: data_get($meta, 'consultationSessionId')
+                                            ?: ($order ? data_get(is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []), 'consultation_session_id') : null)
+                                            ?: ($order ? data_get(is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []), 'consultationSessionId') : null)
+                                            ?: ($order ? data_get(is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []), 'session_id') : null)
+                                            ?: ($order ? data_get(is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []), 'consultation.session_id') : null);
+
+                                        if ($sid) {
+                                            $session = ConsultationSession::query()->where('id', $sid)->first();
+                                            if ($session) {
+                                                $push($notes, $session->consultation_notes ?? null, 'Session');
+                                                $push($notes, $session->consultant_notes ?? null, 'Session');
+                                                $push($notes, $session->notes ?? null, 'Session');
+
+                                                $sm = is_array($session->meta ?? null) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
+                                                $push($notes, data_get($sm, 'consultation_notes'), 'Session');
+                                                $push($notes, data_get($sm, 'consultationNotes'), 'Session');
+                                                $push($notes, data_get($sm, 'consultant_notes'), 'Session');
+                                                $push($notes, data_get($sm, 'consultantNotes'), 'Session');
+                                                $push($notes, data_get($sm, 'notes'), 'Session');
+                                                $push($notes, data_get($sm, 'consultation.notes'), 'Session');
+                                            }
+
+                                            try {
+                                                if (\Illuminate\Support\Facades\Schema::hasTable('consultation_form_responses')) {
+                                                    $rows = DB::table('consultation_form_responses')
+                                                        ->where('consultation_session_id', $sid)
+                                                        ->orderByDesc('id')
+                                                        ->limit(25)
+                                                        ->get();
+
+                                                    foreach ($rows as $r) {
+                                                        $rm = json_decode($r->meta ?? '[]', true) ?: [];
+                                                        $candidate = $r->consultation_notes
+                                                            ?? $r->consultant_notes
+                                                            ?? ($rm['consultation_notes'] ?? null)
+                                                            ?? ($rm['consultant_notes'] ?? null)
+                                                            ?? ($rm['notes'] ?? null);
+
+                                                        if ($candidate) {
+                                                            $push($notes, $candidate, 'Response');
+                                                        }
+                                                    }
+                                                }
+                                            } catch (Throwable $e) {
+                                            }
+                                        }
+                                    } catch (Throwable $e) {
+                                    }
+
+                                    try {
+                                        $ref = (string) ($record->reference ?? '');
+                                        if ($ref !== '') {
+                                            $sessions = ConsultationSession::query()
+                                                ->where(function ($q) use ($ref) {
+                                                    $q->where('order_reference', $ref)->orWhere('reference', $ref);
+                                                })
+                                                ->orderByDesc('id')
+                                                ->limit(10)
+                                                ->get();
+
+                                            foreach ($sessions as $s) {
+                                                $sm = is_array($s->meta ?? null) ? $s->meta : (json_decode($s->meta ?? '[]', true) ?: []);
+                                                $push($notes, $s->consultation_notes ?? null, 'Session');
+                                                $push($notes, $s->consultant_notes ?? null, 'Session');
+                                                $push($notes, $s->notes ?? null, 'Session');
+                                                $push($notes, data_get($sm, 'consultation_notes'), 'Session');
+                                                $push($notes, data_get($sm, 'consultationNotes'), 'Session');
+                                                $push($notes, data_get($sm, 'consultant_notes'), 'Session');
+                                                $push($notes, data_get($sm, 'consultantNotes'), 'Session');
+                                                $push($notes, data_get($sm, 'notes'), 'Session');
+                                            }
+                                        }
+
+                                        if ($order && isset($order->id)) {
+                                            $sessions = ConsultationSession::query()
+                                                ->where('order_id', $order->id)
+                                                ->orderByDesc('id')
+                                                ->limit(10)
+                                                ->get();
+
+                                            foreach ($sessions as $s) {
+                                                $sm = is_array($s->meta ?? null) ? $s->meta : (json_decode($s->meta ?? '[]', true) ?: []);
+                                                $push($notes, $s->consultation_notes ?? null, 'Session');
+                                                $push($notes, $s->consultant_notes ?? null, 'Session');
+                                                $push($notes, $s->notes ?? null, 'Session');
+                                                $push($notes, data_get($sm, 'consultation_notes'), 'Session');
+                                                $push($notes, data_get($sm, 'consultationNotes'), 'Session');
+                                                $push($notes, data_get($sm, 'consultant_notes'), 'Session');
+                                                $push($notes, data_get($sm, 'consultantNotes'), 'Session');
+                                                $push($notes, data_get($sm, 'notes'), 'Session');
+                                            }
+                                        }
+                                    } catch (Throwable $e) {
+                                    }
+
+                                    // Patient level notes stored on users.consultation_notes
+                                    try {
+                                        $user = null;
+
+                                        if (method_exists($record, 'user')) {
+                                            $user = $record->user;
+                                        }
+
+                                        if (!$user && ($record->user_id ?? null)) {
+                                            $user = \App\Models\User::find($record->user_id);
+                                        }
+
+                                        if (!$user && $order && ($order->user_id ?? null)) {
+                                            $user = \App\Models\User::find($order->user_id);
+                                        }
+
+                                        if ($user) {
+                                            $push($notes, $user->consultation_notes ?? null);
+                                        }
+                                    } catch (Throwable $e) {
+                                    }
+
+                                    $notes = array_values(array_filter(array_map(fn ($n) => trim((string) $n), $notes)));
+                                    $notes = array_values(array_unique($notes));
+
+                                    return !empty($notes) ? implode("\n\n", $notes) : '—';
+                                })
+                                ->formatStateUsing(fn ($state) => nl2br(e((string) $state)))
+                                ->extraAttributes(function ($record) {
+                                    $ts = optional($record->updated_at)->timestamp ?? time();
+                                    return ['wire:key' => 'approved-consultation-notes-' . $record->getKey() . '-' . $ts];
+                                })
+                                ->html(),
+                        ]),
+
                         Section::make('Order history')
                             ->collapsible()
                             ->collapsed(false)
@@ -670,6 +910,74 @@ class ApprovedOrderResource extends Resource
                                             if ($more) $html .= "<br><span class=\"oh-more\">+{$more} more</span>";
                                             return $html ?: '—';
                                         };
+                                        
+                                        $weightFromOrder = function ($o) {
+                                            $m = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
+
+                                            $direct = [
+                                                data_get($m, 'weight'),
+                                                data_get($m, 'weight_kg'),
+                                                data_get($m, 'current_weight'),
+                                                data_get($m, 'body_weight'),
+                                                data_get($m, 'patient_weight'),
+                                                data_get($m, 'raf.weight'),
+                                                data_get($m, 'raf.weight_kg'),
+                                                data_get($m, 'riskAssessment.weight'),
+                                                data_get($m, 'riskAssessment.weight_kg'),
+                                            ];
+
+                                            foreach ($direct as $v) {
+                                                if ($v === null) continue;
+                                                $s = trim((string) $v);
+                                                if ($s !== '') return e($s);
+                                            }
+
+                                            $qa = data_get($m, 'formsQA.raf.qa');
+                                            if (is_array($qa)) {
+                                                foreach ($qa as $row) {
+                                                    $k = strtolower(trim((string) ($row['key'] ?? '')));
+                                                    $q = strtolower(trim((string) ($row['question'] ?? '')));
+                                                    $looksWeight =
+                                                        (str_contains($k, 'weight') || str_contains($q, 'weight')) &&
+                                                        !str_contains($k, 'target') &&
+                                                        !str_contains($k, 'goal') &&
+                                                        !str_contains($q, 'target') &&
+                                                        !str_contains($q, 'goal');
+
+                                                    if (! $looksWeight) continue;
+
+                                                    $a = $row['answer'] ?? $row['raw'] ?? null;
+                                                    if ($a === null) continue;
+
+                                                    $out = is_array($a)
+                                                        ? trim(implode(', ', array_filter(array_map('strval', $a))))
+                                                        : trim((string) $a);
+
+                                                    if ($out !== '') return e($out);
+                                                }
+                                            }
+
+                                            $ra = data_get($m, 'riskAssessment') ?? data_get($m, 'raf');
+                                            if (is_array($ra)) {
+                                                foreach ($ra as $it) {
+                                                    if (!is_array($it)) continue;
+                                                    $key = strtolower(trim((string) ($it['key'] ?? $it['label'] ?? $it['question'] ?? '')));
+                                                    if (!str_contains($key, 'weight')) continue;
+                                                    if (str_contains($key, 'target') || str_contains($key, 'goal')) continue;
+
+                                                    $val = $it['value'] ?? $it['answer'] ?? $it['raw'] ?? $it['response'] ?? null;
+                                                    if ($val === null) continue;
+
+                                                    $out = is_array($val)
+                                                        ? trim(implode(', ', array_filter(array_map('strval', $val))))
+                                                        : trim((string) $val);
+
+                                                    if ($out !== '') return e($out);
+                                                }
+                                            }
+
+                                            return '—';
+                                        };
 
                                         $rows = [];
                                         foreach ($orders as $o) {
@@ -677,6 +985,7 @@ class ApprovedOrderResource extends Resource
                                                 'ref'     => e($o->reference ?? ('#' . $o->id)),
                                                 'created' => $fmtDate($o->created_at) ?? '',
                                                 'items'   => $itemsSummary($o), // already escaped with <br>
+                                                'weight'  => $weightFromOrder($o),
                                                 'total'   => $money($o),
                                                 'url'     => "/admin/orders/completed-orders/{$o->id}/details",
                                             ];

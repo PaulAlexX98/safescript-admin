@@ -1004,6 +1004,74 @@ class PendingOrderResource extends Resource
                                             if ($more) $html .= "<br><span class=\"oh-more\">+{$more} more</span>";
                                             return $html ?: '—';
                                         };
+                                        
+                                        $weightFromOrder = function ($o) {
+                                            $m = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
+
+                                            $direct = [
+                                                data_get($m, 'weight'),
+                                                data_get($m, 'weight_kg'),
+                                                data_get($m, 'current_weight'),
+                                                data_get($m, 'body_weight'),
+                                                data_get($m, 'patient_weight'),
+                                                data_get($m, 'raf.weight'),
+                                                data_get($m, 'raf.weight_kg'),
+                                                data_get($m, 'riskAssessment.weight'),
+                                                data_get($m, 'riskAssessment.weight_kg'),
+                                            ];
+
+                                            foreach ($direct as $v) {
+                                                if ($v === null) continue;
+                                                $s = trim((string) $v);
+                                                if ($s !== '') return e($s);
+                                            }
+
+                                            $qa = data_get($m, 'formsQA.raf.qa');
+                                            if (is_array($qa)) {
+                                                foreach ($qa as $row) {
+                                                    $k = strtolower(trim((string) ($row['key'] ?? '')));
+                                                    $q = strtolower(trim((string) ($row['question'] ?? '')));
+                                                    $looksWeight =
+                                                        (str_contains($k, 'weight') || str_contains($q, 'weight')) &&
+                                                        !str_contains($k, 'target') &&
+                                                        !str_contains($k, 'goal') &&
+                                                        !str_contains($q, 'target') &&
+                                                        !str_contains($q, 'goal');
+
+                                                    if (! $looksWeight) continue;
+
+                                                    $a = $row['answer'] ?? $row['raw'] ?? null;
+                                                    if ($a === null) continue;
+
+                                                    $out = is_array($a)
+                                                        ? trim(implode(', ', array_filter(array_map('strval', $a))))
+                                                        : trim((string) $a);
+
+                                                    if ($out !== '') return e($out);
+                                                }
+                                            }
+
+                                            $ra = data_get($m, 'riskAssessment') ?? data_get($m, 'raf');
+                                            if (is_array($ra)) {
+                                                foreach ($ra as $it) {
+                                                    if (!is_array($it)) continue;
+                                                    $key = strtolower(trim((string) ($it['key'] ?? $it['label'] ?? $it['question'] ?? '')));
+                                                    if (!str_contains($key, 'weight')) continue;
+                                                    if (str_contains($key, 'target') || str_contains($key, 'goal')) continue;
+
+                                                    $val = $it['value'] ?? $it['answer'] ?? $it['raw'] ?? $it['response'] ?? null;
+                                                    if ($val === null) continue;
+
+                                                    $out = is_array($val)
+                                                        ? trim(implode(', ', array_filter(array_map('strval', $val))))
+                                                        : trim((string) $val);
+
+                                                    if ($out !== '') return e($out);
+                                                }
+                                            }
+
+                                            return '—';
+                                        };
 
                                         $rows = [];
                                         foreach ($orders as $o) {
@@ -1011,6 +1079,7 @@ class PendingOrderResource extends Resource
                                                 'ref'     => e($o->reference ?? ('#' . $o->id)),
                                                 'created' => $fmtDate($o->created_at) ?? '',
                                                 'items'   => $itemsSummary($o), // already escaped with <br>
+                                                'weight'  => $weightFromOrder($o),
                                                 'total'   => $money($o),
                                                 'url'     => "/admin/orders/completed-orders/{$o->id}/details",
                                             ];
