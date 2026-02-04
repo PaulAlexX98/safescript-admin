@@ -578,7 +578,66 @@ class ApprovedOrderResource extends Resource
                                     ->hiddenLabel()
                                     ->state(function ($record) {
                                         $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        return (string) (data_get($meta, 'admin_notes') ?: '—');
+                                        $val  = data_get($meta, 'admin_notes');
+
+                                        if ($val === null) {
+                                            return '—';
+                                        }
+
+                                        // If stored as JSON string, decode when possible
+                                        if (is_string($val)) {
+                                            $trim = trim($val);
+                                            if ($trim === '') {
+                                                return '—';
+                                            }
+                                            $decoded = json_decode($trim, true);
+                                            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                                                $val = $decoded;
+                                            } else {
+                                                return $trim;
+                                            }
+                                        }
+
+                                        // Flatten arrays into lines
+                                        if (is_array($val)) {
+                                            $lines = [];
+                                            $walk = function ($v) use (&$walk, &$lines) {
+                                                if ($v === null) {
+                                                    return;
+                                                }
+                                                if (is_string($v)) {
+                                                    $t = trim($v);
+                                                    if ($t !== '') {
+                                                        $lines[] = $t;
+                                                    }
+                                                    return;
+                                                }
+                                                if (is_bool($v)) {
+                                                    $lines[] = $v ? 'Yes' : 'No';
+                                                    return;
+                                                }
+                                                if (is_numeric($v)) {
+                                                    $lines[] = (string) $v;
+                                                    return;
+                                                }
+                                                if (is_array($v)) {
+                                                    foreach ($v as $x) {
+                                                        $walk($x);
+                                                    }
+                                                    return;
+                                                }
+                                                $enc = json_encode($v, JSON_UNESCAPED_SLASHES);
+                                                if (is_string($enc) && trim($enc) !== '') {
+                                                    $lines[] = $enc;
+                                                }
+                                            };
+
+                                            $walk($val);
+
+                                            return count($lines) ? implode("\n", $lines) : '—';
+                                        }
+
+                                        return is_scalar($val) ? trim((string) $val) : '—';
                                     })
                                     ->formatStateUsing(fn ($state) => nl2br(e($state)))
                                     ->extraAttributes(function ($record) {
