@@ -15,6 +15,7 @@ use Filament\Actions\Action;
 use App\Models\PendingOrder;
 use App\Models\Appointment;
 use App\Models\Order;
+use App\Models\User;
 use Illuminate\Support\Facades\Schema as DBSchema;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -46,6 +47,89 @@ use Filament\Notifications\Notification;
 class PendingOrderResource extends Resource
 {
     protected static ?string $model = PendingOrder::class;
+
+    protected static function normEmail($v): string
+    {
+        return strtolower(trim((string) ($v ?? '')));
+    }
+
+    protected static function normPhone($v): string
+    {
+        $digits = preg_replace('/\D+/', '', (string) ($v ?? ''));
+        return is_string($digits) ? $digits : '';
+    }
+
+    protected static function normName($v): string
+    {
+        return strtolower(trim((string) ($v ?? '')));
+    }
+
+    protected static function normPostcode($v): string
+    {
+        return strtoupper(preg_replace('/\s+/', '', trim((string) ($v ?? ''))));
+    }
+
+    /**
+     * Find up to 3 similar users for this pending order (email, phone, name+dob, postcode+lastname, address1+postcode).
+     */
+    protected static function findSimilarUsersForPending($record): \Illuminate\Support\Collection
+    {
+        $u = $record->user ?? null;
+        if (! $u) return collect();
+
+        $email = static::normEmail($u->email ?? null);
+        $phone = static::normPhone($u->phone ?? ($u->phone_number ?? null));
+        $first = static::normName($u->first_name ?? null);
+        $last  = static::normName($u->last_name ?? null);
+
+        $dob = null;
+        if (!empty($u->dob)) {
+            try {
+                $dob = \Carbon\Carbon::parse($u->dob)->toDateString();
+            } catch (\Throwable $e) {
+                $dob = null;
+            }
+        }
+
+        $postcode = static::normPostcode($u->postcode ?? ($u->post_code ?? ($u->postal_code ?? null)));
+        $addr1 = static::normName($u->address1 ?? ($u->address_1 ?? ($u->address_line1 ?? null)));
+
+        return \App\Models\User::query()
+            ->whereKeyNot($u->getKey())
+            ->where(function ($q) use ($email, $phone, $first, $last, $dob, $postcode, $addr1) {
+                if ($email !== '') {
+                    $q->orWhereRaw('LOWER(email) = ?', [$email]);
+                }
+
+                if ($phone !== '') {
+                    $q->orWhereRaw("REGEXP_REPLACE(phone, '[^0-9]', '') = ?", [$phone]);
+                }
+
+                if ($first !== '' && $last !== '' && $dob) {
+                    $q->orWhere(function ($q2) use ($first, $last, $dob) {
+                        $q2->whereRaw('LOWER(first_name) = ?', [$first])
+                            ->whereRaw('LOWER(last_name) = ?', [$last])
+                            ->whereDate('dob', $dob);
+                    });
+                }
+
+                if ($postcode !== '' && $last !== '') {
+                    $q->orWhere(function ($q3) use ($postcode, $last) {
+                        $q3->whereRaw('REPLACE(UPPER(postcode), " ", "") = ?', [$postcode])
+                            ->whereRaw('LOWER(last_name) = ?', [$last]);
+                    });
+                }
+
+                if ($addr1 !== '' && $postcode !== '') {
+                    $q->orWhere(function ($q4) use ($addr1, $postcode) {
+                        $q4->whereRaw('LOWER(address1) = ?', [$addr1])
+                            ->whereRaw('REPLACE(UPPER(postcode), " ", "") = ?', [$postcode]);
+                    });
+                }
+            })
+            ->limit(3)
+            ->get();
+    }
 
     protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
@@ -535,7 +619,43 @@ class PendingOrderResource extends Resource
                     })
                     ->modalDescription(function ($record) {
                         $ref = e(optional($record)->reference ?? '—');
-                        return new \Illuminate\Support\HtmlString('<span class="text-xs text-gray-400">Order Ref: ' . $ref . '</span>');
+
+                        $html = '<div class="space-y-1">'
+                            . '<div><span class="text-xs text-gray-400">Order Ref: ' . $ref . '</span></div>';
+
+                        try {
+                            $matches = static::findSimilarUsersForPending($record);
+                            if ($matches->isNotEmpty()) {
+                                $labels = [];
+                                foreach ($matches as $m) {
+                                    $label = trim(trim((string) ($m->first_name ?? '')) . ' ' . trim((string) ($m->last_name ?? '')));
+                                    if ($label === '') {
+                                        $label = (string) ($m->email ?? ('User #' . $m->getKey()));
+                                    }
+                                    if ($label !== '') {
+                                        $labels[] = $label;
+                                    }
+                                }
+
+                                $labels = array_values(array_unique($labels));
+                                $shown = array_slice($labels, 0, 3);
+                                $text = implode(', ', array_map('e', $shown));
+
+                                $suffix = '';
+                                $remaining = max(0, count($labels) - count($shown));
+                                if ($remaining > 0) {
+                                    $suffix = ' and ' . $remaining . ' more';
+                                }
+
+                                $html .= '<div><span class="text-xs text-rose-400">This patient has similar attributes as ' . $text . $suffix . '.</span></div>';
+                            }
+                        } catch (\Throwable $e) {
+                            // ignore
+                        }
+
+                        $html .= '</div>';
+
+                        return new \Illuminate\Support\HtmlString($html);
                     })
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('Close')

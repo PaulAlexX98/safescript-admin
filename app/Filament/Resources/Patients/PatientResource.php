@@ -10,6 +10,7 @@ use App\Filament\Resources\Patients\Schemas\PatientForm;
 use App\Filament\Resources\Patients\Schemas\PatientInfolist;
 use App\Filament\Resources\Patients\Tables\PatientsTable;
 use App\Models\Patient;
+use Illuminate\Support\Collection;
 use BackedEnum;
 use Illuminate\Database\Eloquent\Model;
 use Filament\Resources\Resource;
@@ -36,9 +37,145 @@ class PatientResource extends Resource
         return PatientForm::configure($filamentSchema);
     }
 
+    protected static function normaliseEmail(?string $email): string
+    {
+        return strtolower(trim((string) $email));
+    }
+
+    protected static function normalisePhone(?string $phone): string
+    {
+        return preg_replace('/\D+/', '', (string) ($phone ?? '')) ?: '';
+    }
+
+    /**
+     * Returns up to 10 possible duplicate Patient records based on matching email, phone,
+     * or first+last+DOB.
+     */
+    public static function findPossibleDuplicates(Patient $record): Collection
+    {
+        $email = static::normaliseEmail($record->email ?? optional($record->user)->email);
+        $phone = static::normalisePhone($record->phone ?? optional($record->user)->phone ?? optional($record->user)->phone_number);
+
+        $first = strtolower(trim((string) ($record->first_name ?? optional($record->user)->first_name ?? optional($record->user)->firstName ?? '')));
+        $last  = strtolower(trim((string) ($record->last_name ?? optional($record->user)->last_name ?? optional($record->user)->lastName ?? '')));
+
+        $rawDob = $record->dob ?? optional($record->user)->dob ?? null;
+        $dob = null;
+        if ($rawDob) {
+            try {
+                $dob = ($rawDob instanceof \Carbon\Carbon)
+                    ? $rawDob->toDateString()
+                    : \Carbon\Carbon::parse($rawDob)->toDateString();
+            } catch (\Throwable $e) {
+                $dob = null;
+            }
+        }
+
+        // --- Extract postcode and address1 from user (with fallbacks)
+        $postcodeRaw = optional($record->user)->postcode
+            ?? optional($record->user)->post_code
+            ?? optional($record->user)->postal_code
+            ?? optional($record->user)->postalcode
+            ?? optional($record->user)->zip
+            ?? optional($record->user)->zip_code
+            ?? null;
+
+        $postcode = strtoupper(trim((string) $postcodeRaw));
+
+        $addr1Raw = optional($record->user)->address1
+            ?? optional($record->user)->address_1
+            ?? optional($record->user)->address_line1
+            ?? optional($record->user)->address_line_1
+            ?? optional($record->user)->addressLine1
+            ?? null;
+
+        $addr1 = strtolower(trim((string) $addr1Raw));
+
+        return Patient::query()
+            ->whereKeyNot($record->getKey())
+            ->where(function ($q) use ($email, $phone, $first, $last, $dob, $postcode, $addr1) {
+                if ($email !== '') {
+                    $q->orWhereRaw('LOWER(email) = ?', [$email]);
+                }
+
+                if ($phone !== '') {
+                    $q->orWhereRaw("REGEXP_REPLACE(phone, '[^0-9]', '') = ?", [$phone]);
+                }
+
+                if ($first !== '' && $last !== '' && $dob) {
+                    $q->orWhere(function ($q2) use ($first, $last, $dob) {
+                        $q2->whereRaw('LOWER(first_name) = ?', [$first])
+                            ->whereRaw('LOWER(last_name) = ?', [$last])
+                            ->whereDate('dob', $dob);
+                    });
+                }
+
+                // Address matching (user fields)
+                if ($postcode !== '' && $last !== '') {
+                    $q->orWhereHas('user', function ($uq) use ($postcode, $last) {
+                        $uq->whereRaw('UPPER(postcode) = ?', [$postcode])
+                            ->whereRaw('LOWER(last_name) = ?', [$last]);
+                    });
+                }
+
+                if ($addr1 !== '' && $postcode !== '') {
+                    $q->orWhereHas('user', function ($uq) use ($addr1, $postcode) {
+                        $uq->whereRaw('LOWER(address1) = ?', [$addr1])
+                            ->whereRaw('UPPER(postcode) = ?', [$postcode]);
+                    });
+                }
+            })
+            ->limit(10)
+            ->get();
+    }
+
     public static function infolist(FilamentSchema $filamentSchema): FilamentSchema
     {
         return $filamentSchema->components([
+            Section::make('Possible duplicates')
+                ->schema([
+                    TextEntry::make('duplicates_count')
+                        ->label('Matches')
+                        ->getStateUsing(function ($record) {
+                            if (! $record) return 0;
+                            return static::findPossibleDuplicates($record)->count();
+                        })
+                        ->badge()
+                        ->color(fn ($state) => ((int) $state) > 0 ? 'danger' : 'success')
+                        ->formatStateUsing(fn ($state) => ((int) $state) > 0 ? ((int) $state) . ' possible match' . (((int) $state) === 1 ? '' : 'es') : 'None'),
+
+                    TextEntry::make('duplicates_list')
+                        ->label('Matched records')
+                        ->getStateUsing(function ($record) {
+                            if (! $record) return '—';
+                            $matches = static::findPossibleDuplicates($record);
+                            if ($matches->isEmpty()) return '—';
+
+                            return $matches->map(function ($p) {
+                                $name = trim(trim((string) ($p->first_name ?? '')) . ' ' . trim((string) ($p->last_name ?? '')));
+                                $name = $name !== '' ? $name : ('Patient #' . $p->getKey());
+                                $email = is_string($p->email ?? null) && trim($p->email) !== '' ? trim($p->email) : null;
+                                $phone = is_string($p->phone ?? null) && trim($p->phone) !== '' ? trim($p->phone) : null;
+
+                                $bits = array_values(array_filter([
+                                    'ID ' . ($p->internal_id ?: $p->getKey()),
+                                    $name,
+                                    $email,
+                                    $phone,
+                                ]));
+
+                                return implode(' • ', $bits);
+                            })->implode("\n");
+                        })
+                        ->formatStateUsing(fn ($state) => $state ? nl2br(e((string) $state)) : '—')
+                        ->html()
+                        ->columnSpanFull(),
+                ])
+                ->visible(function ($record) {
+                    if (! $record) return false;
+                    return static::findPossibleDuplicates($record)->count() > 0;
+                })
+                ->columns(2),
             Section::make('Patient Details')->schema([
                 TextEntry::make('internal_id')->label('Internal ID'),
                 TextEntry::make('first_name')->label('First Name'),

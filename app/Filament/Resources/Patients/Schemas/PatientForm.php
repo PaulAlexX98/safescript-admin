@@ -7,12 +7,40 @@ use Filament\Schemas\Components\Section;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\FileUpload;
+use Illuminate\Support\Str;
 
 class PatientForm
 {
     public static function configure(Schema $schema): Schema
     {
         return $schema->components([
+            Section::make('Attachments')->schema([
+            // Requires a nullable JSON column `attachments` on patients table
+            FileUpload::make('attachments')
+                ->label('Upload files')
+                ->multiple()
+                ->appendFiles()
+                ->reorderable()
+                ->downloadable()
+                ->openable()
+                ->acceptedFileTypes([
+                    'image/jpeg',
+                    'image/png',
+                    'image/webp',
+                    'application/pdf',
+                ])
+                ->maxSize(10240) // 10 MB each
+                ->disk('public')
+                ->directory('patient-attachments')
+                ->getUploadedFileNameForStorageUsing(function ($file) {
+                    $name = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME);
+                    $ext = $file->getClientOriginalExtension();
+                    return Str::slug($name) . '.' . strtolower($ext);
+                })
+                ->helperText('Upload photos or documents for this patient. PDF, JPG, PNG, WEBP up to 10MB each.')
+                ->columnSpanFull(),
+        ])->columns(1),
             Section::make('Patient')
                 ->columnSpanFull()
                 ->columns(2)

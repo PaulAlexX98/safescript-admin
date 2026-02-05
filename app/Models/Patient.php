@@ -10,11 +10,12 @@ class Patient extends Model
 {
     protected $fillable = [
     'user_id','internal_id','first_name','last_name','email','phone',
-    'dob','gender','street','city','postcode','country','is_active',
+    'dob','gender','street','city','postcode','country','is_active', 'attachments',
     ];
 
     protected $casts = [
         'dob' => 'date',
+        'attachments' => 'array',
     ];
 
     /**

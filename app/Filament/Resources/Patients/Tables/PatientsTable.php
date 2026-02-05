@@ -136,6 +136,32 @@ class PatientsTable
                 TextColumn::make('gender')->label('Gender')->toggleable(),
                 TextColumn::make('email')->label('Email')->searchable()->toggleable(),
                 TextColumn::make('phone')->label('Phone')->searchable()->toggleable(),
+                TextColumn::make('duplicates')
+                    ->label('Duplicates')
+                    ->getStateUsing(function ($record) {
+                        try {
+                            return PatientResource::findPossibleDuplicates($record)->count();
+                        } catch (\Throwable $e) {
+                            return 0;
+                        }
+                    })
+                    ->badge()
+                    ->color(fn ($state) => ((int) $state) > 0 ? 'danger' : 'success')
+                    ->formatStateUsing(fn ($state) => ((int) $state) > 0 ? ((int) $state) : 'None')
+                    ->tooltip(function ($record) {
+                        try {
+                            $matches = PatientResource::findPossibleDuplicates($record);
+                            if ($matches->isEmpty()) return 'No duplicates found';
+                            return $matches->map(function ($p) {
+                                $name = trim(trim((string) ($p->first_name ?? '')) . ' ' . trim((string) ($p->last_name ?? '')));
+                                $name = $name !== '' ? $name : ('Patient #' . $p->getKey());
+                                return 'ID ' . ($p->id ?? $p->getKey()) . ' ' . $name;
+                            })->implode("\n");
+                        } catch (\Throwable $e) {
+                            return 'Unable to check duplicates';
+                        }
+                    })
+                    ->toggleable(),
                 TextColumn::make('dob')
                     ->label('DOB')
                     ->getStateUsing(function ($record) {
