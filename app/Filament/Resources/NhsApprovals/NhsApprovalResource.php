@@ -315,7 +315,7 @@ class NhsApprovalResource extends Resource
         $body = implode("\n\n", [
             "Hello {$name},",
             "Thank you for signing up with Pharmacy Express for your NHS prescription service.",
-            "Your application has been reviewed and approved. You can now use your account to request eligible NHS prescriptions through Pharmacy Express.",
+            "You have now signed up to us, order your NHS prescription as normal, it’ll come to us for dispensing and delivery.",
             "If you need to update your details or have any questions, reply to this email and our team will help.",
             "Kind regards,\nPharmacy Express",
         ]);
