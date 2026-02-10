@@ -344,7 +344,7 @@
     $oldData = $loadAnswers($sessionLike ?? $session, $form ?? null, $stepSlug);
 
     // Consultation notes help text (do not prefill textarea)
-    $consultationNotesHelp = "Use a structured approach for example SOAP or encounter based\n\nS Subjective presenting complaint history medicines allergies\nO Objective observations exam findings investigations\nA Assessment working diagnosis differentials risk stratification\nP Plan treatment prescriptions referrals safety netting follow up";
+    $consultationNotesHelp = "Use a structured approach for example SOAP or encounter based\n\nS Subjective presenting complaint history medicines allergies\nO Objective observations exam findings investigations\nA Assessment working diagnosis differentials risk stratification\nP Plan treatment prescriptions referrals safety netting follow up\n\nImportant safety information\n\nPancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.\n\nSeek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.\n\nDo not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.\n\nReport suspected side effects through the Yellow Card scheme.";
 
     // Prefer saved notes only (leave blank if none)
     $consultationNotesValue = old('consultation_notes', $oldData['consultation_notes'] ?? '');

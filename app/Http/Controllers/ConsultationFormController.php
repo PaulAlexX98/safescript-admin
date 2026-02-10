@@ -2053,7 +2053,12 @@ class ConsultationFormController extends Controller
                 . "Your record of supply\n"
                 . "Your invoice\n"
                 . "Notification of treatment to your GP\n\n"
-                . "You will also find a letter addressed to your GP. This letter is a notification of your treatment and it is very important that it is forwarded to your GP. Please ensure you send this on to them at your earliest convenience.\n\n";
+                . "You will also find a letter addressed to your GP. This letter is a notification of your treatment and it is very important that it is forwarded to your GP. Please ensure you send this on to them at your earliest convenience.\n\n"
+                . "Important safety information\n"
+                . "Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.\n\n"
+                . "Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.\n\n"
+                . "Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.\n\n"
+                . "Report suspected side effects through the Yellow Card scheme.\n\n";
         } else {
             $body .= "Your record of supply\n"
                 . "Your invoice\n\n";
