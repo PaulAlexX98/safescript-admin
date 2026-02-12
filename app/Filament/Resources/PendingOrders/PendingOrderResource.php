@@ -145,6 +145,33 @@ class PendingOrderResource extends Resource
     {
         $q = parent::getEloquentQuery();
 
+        // Only show records that are still pending.
+        // Be defensive because deployments may have slightly different column names.
+        try {
+            $table = $q->getModel()->getTable();
+
+            if (DBSchema::hasColumn($table, 'status')) {
+                $q->whereIn('status', ['pending', 'awaiting', 'waiting']);
+            } elseif (DBSchema::hasColumn($table, 'pending_status')) {
+                $q->whereIn('pending_status', ['pending', 'awaiting', 'waiting']);
+            } elseif (DBSchema::hasColumn($table, 'state')) {
+                $q->whereIn('state', ['pending', 'awaiting', 'waiting']);
+            }
+
+            // If the table stores decision timestamps, treat “pending” as not yet decided.
+            if (DBSchema::hasColumn($table, 'approved_at')) {
+                $q->whereNull('approved_at');
+            }
+            if (DBSchema::hasColumn($table, 'rejected_at')) {
+                $q->whereNull('rejected_at');
+            }
+            if (DBSchema::hasColumn($table, 'decision_at')) {
+                $q->whereNull('decision_at');
+            }
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
         // Hide NHS Pharmacy First bookings from Pending Approval.
         // NHS refs are PNHSxxxxxx and we also mark meta.type/service_slug.
         return $q->where(function (Builder $w) {
