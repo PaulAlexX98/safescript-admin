@@ -27,8 +27,10 @@ class NhsApprovalResource extends Resource
     protected static ?string $model = NhsApplication::class;
 
     protected static BackedEnum|string|null $navigationIcon = 'heroicon-o-shield-check';
-    protected static ?string $navigationLabel = 'NHS approval';
+    protected static ?string $navigationLabel = 'Prescription Approvals';
     protected static ?int $navigationSort = 4;
+    protected static ?string $pluralLabel = 'Prescription Approvals';
+    protected static ?string $modelLabel = 'Prescription Approval';
 
     public static function getNavigationBadge(): ?string
     {
@@ -99,7 +101,7 @@ class NhsApprovalResource extends Resource
                     ->label('View')
                     ->button()
                     ->color('primary')
-                    ->modalHeading(fn (NhsApplication $r) => trim(($r->first_name ?? '') . ' ' . ($r->last_name ?? '')) ?: 'NHS Application')
+                    ->modalHeading(fn (NhsApplication $r) => trim(($r->first_name ?? '') . ' ' . ($r->last_name ?? '')) ?: 'Prescription Approvals')
                     ->modalDescription(fn (NhsApplication $r) => new HtmlString(
                         '<span class="text-xs text-gray-400">Received ' . e(optional($r->created_at)->format('d-m-Y H:i')) . '</span>'
                     ))

@@ -7,6 +7,10 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
+        if (Schema::hasTable('wm_alerts')) {
+            return;
+        }
+
         Schema::create('wm_alerts', function (Blueprint $table) {
             $table->id();
             $table->string('key')->unique();

@@ -488,10 +488,10 @@ class AppointmentResource extends Resource
                             }
                         }
 
-                        // 4) Last resort: show appointment email (or nothing if truly unknown)
-                        $email = is_string($record->email ?? null) ? trim($record->email) : '';
-                        return $email !== '' ? $email : '';
+                        // 4) Last resort: show nothing (do not show email as patient)
+                        return '';
                     })
+                    ->formatStateUsing(fn ($state) => (is_string($state) && trim($state) !== '') ? $state : '—')
                     ->searchable(true, function (Builder $query, string $search): Builder {
                         $like = '%' . $search . '%';
 

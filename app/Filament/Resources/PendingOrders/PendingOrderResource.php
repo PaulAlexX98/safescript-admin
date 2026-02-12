@@ -141,6 +141,31 @@ class PendingOrderResource extends Resource
 
     protected static ?string $recordTitleAttribute = 'title';
 
+    public static function getEloquentQuery(): Builder
+    {
+        $q = parent::getEloquentQuery();
+
+        // Hide NHS Pharmacy First bookings from Pending Approval.
+        // NHS refs are PNHSxxxxxx and we also mark meta.type/service_slug.
+        return $q->where(function (Builder $w) {
+            $w->where(function (Builder $x) {
+                // 1) Exclude PNHS references
+                $x->whereNull('reference')
+                  ->orWhere('reference', 'not like', 'PNHS%');
+            })
+            // 2) Exclude meta.type == nhs
+            ->whereRaw(
+                "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.type'))), '') <> ?",
+                ['nhs']
+            )
+            // 3) Exclude pharmacy-first service slug
+            ->whereRaw(
+                "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service_slug'))), '') <> ?",
+                ['pharmacy-first']
+            );
+        });
+    }
+
     public static function form(FilamentSchema $filamentSchema): FilamentSchema
     {
         return PendingOrderForm::configure($filamentSchema);
@@ -563,7 +588,6 @@ class PendingOrderResource extends Resource
                     ->label('Type')
                     ->options([
                         'new' => 'New',
-                        'nhs' => 'NHS',
                         'reorder' => 'Reorder',
                     ])
                     ->query(function (Builder $query, array $data): Builder {
@@ -578,8 +602,6 @@ class PendingOrderResource extends Resource
                             // reference patterns
                             if ($val === 'reorder') {
                                 $q->orWhere('reference', 'REGEXP', '^PTC[A-Z]*R[0-9]{6}$');
-                            } elseif ($val === 'nhs') {
-                                $q->orWhere('reference', 'REGEXP', '^PTC[A-Z]*H[0-9]{6}$');
                             } elseif ($val === 'new') {
                                 $q->orWhere('reference', 'REGEXP', '^PTC[A-Z]*N[0-9]{6}$');
                             }
@@ -592,10 +614,6 @@ class PendingOrderResource extends Resource
                                 ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE '%repeat%'")
                                 ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE '%reorder%'")
                                 ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE '%repeat%'");
-                            } elseif ($val === 'nhs') {
-                                $q->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service'))) LIKE '%nhs%'")
-                                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.serviceName'))) LIKE '%nhs%'")
-                                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.title'))) LIKE '%nhs%'");
                             }
                         });
                     }),
@@ -2671,15 +2689,7 @@ class PendingOrderResource extends Resource
         ];
     }
 
-    public static function getEloquentQuery(): Builder
-    {
-        return parent::getEloquentQuery()
-            ->with(['user'])
-            ->where(function (Builder $q) {
-                $q->whereRaw("LOWER(status) IN ('pending','awaiting_approval','awaiting confirmation','awaiting_confirmation')")
-                  ->orWhereRaw("LOWER(booking_status) IN ('pending','awaiting_approval','awaiting confirmation','awaiting_confirmation')");
-            });
-    }
+   
 
     public static function getNavigationBadge(): ?string
     {
