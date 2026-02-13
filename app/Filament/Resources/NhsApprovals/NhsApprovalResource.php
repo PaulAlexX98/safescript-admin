@@ -6,6 +6,7 @@ use App\Filament\Resources\NhsApprovals\Pages\ListNhsApprovals;
 use App\Filament\Resources\NhsApprovals\Pages\ViewNhsApproval;
 use App\Models\NhsApplication;
 use BackedEnum;
+use UnitEnum;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Textarea;
 use Filament\Infolists\Components\TextEntry;
@@ -27,10 +28,9 @@ class NhsApprovalResource extends Resource
     protected static ?string $model = NhsApplication::class;
 
     protected static BackedEnum|string|null $navigationIcon = 'heroicon-o-shield-check';
+    protected static string | UnitEnum | null $navigationGroup = 'NHS Services';
     protected static ?string $navigationLabel = 'Prescription Approvals';
     protected static ?int $navigationSort = 4;
-    protected static ?string $pluralLabel = 'Prescription Approvals';
-    protected static ?string $modelLabel = 'Prescription Approval';
 
     public static function getNavigationBadge(): ?string
     {

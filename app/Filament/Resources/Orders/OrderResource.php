@@ -564,9 +564,11 @@ class OrderResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        // Show all orders by default; use filters for Completed / Rejected / Paid / Unpaid views
+        // Exclude NHS orders from this resource (NHS has its own panel/resource)
         return parent::getEloquentQuery()
             ->with(['user'])
+            ->whereRaw("reference NOT REGEXP '^PTC[A-Z]*H[0-9]{6}$'")
+            ->whereRaw("(JSON_VALID(meta) = 0 OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.type'))) <> 'nhs')")
             ->orderByDesc('id');
     }
 

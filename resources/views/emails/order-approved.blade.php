@@ -3,6 +3,6 @@
 
 Reference  {{ $order->reference ?? '' }}
 
-We will contact you if we need anything else.
+Thank You
 
 @endcomponent

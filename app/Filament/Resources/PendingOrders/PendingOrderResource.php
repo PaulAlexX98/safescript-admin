@@ -20,6 +20,7 @@ use Illuminate\Support\Facades\Schema as DBSchema;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use BackedEnum;
+use UnitEnum;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema as FilamentSchema;
 use Filament\Support\Icons\Heroicon;
@@ -131,13 +132,14 @@ class PendingOrderResource extends Resource
             ->get();
     }
 
-    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedRectangleStack;
+protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedRectangleStack;
+protected static string|UnitEnum|null $navigationGroup = 'Private Services';
 
     protected static ?string $navigationLabel = 'Pending Approval';
     protected static ?string $pluralLabel = 'Pending Approval';
     protected static ?string $modelLabel = 'Pending Approval';
 
-    protected static ?int $navigationSort = 2;
+protected static ?int $navigationSort = 1;
 
     protected static ?string $recordTitleAttribute = 'title';
 
@@ -2270,7 +2272,7 @@ class PendingOrderResource extends Resource
                                             ?? optional($record->user)->email;
 
                                         if ($to && $orderForEmail) {
-                                            Mail::to($to)->queue(new OrderApprovedMail($orderForEmail));
+                                            Mail::to($to)->send(new OrderApprovedMail($orderForEmail));
 
                                             // Flag on both PendingOrder and Order to prevent duplicate sends
                                             data_set($metaForEmail, 'emailed.order_approved_at', now()->toIso8601String());

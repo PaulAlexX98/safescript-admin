@@ -38,7 +38,7 @@ class AppointmentResource extends Resource
     protected static string | \BackedEnum | null $navigationIcon = 'heroicon-o-calendar';
     protected static ?string $navigationLabel = 'Appointments';
     protected static string | \UnitEnum | null $navigationGroup = 'Notifications';
-    protected static ?int    $navigationSort  = 1;
+    protected static ?int    $navigationSort  = 5;
 
     // Title used on View/Edit pages
     protected static ?string $recordTitleAttribute = 'display_title';
@@ -1199,6 +1199,38 @@ class AppointmentResource extends Resource
         $isPendingOrd  = ($orderStatus === 'pending') || ($payStatus === 'pending');
 
         if ($isPendingAppt || $isPendingOrd) {
+            // If this is an NHS flow, send them to NHS Pending instead of Private Pending.
+            $orderMeta = null;
+            try {
+                $orderMeta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+            } catch (\Throwable $e) {
+                $orderMeta = [];
+            }
+
+            $typeRaw = strtolower(trim((string) (
+                data_get($orderMeta, 'type')
+                ?? data_get($orderMeta, 'mode')
+                ?? data_get($orderMeta, 'flow')
+                ?? data_get($orderMeta, 'service.type')
+                ?? ($order->type ?? '')
+            )));
+
+            $pathRaw = strtolower(trim((string) (
+                data_get($orderMeta, 'path')
+                ?? data_get($orderMeta, 'source_url')
+                ?? data_get($orderMeta, 'referer')
+                ?? data_get($orderMeta, 'source')
+                ?? ''
+            )));
+
+            $isNhs = in_array($typeRaw, ['nhs', 'pharmacy-first', 'pharmacy first', 'nhs-first'], true)
+                || str_contains($pathRaw, '/nhs-services')
+                || str_contains($pathRaw, '/nhs');
+
+            if ($isNhs) {
+                return url('/admin/nhs-pending/nhs-pendings');
+            }
+
             return url('/admin/pending-orders');
         }
 

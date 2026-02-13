@@ -32,7 +32,7 @@ class NhsPatientsResource extends Resource
 
     protected static UnitEnum|string|null $navigationGroup = 'People';
     protected static ?string $navigationLabel = 'NHS Patients';
-    protected static ?int $navigationSort = 2;
+    protected static ?int $navigationSort = 7;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
 

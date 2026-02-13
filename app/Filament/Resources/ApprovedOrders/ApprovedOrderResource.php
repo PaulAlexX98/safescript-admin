@@ -19,6 +19,7 @@ use App\Filament\Resources\ApprovedOrders\Schemas\ApprovedOrderForm;
 use App\Models\ApprovedOrder;
 use App\Models\Order;
 use BackedEnum;
+use UnitEnum;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
@@ -42,11 +43,13 @@ class ApprovedOrderResource extends Resource
 
     protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
+    protected static string | UnitEnum | null $navigationGroup = 'Private Services';
+
     protected static ?string $navigationLabel = 'Approved Orders';
     protected static ?string $pluralLabel = 'Approved Orders';
     protected static ?string $modelLabel = 'Approved Orders';
 
-    protected static ?int $navigationSort = 3;
+    protected static ?int $navigationSort = 2;
 
     // use order reference as record title if you have it
     protected static ?string $recordTitleAttribute = 'reference';

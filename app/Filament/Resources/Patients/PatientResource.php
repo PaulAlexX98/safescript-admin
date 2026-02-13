@@ -30,7 +30,7 @@ class PatientResource extends Resource
     protected static ?string $modelLabel = 'Patient';
     protected static ?string $recordTitleAttribute = 'name';
     protected static string | \UnitEnum | null $navigationGroup = 'People';
-    protected static ?int $navigationSort = 1;
+    protected static ?int $navigationSort = 8;
 
     public static function form(FilamentSchema $filamentSchema): FilamentSchema
     {

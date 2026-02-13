@@ -19,6 +19,7 @@ use App\Filament\Resources\NhsPending\Schemas\NhsPendingForm;
 use App\Models\NhsPending;
 use App\Models\Order;
 use BackedEnum;
+use UnitEnum;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
@@ -41,6 +42,7 @@ class NhsPendingResource extends Resource
     protected static ?string $model = NhsPending::class;
 
     protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string | UnitEnum | null $navigationGroup = 'NHS Services';
 
     protected static ?string $navigationLabel = 'NHS Pending';
     protected static ?string $pluralLabel = 'NHS Pending';
