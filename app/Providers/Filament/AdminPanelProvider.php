@@ -5,7 +5,7 @@ namespace App\Providers\Filament;
 use Illuminate\Support\HtmlString;
 use App\Filament\Resources\Scheduling\Schedules\ScheduleResource;
 use App\Filament\Pages\ConsultationRunner;
-use Filament\Pages\Dashboard;
+//use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Navigation\NavigationGroup;
@@ -92,7 +92,6 @@ class AdminPanelProvider extends PanelProvider
             ->profile(EditProfile::class)
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->pages([
-                Dashboard::class,    
                 ConsultationRunner::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
