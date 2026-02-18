@@ -8,7 +8,7 @@ use App\Filament\Widgets\KpiStats;
 use App\Filament\Widgets\RevenueBookingsChart;
 use App\Filament\Widgets\ServicesPerformance;
 use App\Filament\Widgets\DailyRevenueTable;
-use App\Filament\Resources\Appointments\AppointmentResource as AppointmentsAppointmentResource;
+use App\Filament\Widgets\WeightManagementAlertsWidget;
 
 class Dashboard extends Base
 {
@@ -35,11 +35,14 @@ class Dashboard extends Base
             $this->redirect('/admin/pending-orders');
             return;
         }
+
+        // Note: Filament\Pages\Dashboard does not define mount(), so do not call parent::mount().
     }
 
     public function getWidgets(): array
     {
         return [
+            WeightManagementAlertsWidget::class,
             KpiStats::class,               // KPI tiles at top
                // left column     
             BookingStatusTable::class,     // full width below the two-column row
