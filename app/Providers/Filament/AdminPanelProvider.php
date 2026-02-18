@@ -5,7 +5,7 @@ namespace App\Providers\Filament;
 use Illuminate\Support\HtmlString;
 use App\Filament\Resources\Scheduling\Schedules\ScheduleResource;
 use App\Filament\Pages\ConsultationRunner;
-//use Filament\Pages\Dashboard;
+use App\Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Navigation\NavigationGroup;
@@ -13,13 +13,12 @@ use Filament\Navigation\NavigationItem;
 use App\Filament\Resources\Appointments\AppointmentResource as AppointmentsAppointmentResource;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use App\Filament\Resources\Orders\PendingOrderResource;
 use Illuminate\Support\Facades\Route;
-use Filament\Pages;
 use App\Filament\Widgets\AppointmentsCalendarWidget;
 use Guava\Calendar\CalendarPlugin;
 use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
 use App\Filament\Pages\Auth\EditProfile;
+use Filament\Enums\ThemeMode;
 
 
 
@@ -57,10 +56,10 @@ class AdminPanelProvider extends PanelProvider
         }
 
         return $panel
-            ->default()
+            
             ->id('admin')
             ->path('admin')
-            ->homeUrl(fn () => url('/admin'))
+            ->homeUrl(fn () => AppointmentsAppointmentResource::getUrl('index'))
             ->middleware([\Illuminate\Cookie\Middleware\EncryptCookies::class, \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class, \Illuminate\Session\Middleware\StartSession::class, \Illuminate\View\Middleware\ShareErrorsFromSession::class, \Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class, \Illuminate\Routing\Middleware\SubstituteBindings::class,])
             ->topbar(false)
             ->login()
@@ -92,6 +91,7 @@ class AdminPanelProvider extends PanelProvider
             ->profile(EditProfile::class)
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->pages([
+                Dashboard::class,
                 ConsultationRunner::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
@@ -131,7 +131,7 @@ HTML;
                         NavigationItem::make('Pending NHS')
                             ->icon('heroicon-o-clipboard-document-check')
                             ->badge($pendingNhs ?: null)
-                            ->url(fn () => PendingOrderResource::getUrl('index'))
+                            ->url(fn () => AppointmentsAppointmentResource::getUrl('index'))
                             ->visible($hasOrders),
 
                         NavigationItem::make('Appointments')
@@ -142,7 +142,7 @@ HTML;
                         NavigationItem::make('Pending Approval')
                             ->icon('heroicon-o-clock')
                             ->badge($pendingApproval ?: null)
-                            ->url(fn () => PendingOrderResource::getUrl('index'))
+                            ->url(fn () => AppointmentsAppointmentResource::getUrl('index'))
                             ->visible($hasOrders),
 
                         NavigationItem::make('Upcoming Appointments')
@@ -173,6 +173,7 @@ HTML;
             ])*/
             
             ->darkMode(true)
+            ->defaultThemeMode(ThemeMode::Dark)
             ->colors([
                 'primary' => '#f59e0b',
             ]);

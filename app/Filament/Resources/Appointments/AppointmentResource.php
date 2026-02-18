@@ -33,6 +33,8 @@ use Illuminate\Support\Arr;
 class AppointmentResource extends Resource
 {
     protected static ?string $model = Appointment::class;
+    protected static array $relatedOrderCache = [];
+    protected static array $relatedPendingCache = [];
 
     // Sidebar placement
     protected static string | \BackedEnum | null $navigationIcon = 'heroicon-o-calendar';
@@ -276,42 +278,9 @@ class AppointmentResource extends Resource
                             return '—';
                         }
 
-                        $findOrder = function () use ($record) {
-                            // 1 direct link via order_id
-                            try {
-                                if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'order_id') && ! empty($record->order_id)) {
-                                    $ord = \App\Models\Order::find($record->order_id);
-                                    if ($ord) {
-                                        return $ord;
-                                    }
-                                }
-                            } catch (\Throwable $e) {
-                            }
+                        
 
-                            // 2 match by stored appointment time in order meta
-                            try {
-                                if (! empty($record->start_at)) {
-                                    $s      = \Carbon\Carbon::parse($record->start_at);
-                                    $isoUtc = $s->copy()->setTimezone('UTC')->toIso8601String();
-                                    $ymsLon = $s->copy()->setTimezone('Europe/London')->format('Y-m-d H:i:s');
-
-                                    foreach (['appointment_start_at', 'appointment_at'] as $key) {
-                                        $ord = \App\Models\Order::query()
-                                            ->whereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.$key')) in (?,?)", [$isoUtc, $ymsLon])
-                                            ->orderByDesc('id')
-                                            ->first(['id', 'meta']);
-                                        if ($ord) {
-                                            return $ord;
-                                        }
-                                    }
-                                }
-                            } catch (\Throwable $e) {
-                            }
-
-                            return null;
-                        };
-
-                        $ord = $findOrder();
+                        $ord = static::findRelatedOrder($record);
                         if (! $ord) {
                             $name = is_string($record->service_name ?? null) ? trim($record->service_name) : '';
                             if ($name === '') {
@@ -940,17 +909,106 @@ class AppointmentResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         $base = parent::getEloquentQuery();
+        $pendingRefCol = null;
+        try {
+            $pendingRefCol = \Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'reference')
+                ? 'reference'
+                : (\Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'order_reference')
+                    ? 'order_reference'
+                    : (\Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'ref')
+                        ? 'ref'
+                        : null));
+        } catch (\Throwable $e) {
+            $pendingRefCol = null;
+        }
+
+        $hasApptReference = false;
+        try {
+            $hasApptReference = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'reference');
+        } catch (\Throwable $e) {
+            $hasApptReference = false;
+        }
+
+        $hasPendingOrderId = false;
+        try {
+            $hasPendingOrderId = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'pending_order_id');
+        } catch (\Throwable $e) {
+            $hasPendingOrderId = false;
+        }
+
+        $hasStatusCol = false;
+        try {
+            $hasStatusCol = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'status');
+        } catch (\Throwable $e) {
+            $hasStatusCol = false;
+        }
 
         return $base
             // Only show appointments that have a scheduled time
             ->whereNotNull('start_at')
-            // Treat "pending appointments" the same way as the navigation badge:
-            // anything with a waiting / pending-style status.
-            ->where(function (Builder $q) {
-                $q->whereNull('status')
-                  ->orWhere('status', '')
-                  ->orWhere('status', 'waiting')
-                  ->orWhere('status', 'pending');
+            // Exclude finished appointments (status values vary across installs)
+            ->when($hasStatusCol, function (Builder $q) {
+                $q->where(function (Builder $qq) {
+                    $qq->whereNull('status')
+                       ->orWhere('status', '')
+                       ->orWhereNotIn('status', ['completed', 'complete', 'done', 'cancelled', 'canceled', 'rejected']);
+                });
+            })
+            // And ONLY if there is a pending Order or a matching PendingOrder
+            ->where(function (Builder $q) use ($pendingRefCol, $hasApptReference, $hasPendingOrderId) {
+                // 1) Linked order_id exists and order is pending
+                $q->orWhereExists(function ($sub) {
+                    $sub->select(\DB::raw('1'))
+                        ->from('orders')
+                        ->whereColumn('orders.id', 'appointments.order_id')
+                        ->where(function ($qq) {
+                            $qq->where('orders.status', 'pending')
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
+                        });
+                });
+
+                // 1b) If appointments has a direct pending_order_id link, include it
+                if ($hasPendingOrderId) {
+                    $q->orWhereExists(function ($sub) {
+                        $sub->select(\DB::raw('1'))
+                            ->from('pending_orders')
+                            ->whereColumn('pending_orders.id', 'appointments.pending_order_id');
+                    });
+                }
+
+                // 2) Match by stored reference (order_reference / reference) against pending_orders
+                if ($pendingRefCol) {
+                    $q->orWhereExists(function ($sub) use ($pendingRefCol, $hasApptReference) {
+                        $sub->select(\DB::raw('1'))
+                            ->from('pending_orders')
+                            ->where(function ($qq) use ($pendingRefCol, $hasApptReference) {
+                                $qq->whereColumn('pending_orders.' . $pendingRefCol, 'appointments.order_reference');
+
+                                if ($hasApptReference) {
+                                    $qq->orWhereColumn('pending_orders.' . $pendingRefCol, 'appointments.reference');
+                                }
+                            });
+                    });
+                }
+
+                // 3) Match by stored reference against orders that are pending (when order_id not set)
+                $q->orWhereExists(function ($sub) use ($hasApptReference) {
+                    $sub->select(\DB::raw('1'))
+                        ->from('orders')
+                        ->where(function ($qq) use ($hasApptReference) {
+                            $qq->whereColumn('orders.reference', 'appointments.order_reference');
+
+                            if ($hasApptReference) {
+                                $qq->orWhereColumn('orders.reference', 'appointments.reference');
+                            }
+                        })
+                        ->where(function ($qq) {
+                            $qq->where('orders.status', 'pending')
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
+                        });
+                });
             })
             ->orderBy('start_at', 'asc')
             ->orderByDesc('id');
@@ -958,14 +1016,98 @@ class AppointmentResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
+        $pendingRefCol = null;
+        try {
+            $pendingRefCol = \Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'reference')
+                ? 'reference'
+                : (\Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'order_reference')
+                    ? 'order_reference'
+                    : (\Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'ref')
+                        ? 'ref'
+                        : null));
+        } catch (\Throwable $e) {
+            $pendingRefCol = null;
+        }
+        $hasApptReference = false;
+        try {
+            $hasApptReference = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'reference');
+        } catch (\Throwable $e) {
+            $hasApptReference = false;
+        }
+        $hasPendingOrderId = false;
+        try {
+            $hasPendingOrderId = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'pending_order_id');
+        } catch (\Throwable $e) {
+            $hasPendingOrderId = false;
+        }
+        $hasStatusCol = false;
+        try {
+            $hasStatusCol = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'status');
+        } catch (\Throwable $e) {
+            $hasStatusCol = false;
+        }
         $count = Appointment::query()
-            // Show badge for all upcoming waiting-type appointments from today onwards
+            ->whereNotNull('start_at')
             ->whereDate('start_at', '>=', now()->toDateString())
-            ->where(function (Builder $q) {
-                $q->whereNull('status')
-                  ->orWhere('status', '')
-                  ->orWhere('status', 'waiting')
-                  ->orWhere('status', 'pending');
+            ->when($hasStatusCol, function (Builder $q) {
+                $q->where(function (Builder $qq) {
+                    $qq->whereNull('status')
+                       ->orWhere('status', '')
+                       ->orWhereNotIn('status', ['completed', 'complete', 'done', 'cancelled', 'canceled', 'rejected']);
+                });
+            })
+            ->where(function (Builder $q) use ($pendingRefCol, $hasApptReference, $hasPendingOrderId) {
+                $q->orWhereExists(function ($sub) {
+                    $sub->select(\DB::raw('1'))
+                        ->from('orders')
+                        ->whereColumn('orders.id', 'appointments.order_id')
+                        ->where(function ($qq) {
+                            $qq->where('orders.status', 'pending')
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
+                        });
+                });
+
+                // 1b) If appointments has a direct pending_order_id link, include it
+                if ($hasPendingOrderId) {
+                    $q->orWhereExists(function ($sub) {
+                        $sub->select(\DB::raw('1'))
+                            ->from('pending_orders')
+                            ->whereColumn('pending_orders.id', 'appointments.pending_order_id');
+                    });
+                }
+
+                // 2) Match by stored reference (order_reference / reference) against pending_orders
+                if ($pendingRefCol) {
+                    $q->orWhereExists(function ($sub) use ($pendingRefCol, $hasApptReference) {
+                        $sub->select(\DB::raw('1'))
+                            ->from('pending_orders')
+                            ->where(function ($qq) use ($pendingRefCol, $hasApptReference) {
+                                $qq->whereColumn('pending_orders.' . $pendingRefCol, 'appointments.order_reference');
+
+                                if ($hasApptReference) {
+                                    $qq->orWhereColumn('pending_orders.' . $pendingRefCol, 'appointments.reference');
+                                }
+                            });
+                    });
+                }
+
+                $q->orWhereExists(function ($sub) use ($hasApptReference) {
+                    $sub->select(\DB::raw('1'))
+                        ->from('orders')
+                        ->where(function ($qq) use ($hasApptReference) {
+                            $qq->whereColumn('orders.reference', 'appointments.order_reference');
+
+                            if ($hasApptReference) {
+                                $qq->orWhereColumn('orders.reference', 'appointments.reference');
+                            }
+                        })
+                        ->where(function ($qq) {
+                            $qq->where('orders.status', 'pending')
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
+                        });
+                });
             })
             ->count();
 
@@ -974,13 +1116,98 @@ class AppointmentResource extends Resource
 
     public static function getNavigationBadgeColor(): ?string
     {
+        $pendingRefCol = null;
+        try {
+            $pendingRefCol = \Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'reference')
+                ? 'reference'
+                : (\Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'order_reference')
+                    ? 'order_reference'
+                    : (\Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'ref')
+                        ? 'ref'
+                        : null));
+        } catch (\Throwable $e) {
+            $pendingRefCol = null;
+        }
+        $hasApptReference = false;
+        try {
+            $hasApptReference = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'reference');
+        } catch (\Throwable $e) {
+            $hasApptReference = false;
+        }
+        $hasPendingOrderId = false;
+        try {
+            $hasPendingOrderId = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'pending_order_id');
+        } catch (\Throwable $e) {
+            $hasPendingOrderId = false;
+        }
+        $hasStatusCol = false;
+        try {
+            $hasStatusCol = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'status');
+        } catch (\Throwable $e) {
+            $hasStatusCol = false;
+        }
         $hasWaiting = Appointment::query()
+            ->whereNotNull('start_at')
             ->whereDate('start_at', '>=', now()->toDateString())
-            ->where(function (Builder $q) {
-                $q->whereNull('status')
-                  ->orWhere('status', '')
-                  ->orWhere('status', 'waiting')
-                  ->orWhere('status', 'pending');
+            ->when($hasStatusCol, function (Builder $q) {
+                $q->where(function (Builder $qq) {
+                    $qq->whereNull('status')
+                       ->orWhere('status', '')
+                       ->orWhereNotIn('status', ['completed', 'complete', 'done', 'cancelled', 'canceled', 'rejected']);
+                });
+            })
+            ->where(function (Builder $q) use ($pendingRefCol, $hasApptReference, $hasPendingOrderId) {
+                $q->orWhereExists(function ($sub) {
+                    $sub->select(\DB::raw('1'))
+                        ->from('orders')
+                        ->whereColumn('orders.id', 'appointments.order_id')
+                        ->where(function ($qq) {
+                            $qq->where('orders.status', 'pending')
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
+                        });
+                });
+
+                // 1b) If appointments has a direct pending_order_id link, include it
+                if ($hasPendingOrderId) {
+                    $q->orWhereExists(function ($sub) {
+                        $sub->select(\DB::raw('1'))
+                            ->from('pending_orders')
+                            ->whereColumn('pending_orders.id', 'appointments.pending_order_id');
+                    });
+                }
+
+                // 2) Match by stored reference (order_reference / reference) against pending_orders
+                if ($pendingRefCol) {
+                    $q->orWhereExists(function ($sub) use ($pendingRefCol, $hasApptReference) {
+                        $sub->select(\DB::raw('1'))
+                            ->from('pending_orders')
+                            ->where(function ($qq) use ($pendingRefCol, $hasApptReference) {
+                                $qq->whereColumn('pending_orders.' . $pendingRefCol, 'appointments.order_reference');
+
+                                if ($hasApptReference) {
+                                    $qq->orWhereColumn('pending_orders.' . $pendingRefCol, 'appointments.reference');
+                                }
+                            });
+                    });
+                }
+
+                $q->orWhereExists(function ($sub) use ($hasApptReference) {
+                    $sub->select(\DB::raw('1'))
+                        ->from('orders')
+                        ->where(function ($qq) use ($hasApptReference) {
+                            $qq->whereColumn('orders.reference', 'appointments.order_reference');
+
+                            if ($hasApptReference) {
+                                $qq->orWhereColumn('orders.reference', 'appointments.reference');
+                            }
+                        })
+                        ->where(function ($qq) {
+                            $qq->where('orders.status', 'pending')
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
+                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
+                        });
+                });
             })
             ->exists();
 
@@ -1028,12 +1255,18 @@ class AppointmentResource extends Resource
     public static function findRelatedOrder($record): ?\App\Models\Order
     {
         if (! $record) return null;
-
+        $cacheKey = $record->getKey();
+        if (array_key_exists($cacheKey, static::$relatedOrderCache)) {
+            return static::$relatedOrderCache[$cacheKey];
+        }
         // 1) Direct link first
         try {
             if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'order_id') && !empty($record->order_id)) {
                 $o = \App\Models\Order::find($record->order_id);
-                if ($o) return $o;
+                if ($o) {
+                    static::$relatedOrderCache[$cacheKey] = $o;
+                    return $o;
+                }
             }
         } catch (\Throwable $e) {}
 
@@ -1110,6 +1343,7 @@ class AppointmentResource extends Resource
             }
         } catch (\Throwable $e) {}
 
+        static::$relatedOrderCache[$cacheKey] = null;
         return null;
     }
 
