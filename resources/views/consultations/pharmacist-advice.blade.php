@@ -343,9 +343,45 @@
 
     $oldData = $loadAnswers($sessionLike ?? $session, $form ?? null, $stepSlug);
 
-    // Consultation notes help text (do not prefill textarea)
-    $consultationNotesHelp = "Use a structured approach for example SOAP or encounter based\n\nS Subjective presenting complaint history medicines allergies\nO Objective observations exam findings investigations\nA Assessment working diagnosis differentials risk stratification\nP Plan treatment prescriptions referrals safety netting follow up\n\nImportant safety information\n\nPancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.\n\nSeek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.\n\nDo not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.\n\nReport suspected side effects through the Yellow Card scheme.";
+    $consultationNotesHelp = "Use a structured approach for example SOAP or encounter based
 
+S Subjective presenting complaint history medicines allergies
+O Objective observations exam findings investigations
+A Assessment working diagnosis differentials risk stratification
+P Plan treatment prescriptions referrals safety netting follow up
+
+Important safety information
+
+Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.
+
+Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.
+
+Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
+
+Medication Review:
+- New medication: (weight management)??
+- Dose: once weekly injection, same day each week
+- Storage: keep pen in fridge
+
+Clinical Consultation:
+- Weight management consultation
+- First time using or current repeat patient?
+- video call done new patient?
+
+Patient Education:
+- Injection technique: once weekly subcutaneous injection, same day each week
+- Fluid intake: 2-3 litres daily to prevent constipation/diarrhoea
+- Side effects discussed: initial nausea and headache (usually resolves), constipation or diarrhoea
+- Rare side effect counselling: pancreatitis symptoms (severe abdominal pain radiating to back, high temperature, vomiting) - seek medical advice immediately
+- Dosing schedule: start with current strength, reorder at end of week three via website, next strength 5mg
+- Can remain on 5mg if effective and weight loss achieved
+
+Plan:
+- Order dispatched today, delivery expected tomorrow
+- Reorder via website at end of week three for next strength (5mg)
+- Continue current strength if effective weight loss achieved
+
+";
     // Prefer saved notes only (leave blank if none)
     $consultationNotesValue = old('consultation_notes', $oldData['consultation_notes'] ?? '');
 
