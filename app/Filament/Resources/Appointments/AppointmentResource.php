@@ -234,6 +234,7 @@ class AppointmentResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn (Builder $query) => static::applyPendingOnlyAppointmentsConstraints($query))
             ->columns([
                 TextColumn::make('start_at')
                     ->label('When')
@@ -248,13 +249,28 @@ class AppointmentResource extends Resource
                             return '—';
                         }
 
+                        // 1) If linked order exists, show the real reference
                         $ref = static::resolveOrderRef($record);
-
                         if (is_string($ref)) {
                             $r = trim($ref);
-                            return ($r !== '' && $r !== '-') ? $r : '';
+                            if ($r !== '' && $r !== '-') {
+                                return $r;
+                            }
                         }
-                        return '';
+
+                        // 2) If a PCAO ref is already stored, show it
+                        $stored = is_string($record->order_reference ?? null) ? trim((string) $record->order_reference) : '';
+                        if ($stored !== '' && str_starts_with($stored, 'PCAO')) {
+                            return $stored;
+                        }
+
+                        // 3) Fallback: derive a stable PCAO ref from appointment ID
+                        $id = $record->getKey();
+                        if ($id) {
+                            return 'PCAO' . str_pad((string) $id, 6, '0', STR_PAD_LEFT);
+                        }
+
+                        return '—';
                     })
                     ->toggleable()
                     ->searchable(true, function (Builder $query, string $search): Builder {
@@ -908,7 +924,11 @@ class AppointmentResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        $base = parent::getEloquentQuery();
+        return parent::getEloquentQuery();
+    }
+
+    protected static function applyPendingOnlyAppointmentsConstraints(Builder $base): Builder
+    {
         $pendingRefCol = null;
         try {
             $pendingRefCol = \Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'reference')
@@ -944,31 +964,26 @@ class AppointmentResource extends Resource
         }
 
         return $base
-            // Only show appointments that have a scheduled time
             ->whereNotNull('start_at')
-            // Exclude finished appointments (status values vary across installs)
             ->when($hasStatusCol, function (Builder $q) {
                 $q->where(function (Builder $qq) {
                     $qq->whereNull('status')
-                       ->orWhere('status', '')
-                       ->orWhereNotIn('status', ['completed', 'complete', 'done', 'cancelled', 'canceled', 'rejected']);
+                        ->orWhere('status', '')
+                        ->orWhereNotIn('status', ['completed', 'complete', 'done', 'cancelled', 'canceled', 'rejected']);
                 });
             })
-            // And ONLY if there is a pending Order or a matching PendingOrder
             ->where(function (Builder $q) use ($pendingRefCol, $hasApptReference, $hasPendingOrderId) {
-                // 1) Linked order_id exists and order is pending
                 $q->orWhereExists(function ($sub) {
                     $sub->select(\DB::raw('1'))
                         ->from('orders')
                         ->whereColumn('orders.id', 'appointments.order_id')
                         ->where(function ($qq) {
                             $qq->where('orders.status', 'pending')
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
+                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
+                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
                         });
                 });
 
-                // 1b) If appointments has a direct pending_order_id link, include it
                 if ($hasPendingOrderId) {
                     $q->orWhereExists(function ($sub) {
                         $sub->select(\DB::raw('1'))
@@ -977,7 +992,6 @@ class AppointmentResource extends Resource
                     });
                 }
 
-                // 2) Match by stored reference (order_reference / reference) against pending_orders
                 if ($pendingRefCol) {
                     $q->orWhereExists(function ($sub) use ($pendingRefCol, $hasApptReference) {
                         $sub->select(\DB::raw('1'))
@@ -992,7 +1006,18 @@ class AppointmentResource extends Resource
                     });
                 }
 
-                // 3) Match by stored reference against orders that are pending (when order_id not set)
+                // 4) Always include manually-created PCAO appointments
+                $q->orWhere(function (Builder $qq) use ($hasApptReference) {
+                    $qq->whereNull('appointments.order_id')
+                        ->where(function (Builder $qq2) use ($hasApptReference) {
+                            $qq2->where('appointments.order_reference', 'like', 'PCAO%');
+
+                            if ($hasApptReference) {
+                                $qq2->orWhere('appointments.reference', 'like', 'PCAO%');
+                            }
+                        });
+                });
+
                 $q->orWhereExists(function ($sub) use ($hasApptReference) {
                     $sub->select(\DB::raw('1'))
                         ->from('orders')
@@ -1005,13 +1030,11 @@ class AppointmentResource extends Resource
                         })
                         ->where(function ($qq) {
                             $qq->where('orders.status', 'pending')
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
+                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
+                                ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
                         });
                 });
-            })
-            ->orderBy('start_at', 'asc')
-            ->orderByDesc('id');
+            });
     }
 
     public static function getNavigationBadge(): ?string
