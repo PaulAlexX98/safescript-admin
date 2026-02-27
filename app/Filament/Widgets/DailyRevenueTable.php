@@ -90,6 +90,7 @@ class DailyRevenueTable extends Base
 
             $inner = Order::query()->withoutGlobalScopes()
                 ->leftJoin('order_items', 'order_items.order_id', '=', 'orders.id')
+                ->tap(fn (Builder $q) => $this->applyPaidOnlyFilter($q))
                 ->selectRaw('DATE(orders.created_at) as day')
                 ->selectRaw("$itemExpr as revenue")
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
@@ -107,6 +108,7 @@ class DailyRevenueTable extends Base
 
         // Default path: sum from orders table
         $inner = Order::query()->withoutGlobalScopes()
+            ->tap(fn (Builder $q) => $this->applyPaidOnlyFilter($q))
             ->selectRaw('DATE(orders.created_at) as day')
             ->selectRaw("$sumExpr as revenue")
             ->selectRaw('COUNT(*) as bookings')
@@ -175,6 +177,27 @@ class DailyRevenueTable extends Base
         // Build SUM(COALESCE(part1, part2, ..., 0))
         $coalesce = 'COALESCE(' . implode(', ', $parts) . ', 0)';
         return 'SUM(' . $coalesce . ')';
+    }
+
+    private function applyPaidOnlyFilter(Builder $q): Builder
+    {
+        // Prefer explicit payment_status / paid_at, with meta fallbacks.
+        return $q->where(function ($w) {
+            $w->whereRaw('1=0');
+
+            if (Schema::hasColumn('orders', 'payment_status')) {
+                $w->orWhere('orders.payment_status', 'paid');
+            }
+
+            if (Schema::hasColumn('orders', 'paid_at')) {
+                $w->orWhereNotNull('orders.paid_at');
+            }
+
+            if (Schema::hasColumn('orders', 'meta')) {
+                $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))) = ?", ['paid']);
+                $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))) = ?", ['paid']);
+            }
+        });
     }
 
     protected function isTablePaginationEnabled(): bool

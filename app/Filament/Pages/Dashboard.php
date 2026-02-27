@@ -9,6 +9,7 @@ use App\Filament\Widgets\RevenueBookingsChart;
 use App\Filament\Widgets\ServicesPerformance;
 use App\Filament\Widgets\DailyRevenueTable;
 use App\Filament\Widgets\WeightManagementAlertsWidget;
+use App\Filament\Widgets\AppointmentsCalendarWidget;
 
 class Dashboard extends Base
 {
@@ -42,7 +43,9 @@ class Dashboard extends Base
     public function getWidgets(): array
     {
         return [
+            
             WeightManagementAlertsWidget::class,
+            AppointmentsCalendarWidget::class,
             KpiStats::class,               // KPI tiles at top
                // left column     
             BookingStatusTable::class,     // full width below the two-column row

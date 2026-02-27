@@ -21,7 +21,7 @@ class ScheduleResource extends Resource
     protected static ?string $navigationLabel = 'Schedules';
     protected static \BackedEnum|string|null $navigationIcon = 'heroicon-o-clock';
     protected static \UnitEnum|string|null $navigationGroup = 'Scheduling';
-    protected static ?int $navigationSort = 2;
+    protected static ?int $navigationSort = 19;
 
     public static function form(Schema $schema): Schema
     {

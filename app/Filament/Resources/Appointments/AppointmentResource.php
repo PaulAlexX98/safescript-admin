@@ -1962,4 +1962,9 @@ class AppointmentResource extends Resource
 
         return null;
     }
+
+    public static function getGloballySearchableAttributes(): array
+    {
+        return [];
+    }
 }

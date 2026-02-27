@@ -126,6 +126,9 @@ HTML;
             })
 
             ->navigationGroups([
+                NavigationGroup::make('Private Services')->collapsed(false),
+                NavigationGroup::make('NHS Services')->collapsed(false),
+
                 NavigationGroup::make('Notifications')
                     ->collapsed(false)
                     ->items([
@@ -152,6 +155,14 @@ HTML;
                             ->url(fn () => AppointmentsAppointmentResource::getUrl('index', ['filter' => 'upcoming']))
                             ->visible($hasAppointments),
                     ]),
+
+                // Orders directly below the Notifications/Appointments section
+                NavigationGroup::make('Orders')->collapsed(false),
+
+                NavigationGroup::make('People')->collapsed(false),
+                NavigationGroup::make('Operations')->collapsed(false),
+                NavigationGroup::make('Logs')->collapsed(false),
+
                 NavigationGroup::make('Scheduling')
                     ->collapsed(false)
                     ->items([
@@ -163,10 +174,9 @@ HTML;
                             })
                             ->visible(true),
                     ]),
-                NavigationGroup::make('Orders')
-                    ->collapsed(false),
-                NavigationGroup::make('Forms')
-                    ->collapsed(true),
+
+                NavigationGroup::make('Front')->collapsed(false),
+                NavigationGroup::make('Forms')->collapsed(true),
             ])
             /*->viteTheme([
                 'resources/css/filament/admin/theme.css',

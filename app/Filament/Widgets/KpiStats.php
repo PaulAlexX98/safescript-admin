@@ -41,13 +41,17 @@ class KpiStats extends Base
         $rejected  = $this->countRejectedOrders($start, $end);
         $unpaid    = $this->countUnpaidOrders($start, $end);
 
-        // Total bookings equals the sum of these non-overlapping buckets
+        $newOrders = $this->countNewOrders($start, $end);
+
+        // Total bookings = sum of these non-overlapping buckets
         $totalBookings = $completed + $rejected + $unpaid;
 
         return [
             Stat::make('Total Revenue', '£' . number_format($totalRevenue ?? 0, 2)),
             Stat::make('Total Bookings', number_format($totalBookings)),
+            Stat::make('New Orders', number_format($newOrders)),
             Stat::make('Completed', number_format($completed)),
+            Stat::make('Rejected', number_format($rejected)),
             Stat::make('Unpaid', number_format($unpaid)),
         ];
     }
@@ -90,8 +94,17 @@ class KpiStats extends Base
         $coalesce = 'COALESCE(' . implode(', ', $parts) . ', 0)';
         $q = DB::table($t)->selectRaw('SUM(' . $coalesce . ') as t');
 
-        if ($start && $end && Schema::hasColumn($t, 'created_at')) {
-            $q->whereBetween('created_at', [$start, $end]);
+        // Use the same date anchor as Completed KPI (approved_at/paid_at fallback)
+        $dateCol = $this->completedDateColumn();
+        if ($start && $end && $dateCol) {
+            $q->whereBetween($dateCol, [$start, $end]);
+        }
+
+        // Only include realised revenue from Completed orders
+        if (Schema::hasColumn($t, 'status')) {
+            $q->where('status', 'completed');
+        } elseif (Schema::hasColumn($t, 'booking_status')) {
+            $q->where('booking_status', 'completed');
         }
 
         return (float) ($q->value('t') ?? 0);
@@ -109,15 +122,47 @@ class KpiStats extends Base
             $q->whereBetween('created_at', [$start, $end]);
         }
 
+        // Exclude other buckets so counts don’t overlap
+        if (Schema::hasColumn('orders', 'status')) {
+            $q->whereNotIn('status', [
+                'completed',
+                'approved',
+                'paid',
+                'rejected',
+                'cancelled',
+                'canceled',
+                'declined',
+            ]);
+        }
+
+        // Define "unpaid" as payment not taken yet (with fallbacks)
         $q->where(function ($w) {
-            if (Schema::hasColumn('orders', 'booking_status')) {
-                $w->orWhere('booking_status', 'unpaid');
-            }
+            // Seed false so OR conditions behave consistently
+            $w->whereRaw('1=0');
+
             if (Schema::hasColumn('orders', 'payment_status')) {
                 $w->orWhere('payment_status', 'unpaid');
             }
+
+            if (Schema::hasColumn('orders', 'booking_status')) {
+                // Legacy/edge: some rows may store unpaid here
+                $w->orWhere('booking_status', 'unpaid');
+            }
+
             if (Schema::hasColumn('orders', 'status')) {
+                // Legacy/edge: some rows may store unpaid as status
                 $w->orWhere('status', 'unpaid');
+            }
+
+            if (Schema::hasColumn('orders', 'meta')) {
+                $w->orWhereRaw(
+                    "LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status'))) = ?",
+                    ['unpaid']
+                );
+                $w->orWhereRaw(
+                    "LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status_label'))) = ?",
+                    ['unpaid']
+                );
             }
         });
 
@@ -185,6 +230,27 @@ class KpiStats extends Base
                 $w->orWhereIn('status', ['rejected','cancelled','canceled','declined']);
             }
         });
+
+        return (int) $q->count();
+    }
+
+    private function countNewOrders(?Carbon $start = null, ?Carbon $end = null): int
+    {
+        if (!Schema::hasTable('orders')) {
+            return 0;
+        }
+
+        $q = DB::table('orders');
+
+        // New orders are anchored to creation time
+        if ($start && $end && Schema::hasColumn('orders', 'created_at')) {
+            $q->whereBetween('created_at', [$start, $end]);
+        }
+
+        // Prefer meta.type == 'new'
+        if (Schema::hasColumn('orders', 'meta')) {
+            $q->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.type'))) = ?", ['new']);
+        }
 
         return (int) $q->count();
     }

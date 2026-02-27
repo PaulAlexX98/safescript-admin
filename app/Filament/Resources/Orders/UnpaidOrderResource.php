@@ -14,19 +14,24 @@ class UnpaidOrderResource extends OrderResource
     protected static ?string $model = Order::class;
 
     protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedCurrencyPound;
-    protected static ?string $navigationLabel  = 'Unpaid';
-    protected static ?string $pluralLabel      = 'Unpaid';
-    protected static ?string $modelLabel       = 'Unpaid';
+    protected static ?string $navigationLabel  = 'Unpaid (disabled)';
+    protected static ?string $pluralLabel      = 'Unpaid (disabled)';
+    protected static ?string $modelLabel       = 'Unpaid (disabled)';
     protected static string | \UnitEnum | null $navigationGroup = 'Orders';
-    protected static ?int    $navigationSort   = 33;
-    protected static bool    $shouldRegisterNavigation = true;
+   
+    protected static bool    $shouldRegisterNavigation = false;
 
     // 🔑 This ensures route = /admin/unpaid-orders
     protected static ?string $slug = 'unpaid-orders';
  
     public static function shouldRegisterNavigation(): bool
     {
-        return true;
+        return false;
+    }
+
+    public static function canAccess(): bool
+    {
+        return false;
     }
 
     public static function getEloquentQuery(): Builder

@@ -62,19 +62,31 @@ class AppointmentsCalendarWidget extends CalendarWidget
                 ->whereNotNull('start_at')
                 ->whereBetween('start_at', [$start, $end]);
 
+            // Exclude orphan appointments (match the Appointments list behaviour)
+            if (Schema::hasColumn('appointments', 'order_id') || Schema::hasColumn('appointments', 'order_reference')) {
+                $q->where(function ($qq) {
+                    $has = false;
+
+                    if (Schema::hasColumn('appointments', 'order_id')) {
+                        $qq->orWhereNotNull('order_id');
+                        $has = true;
+                    }
+
+                    if (Schema::hasColumn('appointments', 'order_reference')) {
+                        $qq->orWhereNotNull('order_reference');
+                        $has = true;
+                    }
+
+                    // If neither column exists (shouldn't happen due to outer check), keep query unchanged.
+                    if (! $has) {
+                        $qq->whereRaw('1=1');
+                    }
+                });
+            }
+
             // Soft deletes (match Resource default)
             if (Schema::hasColumn('appointments', 'deleted_at')) {
                 $q->whereNull('deleted_at');
-            }
-
-            // Status filter (null/empty/waiting/pending)
-            if (Schema::hasColumn('appointments', 'status')) {
-                $q->where(function ($qq) {
-                    $qq->whereNull('status')
-                       ->orWhere('status', '')
-                       ->orWhere('status', 'waiting')
-                       ->orWhere('status', 'pending');
-                });
             }
 
             $rows = $q->groupBy('d')->get();

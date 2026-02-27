@@ -17,7 +17,7 @@ class CompletedOrderResource extends OrderResource
     protected static ?string $pluralLabel      = 'Completed';
     protected static ?string $modelLabel       = 'Completed';
     protected static string | \UnitEnum | null $navigationGroup = 'Orders';
-    protected static ?int    $navigationSort   = 1;
+   
     protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedCheckCircle;
     protected static bool $shouldRegisterNavigation = true;
     protected static ?string $model = Order::class;

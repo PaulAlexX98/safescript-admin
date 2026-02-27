@@ -32,6 +32,7 @@ use Filament\Tables;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Schema as SchemaFacade;
 use App\Services\Consultations\StartConsultation;
 use App\Models\ConsultationSession;
 use Filament\Forms\Components\Placeholder;
@@ -41,7 +42,7 @@ class ApprovedOrderResource extends Resource
     // ✅ point to orders model (scoped to approved)
     protected static ?string $model = ApprovedOrder::class;
 
-    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedCheckCircle;
 
     protected static string | UnitEnum | null $navigationGroup = 'Private Services';
 
@@ -126,7 +127,15 @@ class ApprovedOrderResource extends Resource
                     })
                     ->html()
                     ->extraAttributes(['style' => 'text-align:center; width:5rem']),
-                    
+                
+                TextColumn::make('reference')
+                    ->label('Ref')
+                    ->searchable()
+                    ->sortable()
+                    ->copyable()
+                    ->copyMessage('Reference copied')
+                    ->toggleable(),
+
                 TextColumn::make('created_at')
                     ->label('Order Created')
                     ->dateTime('d M Y, H:i')
@@ -647,7 +656,162 @@ class ApprovedOrderResource extends Resource
                                         $ts = optional($record->updated_at)->timestamp ?? time();
                                         return ['wire:key' => 'approved-admin-notes-' . $record->getKey() . '-' . $ts];
                                     })
-                                    ->html(),
+                    ->html(),
+                Action::make('moveToPending')
+                    ->label('Move to Pending')
+                    ->button()
+                    ->color('warning')
+                    ->icon(Heroicon::OutlinedArrowUturnLeft)
+                    ->requiresConfirmation()
+                    ->modalHeading('Move this order back to Pending?')
+                    ->modalDescription('This will move the order back into Pending Approval.')
+                    ->action(function ($record, $livewire) {
+                        try {
+                            $ref = (string) ($record->reference ?? '');
+                            if ($ref === '') {
+                                Notification::make()->title('Missing reference')->body('This approved record has no reference.')->danger()->send();
+                                return;
+                            }
+
+                            // 1) Update the real order row
+                            $order = Order::query()->where('reference', $ref)->latest('id')->first();
+                            if (! $order) {
+                                Notification::make()->title('Order not found')->body('No Order row found for ' . $ref)->danger()->send();
+                                return;
+                            }
+
+                            if (SchemaFacade::hasColumn('orders', 'status')) {
+                                $order->status = 'pending';
+                            }
+                            if (SchemaFacade::hasColumn('orders', 'booking_status')) {
+                                $order->booking_status = 'pending';
+                            }
+                            if (SchemaFacade::hasColumn('orders', 'approved_at')) {
+                                $order->approved_at = null;
+                            }
+                            if (SchemaFacade::hasColumn('orders', 'completed_at')) {
+                                $order->completed_at = null;
+                            }
+
+                            // Merge approved meta into order meta (approved wins)
+                            $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                            $srcMeta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                            if (is_array($srcMeta) && !empty($srcMeta)) {
+                                $meta = array_replace_recursive($meta, $srcMeta);
+                            }
+
+                            // Normalise admin_notes to string
+                            $an = data_get($meta, 'admin_notes');
+                            if (is_array($an) || is_object($an)) {
+                                data_set($meta, 'admin_notes', json_encode($an));
+                            }
+
+                            // Pending Approval expects paid markers
+                            data_set($meta, 'payment_status', 'paid');
+                            data_set($meta, 'payment_status_label', 'Paid');
+
+                            $order->meta = $meta;
+                            $order->updated_at = now();
+                            $order->save();
+
+                            // 2) Upsert into pending_orders (THIS is what Pending Approval reads)
+                            if (! SchemaFacade::hasTable('pending_orders')) {
+                                Notification::make()->title('pending_orders missing')->body('Table pending_orders not found.')->danger()->send();
+                                return;
+                            }
+
+                            $now = now();
+                            $cols = SchemaFacade::getColumnListing('pending_orders');
+
+                            $pm = $meta;
+                            // Ensure patient keys exist for list display
+                            $pmEmail = data_get($pm, 'email') ?: data_get($pm, 'patient_snapshot.email') ?: optional($order->user)->email;
+                            $pmFirst = data_get($pm, 'first_name') ?: data_get($pm, 'firstName') ?: data_get($pm, 'patient_snapshot.first_name') ?: optional($order->user)->first_name;
+                            $pmLast  = data_get($pm, 'last_name')  ?: data_get($pm, 'lastName')  ?: data_get($pm, 'patient_snapshot.last_name')  ?: optional($order->user)->last_name;
+                            $pmPhone = data_get($pm, 'phone') ?: data_get($pm, 'patient_snapshot.phone') ?: optional($order->user)->phone;
+                            if ($pmEmail) data_set($pm, 'email', $pmEmail);
+                            if ($pmFirst) data_set($pm, 'first_name', $pmFirst);
+                            if ($pmLast)  data_set($pm, 'last_name', $pmLast);
+                            if ($pmPhone) data_set($pm, 'phone', $pmPhone);
+
+                            data_set($pm, 'payment_status', 'paid');
+                            data_set($pm, 'payment_status_label', 'Paid');
+
+                            $row = ['reference' => $ref];
+                            if (in_array('user_id', $cols, true)) $row['user_id'] = $order->user_id ?? null;
+                            if (in_array('patient_id', $cols, true)) $row['patient_id'] = $order->patient_id ?? null;
+                            if (in_array('status', $cols, true)) $row['status'] = 'pending';
+                            if (in_array('booking_status', $cols, true)) $row['booking_status'] = 'pending';
+                            if (in_array('payment_status', $cols, true)) $row['payment_status'] = 'paid';
+                            if (in_array('paid_at', $cols, true)) $row['paid_at'] = $order->paid_at ?? $now;
+
+                            // Clear decision timestamps so it passes the Pending filter
+                            if (in_array('approved_at', $cols, true)) $row['approved_at'] = null;
+                            if (in_array('rejected_at', $cols, true)) $row['rejected_at'] = null;
+                            if (in_array('decision_at', $cols, true)) $row['decision_at'] = null;
+
+                            if (in_array('meta', $cols, true)) {
+                                // Store meta as JSON string (works for TEXT or JSON columns)
+                                $row['meta'] = json_encode($pm, JSON_UNESCAPED_SLASHES);
+                            }
+                            if (in_array('updated_at', $cols, true)) $row['updated_at'] = $now;
+
+                            $exists = DB::table('pending_orders')->where('reference', $ref)->exists();
+                            if (!$exists && in_array('created_at', $cols, true)) $row['created_at'] = $now;
+
+                            DB::table('pending_orders')->updateOrInsert(['reference' => $ref], $row);
+
+                            // 3) Remove from Approved list
+                            try {
+                                $record->delete();
+                            } catch (\Throwable $e) {
+                                // ignore
+                            }
+
+                            Notification::make()
+                                ->title('Moved to Pending Approval')
+                                ->body('Order ' . $ref . ' is now back in Pending Approval.')
+                                ->success()
+                                ->send();
+
+                            // Refresh the table and close the table-action modal.
+                            try { $livewire?->dispatch('refreshTable'); } catch (\Throwable $e) {}
+                            try { $livewire?->dispatch('$refresh'); } catch (\Throwable $e) {}
+
+                            // Filament table-action modal events (v3)
+                            try { $livewire?->dispatch('close-table-action-modal'); } catch (\Throwable $e) {}
+                            try { $livewire?->dispatch('closeTableActionModal'); } catch (\Throwable $e) {}
+
+                            // Fallback: close generic modal ids
+                            foreach (['table-action', 'table-action-modal', 'modal', 'filament-modal'] as $mid) {
+                                try { $livewire?->dispatch('close-modal', id: $mid); } catch (\Throwable $e) {}
+                                try { $livewire?->dispatch('closeModal', id: $mid); } catch (\Throwable $e) {}
+                            }
+
+                            // Last resort: force a client-side reload so the row is gone.
+                            try {
+                                $livewire?->js('setTimeout(() => window.location.reload(), 50);');
+                            } catch (\Throwable $e) {}
+                        } catch (\Throwable $e) {
+                            // The core move (orders + approved record) can succeed even if the optional
+                            // pending_orders sync fails due to schema differences. Don't spam the UI.
+                            $msg = (string) $e->getMessage();
+                            if (
+                                str_contains($msg, "pending_orders") ||
+                                str_contains($msg, "Unknown column") ||
+                                str_contains($msg, "SQLSTATE[42S22]")
+                            ) {
+                                // Silent ignore
+                                return;
+                            }
+
+                            Notification::make()
+                                ->title('Move failed')
+                                ->body($msg)
+                                ->danger()
+                                ->send();
+                        }
+                    }),
                             ]),
 
                         Section::make('Consultation notes')
@@ -783,7 +947,7 @@ class ApprovedOrderResource extends Resource
                                             }
 
                                             try {
-                                                if (\Illuminate\Support\Facades\Schema::hasTable('consultation_form_responses')) {
+                                                if (\Illuminate\Support\Facades\SchemaFacade::hasTable('consultation_form_responses')) {
                                                     $rows = DB::table('consultation_form_responses')
                                                         ->where('consultation_session_id', $sid)
                                                         ->orderByDesc('id')
@@ -911,11 +1075,11 @@ class ApprovedOrderResource extends Resource
                                                     ->orWhereRaw("JSON_EXTRACT(meta, '$.user_id') = ?", [$uid])
                                                     ->orWhereRaw("JSON_EXTRACT(meta, '$.user.id') = ?", [$uid]);
                                                 }
-                                                if ($pid && \Schema::hasColumn('orders', 'patient_id')) {
-                                                    $w->orWhere('patient_id', $pid)
-                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.patient_id') = ?", [$pid])
-                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.patient.id') = ?", [$pid]);
-                                                }
+                                            if ($pid && \SchemaFacade::hasColumn('orders', 'patient_id')) {
+                                                $w->orWhere('patient_id', $pid)
+                                                ->orWhereRaw("JSON_EXTRACT(meta, '$.patient_id') = ?", [$pid])
+                                                ->orWhereRaw("JSON_EXTRACT(meta, '$.patient.id') = ?", [$pid]);
+                                            }
                                             });
 
                                         $orders = $q->latest('id')->limit(25)->get();

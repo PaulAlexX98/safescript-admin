@@ -107,8 +107,10 @@ class ServicesPerformance extends Base
         // Build the aggregated base query on orders
         $base = Order::query()->withoutGlobalScopes();
 
-        if (Schema::hasColumn('orders', 'created_at') && $start && $end) {
-            $base->whereBetween('created_at', [$start, $end]);
+        // Only count paid orders, and use paid_at as the period anchor when available.
+        $this->applyPaidOnlyFilter($base);
+        if ($start && $end) {
+            $this->applyPeriodFilter($base, $start, $end);
         }
 
         $base = $base
@@ -139,6 +141,40 @@ class ServicesPerformance extends Base
     protected function isTablePaginationEnabled(): bool
     {
         return false;
+    }
+
+    private function applyPaidOnlyFilter(Builder $q): Builder
+    {
+        return $q->where(function ($w) {
+            $w->whereRaw('1=0');
+
+            if (Schema::hasColumn('orders', 'payment_status')) {
+                $w->orWhere('orders.payment_status', 'paid');
+            }
+
+            if (Schema::hasColumn('orders', 'paid_at')) {
+                $w->orWhereNotNull('orders.paid_at');
+            }
+
+            if (Schema::hasColumn('orders', 'meta')) {
+                $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))) = ?", ['paid']);
+                $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))) = ?", ['paid']);
+            }
+        });
+    }
+
+    private function applyPeriodFilter(Builder $q, Carbon $start, Carbon $end): Builder
+    {
+        // Prefer paid_at for time series; fall back to created_at if paid_at is unavailable.
+        if (Schema::hasColumn('orders', 'paid_at')) {
+            return $q->whereNotNull('orders.paid_at')->whereBetween('orders.paid_at', [$start, $end]);
+        }
+
+        if (Schema::hasColumn('orders', 'created_at')) {
+            return $q->whereBetween('orders.created_at', [$start, $end]);
+        }
+
+        return $q;
     }
 
     private function sumRevenueExpr(): string
@@ -191,8 +227,9 @@ class ServicesPerformance extends Base
         $expr = $this->sumRevenueExpr() . ' as t';
 
         $q = Order::query()->selectRaw($expr);
-        if (Schema::hasColumn($t, 'created_at') && $start && $end) {
-            $q->whereBetween('created_at', [$start, $end]);
+        $this->applyPaidOnlyFilter($q);
+        if ($start && $end) {
+            $this->applyPeriodFilter($q, $start, $end);
         }
 
         return (float) ($q->value('t') ?? 0);

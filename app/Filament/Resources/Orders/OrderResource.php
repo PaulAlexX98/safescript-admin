@@ -36,6 +36,8 @@ class OrderResource extends Resource
     protected static ?string $pluralLabel = 'Orders';
     protected static ?string $modelLabel = 'Order';
 
+    protected static ?int    $navigationSort  = 6;
+
     // Hide base Orders resource from the sidebar; we use the status-specific resources instead.
     protected static bool $shouldRegisterNavigation = false;
 
@@ -71,9 +73,19 @@ class OrderResource extends Resource
             ->defaultSort('created_at', 'desc')
             ->columns([
                 TextColumn::make('completed_at')
-                    ->label('Completed')
-                    ->dateTime('d M Y, H:i')
-                    ->sortable(),
+    ->label(fn () => static::class === \App\Filament\Resources\Orders\RejectedOrderResource::class ? 'Rejected At' : 'Completed')
+    ->getStateUsing(function ($record) {
+        if (static::class === \App\Filament\Resources\Orders\RejectedOrderResource::class) {
+            return $record->rejected_at ?? $record->updated_at ?? $record->created_at;
+        }
+
+        return $record->completed_at ?? $record->paid_at ?? $record->approved_at ?? $record->created_at;
+    })
+    ->dateTime('d M Y, H:i')
+    ->sortable(query: function (\Illuminate\Database\Eloquent\Builder $query, string $direction) {
+        $col = static::class === \App\Filament\Resources\Orders\RejectedOrderResource::class ? 'rejected_at' : 'completed_at';
+        return $query->orderBy($col, $direction);
+    }),
 
                 TextColumn::make('reference')
                     ->label('Reference')
@@ -385,7 +397,7 @@ class OrderResource extends Resource
                     ->openUrlInNewTab(false)
                     ->visible(fn ($record) => strtolower((string)$record->status) === 'completed'),
 
-                // For REJECTED / UNPAID: keep the existing modal with infolist
+                // For REJECTED: keep the existing modal with infolist
                 Action::make('viewOrder')
                     ->label('View')
                     ->button()
@@ -394,7 +406,7 @@ class OrderResource extends Resource
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('Close')
                     ->modalWidth('5xl')
-                    ->visible(fn ($record) => in_array(strtolower((string)$record->status), ['rejected','unpaid'], true))
+                    ->visible(fn ($record) => in_array(strtolower((string)$record->status), ['rejected'], true))
                     ->schema([
                         Grid::make(12)->schema([
                             Section::make('Customer')
@@ -472,7 +484,6 @@ class OrderResource extends Resource
                                                         'rejected'  => 'danger',
                                                         'approved'  => 'primary',
                                                         'pending'   => 'warning',
-                                                        'unpaid'    => 'warning',
                                                         default     => 'gray',
                                                     };
                                                 }),
@@ -577,5 +588,10 @@ class OrderResource extends Resource
     public static function canCreate(): bool
     {
         return false;
+    }
+
+    public static function getGloballySearchableAttributes(): array
+    {
+        return ['reference'];
     }
 }

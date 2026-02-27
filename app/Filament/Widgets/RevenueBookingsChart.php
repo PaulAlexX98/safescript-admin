@@ -92,35 +92,20 @@ class RevenueBookingsChart extends ChartWidget
             ];
         }
 
-        $now = now();
+        $now = now('Europe/London');
 
-        // Prefer aggregating from payments if available (matches the working revenue table logic).
-        $paymentsTable = null;
-        foreach (['payments', 'order_payments'] as $pt) {
-            if (Schema::hasTable($pt)) {
-                $paymentsTable = $pt;
-                break;
-            }
-        }
+        // This chart represents realised activity, so use completed orders (not raw payments).
+        // Payments can exist without a completed consultation.
 
-        if ($paymentsTable) {
-            return $this->aggregatePaymentsByPeriod($paymentsTable, $period, $span, $now);
-        }
-
-        // Choose the best timestamp expression to group by.
-        // Some records may have completed_at null even when status is completed.
-        $dateCols = [];
-        foreach (['completed_at', 'paid_at', 'approved_at', 'created_at'] as $c) {
-            if (Schema::hasColumn($t, $c)) {
-                $dateCols[] = $c;
-            }
-        }
-
+        // Use completed_at as the anchor so charts match realised revenue.
+        // Fall back to paid_at, then created_at.
         $dateExpr = null;
-        if (! empty($dateCols)) {
-            $dateExpr = count($dateCols) === 1
-                ? $dateCols[0]
-                : 'COALESCE(' . implode(', ', $dateCols) . ')';
+        if (Schema::hasColumn($t, 'completed_at')) {
+            $dateExpr = 'completed_at';
+        } elseif (Schema::hasColumn($t, 'paid_at')) {
+            $dateExpr = 'paid_at';
+        } elseif (Schema::hasColumn($t, 'created_at')) {
+            $dateExpr = 'created_at';
         }
 
         // Build the numeric revenue expression (covers both columns and JSON meta fallbacks).
@@ -217,15 +202,22 @@ class RevenueBookingsChart extends ChartWidget
             ->selectRaw("{$keyExpr} as k, COUNT(*) as bookings, {$sumExpr} as revenue")
             ->whereBetween(DB::raw($dateExpr), [$rangeStart, $rangeEnd]);
 
-        // Filter logic: prefer paid orders so revenue/booking charts reflect real sales activity.
-        // Many paid orders may still be `status = pending` until reviewed, which would otherwise show as zero.
-        if (Schema::hasColumn($t, 'payment_status')) {
-            $q->where('payment_status', 'paid');
-        } elseif (Schema::hasColumn($t, 'booking_status')) {
-            $q->whereIn('booking_status', ['approved', 'completed']);
-        } elseif (Schema::hasColumn($t, 'status')) {
-            $q->where('status', 'completed');
-        }
+        // Completed-only: realised bookings/revenue.
+        $q->where(function ($w) use ($t) {
+            $w->whereRaw('1=0');
+
+            if (Schema::hasColumn($t, 'status')) {
+                $w->orWhere($t . '.status', 'completed');
+            }
+
+            if (Schema::hasColumn($t, 'booking_status')) {
+                $w->orWhere($t . '.booking_status', 'completed');
+            }
+
+            if (Schema::hasColumn($t, 'completed_at')) {
+                $w->orWhereNotNull($t . '.completed_at');
+            }
+        });
 
         // Soft deletes.
         if (Schema::hasColumn($t, 'deleted_at')) {
@@ -288,10 +280,20 @@ class RevenueBookingsChart extends ChartWidget
         $rangeEnd = null;
         $keyExpr = null;
 
+        // If we can, anchor the period to orders.paid_at so charts match paid activity,
+        // even if the payment record was created slightly earlier/later.
+        $hasOrdersJoin = Schema::hasTable($orders) && (
+            (Schema::hasColumn($pt, 'order_id') && Schema::hasColumn($orders, 'id')) ||
+            (Schema::hasColumn($pt, 'order_reference') && Schema::hasColumn($orders, 'reference'))
+        );
+
+        $anchorCol = $hasOrdersJoin && Schema::hasColumn($orders, 'paid_at') ? ($orders . '.paid_at') : ($pt . '.created_at');
+
+        // Override key expression + range filter to use the anchor column
         if ($period === 'day') {
             $rangeStart = $now->copy()->subDays($span - 1)->startOfDay();
             $rangeEnd = $now->copy()->endOfDay();
-            $keyExpr = "DATE({$pt}.created_at)";
+            $keyExpr = "DATE({$anchorCol})";
 
             for ($i = $span - 1; $i >= 0; $i--) {
                 $d = $now->copy()->subDays($i);
@@ -301,7 +303,7 @@ class RevenueBookingsChart extends ChartWidget
         } elseif ($period === 'week') {
             $rangeStart = $now->copy()->startOfWeek()->subWeeks($span - 1)->startOfDay();
             $rangeEnd = $now->copy()->endOfWeek()->endOfDay();
-            $keyExpr = "YEARWEEK({$pt}.created_at, 3)";
+            $keyExpr = "YEARWEEK({$anchorCol}, 3)";
 
             for ($i = $span - 1; $i >= 0; $i--) {
                 $w = $now->copy()->startOfWeek()->subWeeks($i);
@@ -311,7 +313,7 @@ class RevenueBookingsChart extends ChartWidget
         } elseif ($period === 'month') {
             $rangeStart = $now->copy()->startOfMonth()->subMonths($span - 1)->startOfDay();
             $rangeEnd = $now->copy()->endOfMonth()->endOfDay();
-            $keyExpr = "DATE_FORMAT({$pt}.created_at, '%Y-%m')";
+            $keyExpr = "DATE_FORMAT({$anchorCol}, '%Y-%m')";
 
             for ($i = $span - 1; $i >= 0; $i--) {
                 $m = $now->copy()->startOfMonth()->subMonths($i);
@@ -321,7 +323,7 @@ class RevenueBookingsChart extends ChartWidget
         } else { // year
             $rangeStart = $now->copy()->startOfYear()->subYears($span - 1)->startOfDay();
             $rangeEnd = $now->copy()->endOfYear()->endOfDay();
-            $keyExpr = "YEAR({$pt}.created_at)";
+            $keyExpr = "YEAR({$anchorCol})";
 
             for ($i = $span - 1; $i >= 0; $i--) {
                 $y = $now->copy()->startOfYear()->subYears($i);
@@ -361,7 +363,7 @@ class RevenueBookingsChart extends ChartWidget
 
         $q = DB::table($pt)
             ->selectRaw("{$keyExpr} as k, {$bookingsExpr} as bookings, {$sumExpr} as revenue")
-            ->whereBetween($pt . '.created_at', [$rangeStart, $rangeEnd]);
+            ->whereBetween($anchorCol, [$rangeStart, $rangeEnd]);
 
         // Join orders when we can, so we can reuse existing paid filters if needed
         if (Schema::hasTable($orders)) {
@@ -433,7 +435,7 @@ class RevenueBookingsChart extends ChartWidget
 
         // Use a completion-like timestamp expression when available
         $dateCols = [];
-        foreach (['completed_at', 'paid_at', 'approved_at', 'created_at'] as $c) {
+        foreach (['completed_at', 'paid_at', 'created_at'] as $c) {
             if (Schema::hasColumn($t, $c)) {
                 $dateCols[] = $c;
             }
@@ -452,13 +454,11 @@ class RevenueBookingsChart extends ChartWidget
             $q->whereBetween(DB::raw($dateExpr), [$start, $end]);
         }
 
-        // Prefer paid orders so revenue totals match actual payments.
-        if (Schema::hasColumn($t, 'payment_status')) {
-            $q->where('payment_status', 'paid');
-        } elseif (Schema::hasColumn($t, 'booking_status')) {
-            $q->whereIn('booking_status', ['approved', 'completed']);
-        } elseif (Schema::hasColumn($t, 'status')) {
+        // Completed-only for realised revenue.
+        if (Schema::hasColumn($t, 'status')) {
             $q->where('status', 'completed');
+        } elseif (Schema::hasColumn($t, 'booking_status')) {
+            $q->where('booking_status', 'completed');
         }
 
         if (Schema::hasColumn($t, 'total')) {
@@ -506,7 +506,7 @@ class RevenueBookingsChart extends ChartWidget
 
         // Use an order completion-like timestamp expression when available so counts align with completed orders
         $dateCols = [];
-        foreach (['completed_at', 'paid_at', 'approved_at', 'created_at'] as $c) {
+        foreach (['completed_at', 'paid_at', 'created_at'] as $c) {
             if (Schema::hasColumn($t, $c)) {
                 $dateCols[] = $c;
             }
@@ -525,13 +525,11 @@ class RevenueBookingsChart extends ChartWidget
             $q->whereBetween(DB::raw($dateExpr), [$start, $end]);
         }
 
-        // Prefer paid orders so booking counts align with real activity.
-        if (Schema::hasColumn($t, 'payment_status')) {
-            $q->where('payment_status', 'paid');
-        } elseif (Schema::hasColumn($t, 'booking_status')) {
-            $q->whereIn('booking_status', ['approved', 'completed']);
-        } elseif (Schema::hasColumn($t, 'status')) {
+        // Completed-only so booking counts match realised consultations.
+        if (Schema::hasColumn($t, 'status')) {
             $q->where('status', 'completed');
+        } elseif (Schema::hasColumn($t, 'booking_status')) {
+            $q->where('booking_status', 'completed');
         }
 
         // Soft deletes

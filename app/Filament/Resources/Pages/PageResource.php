@@ -31,7 +31,7 @@ class PageResource extends Resource
     protected static string | \UnitEnum | null $navigationGroup = 'Front';
     protected static string | \BackedEnum | null $navigationIcon = 'heroicon-o-document-text';
     protected static ?string $recordTitleAttribute = 'title';
-    protected static ?int $navigationSort = 10;
+    protected static ?int $navigationSort = 17;
 
     public static function form(Schema $schema): Schema
     {

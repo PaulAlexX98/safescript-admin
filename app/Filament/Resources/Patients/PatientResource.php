@@ -18,7 +18,7 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Filament\Schemas\Schema as FilamentSchema;
 use Filament\Schemas\Components\Section;
-use Filament\Schemas\Components\TextEntry;
+use Filament\Infolists\Components\TextEntry;
 
 class PatientResource extends Resource
 {
@@ -30,7 +30,7 @@ class PatientResource extends Resource
     protected static ?string $modelLabel = 'Patient';
     protected static ?string $recordTitleAttribute = 'name';
     protected static string | \UnitEnum | null $navigationGroup = 'People';
-    protected static ?int $navigationSort = 8;
+    protected static ?int $navigationSort = 10;
 
     public static function form(FilamentSchema $filamentSchema): FilamentSchema
     {

@@ -1592,4 +1592,8 @@ class NhsPendingResource extends Resource
         return redirect()->route('consultations.runner.start', $params);
     }
      
+    public static function getGloballySearchableAttributes(): array
+    {
+        return [];
+    }
 }

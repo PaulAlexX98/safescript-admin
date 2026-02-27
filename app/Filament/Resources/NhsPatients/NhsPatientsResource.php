@@ -32,11 +32,11 @@ class NhsPatientsResource extends Resource
 
     protected static UnitEnum|string|null $navigationGroup = 'People';
     protected static ?string $navigationLabel = 'NHS Patients';
-    protected static ?int $navigationSort = 7;
+    protected static ?int $navigationSort = 10;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
-    protected static ?string $recordTitleAttribute = 'full_name';
+    protected static ?string $recordTitleAttribute = 'id';
 
     public static function getEloquentQuery(): Builder
     {

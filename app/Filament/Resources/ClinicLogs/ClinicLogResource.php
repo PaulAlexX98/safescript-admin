@@ -23,7 +23,7 @@ class ClinicLogResource extends Resource
     protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedClipboardDocumentList;
     protected static ?string $recordTitleAttribute = 'id';
     protected static string | \UnitEnum | null $navigationGroup = 'Logs';
-    protected static ?int $navigationSort = 11;
+    protected static ?int $navigationSort = 21;
 
     public static function form(Schema $schema): Schema
     {

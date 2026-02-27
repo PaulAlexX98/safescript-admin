@@ -233,4 +233,9 @@ class NhsCompletedResource extends Resource
             'index' => Pages\ListNhsCompleteds::route('/'),
         ];
     }
+
+    public static function getGloballySearchableAttributes(): array
+    {
+        return [];
+    }
 }

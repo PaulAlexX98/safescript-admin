@@ -22,7 +22,7 @@ class RejectedOrderResource extends OrderResource
     protected static ?string $navigationLabel  = 'Rejected';
     protected static ?string $pluralLabel      = 'Rejected';
     protected static ?string $modelLabel       = 'Rejected';
-    protected static ?int    $navigationSort   = 32;
+   
     protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedXCircle;
     protected static ?string $model = Order::class;
 

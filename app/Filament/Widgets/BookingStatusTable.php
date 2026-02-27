@@ -90,20 +90,27 @@ class BookingStatusTable extends Base
         }
 
         if ($statusKey === 'unpaid') {
+            // Match Unpaid Orders queue: only payment not taken yet.
+            // Do NOT treat pending approval as unpaid.
             $q->where(function ($w) {
                 $w->whereRaw('1=0');
 
-                if (Schema::hasColumn('orders', 'booking_status')) {
-                    // Only explicit unpaid; DO NOT include pending approval
-                    $w->orWhere('orders.booking_status', 'unpaid');
-                }
                 if (Schema::hasColumn('orders', 'payment_status')) {
                     $w->orWhere('orders.payment_status', 'unpaid');
                 }
-                if (Schema::hasColumn('orders', 'status')) {
-                    $w->orWhere('orders.status', 'unpaid');
+
+                // Legacy fallback: meta.payment_status / payment_status_label
+                if (Schema::hasColumn('orders', 'meta')) {
+                    $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))) = ?", ['unpaid']);
+                    $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))) = ?", ['unpaid']);
                 }
             });
+
+            // Exclude completed/rejected buckets explicitly to prevent overlap
+            if (Schema::hasColumn('orders', 'status')) {
+                $q->whereNotIn('orders.status', ['completed', 'approved', 'paid', 'rejected', 'cancelled', 'canceled', 'declined']);
+            }
+
             return;
         }
 

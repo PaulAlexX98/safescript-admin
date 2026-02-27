@@ -447,4 +447,9 @@ class NhsApprovalResource extends Resource
 
         return ucwords(str_replace(['_', '-'], ' ', $k));
     }
+
+    public static function getGloballySearchableAttributes(): array
+    {
+        return [];
+    }
 }

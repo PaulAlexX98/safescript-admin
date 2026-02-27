@@ -1,16 +1,16 @@
 <?php
 
-namespace App\Filament\Resources\PendingOrders;
+namespace App\Filament\Resources\UnpaidOrders;
 
 use Carbon\Carbon;
 use Throwable;
 use Illuminate\Support\Collection;
 use Filament\Tables\Filters\SelectFilter;
-use App\Filament\Resources\PendingOrders\Pages\CreatePendingOrder;
-use App\Filament\Resources\PendingOrders\Pages\EditPendingOrder;
-use App\Filament\Resources\PendingOrders\Pages\ListPendingOrders;             // Forms components
-use App\Filament\Resources\PendingOrders\Schemas\PendingOrderForm;
-use App\Filament\Resources\PendingOrders\Tables\PendingOrdersTable;
+use App\Filament\Resources\UnpaidOrders\Pages\CreateUnpaidOrder;
+use App\Filament\Resources\UnpaidOrders\Pages\EditUnpaidOrder;
+use App\Filament\Resources\UnpaidOrders\Pages\ListUnpaidOrders;
+use App\Filament\Resources\UnpaidOrders\Schemas\PendingOrderForm;
+use App\Filament\Resources\UnpaidOrders\Tables\PendingOrdersTable;
 use Filament\Actions\Action;
 use App\Models\PendingOrder;
 use App\Models\Appointment;
@@ -45,7 +45,7 @@ use Filament\Tables\Columns\ViewColumn;
 use Filament\Notifications\Notification;
 
 
-class PendingOrderResource extends Resource
+class UnpaidOrderResource extends Resource
 {
     protected static ?string $model = PendingOrder::class;
 
@@ -132,14 +132,14 @@ class PendingOrderResource extends Resource
             ->get();
     }
 
-    protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedClipboardDocumentCheck;
-    protected static string|UnitEnum|null $navigationGroup = 'Private Services';
+protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedBanknotes;
+protected static string|UnitEnum|null $navigationGroup = 'Orders';
 
-    protected static ?string $navigationLabel = 'Pending Approval';
-    protected static ?string $pluralLabel = 'Pending Approval';
-    protected static ?string $modelLabel = 'Pending Approval';
+    protected static ?string $navigationLabel = 'Unpaid Orders';
+    protected static ?string $pluralLabel = 'Unpaid Orders';
+    protected static ?string $modelLabel = 'Unpaid Order';
 
-    protected static ?int $navigationSort = 1;
+    protected static ?int    $navigationSort  = 6;
 
     protected static ?string $recordTitleAttribute = 'reference';
 
@@ -194,7 +194,7 @@ class PendingOrderResource extends Resource
             );
         });
 
-        // Only show PAID orders in this resource (unpaid/initiated belong in the Unpaid tab).
+        // Only show UNPAID orders in this resource.
         try {
             $table = $q->getModel()->getTable();
 
@@ -207,18 +207,18 @@ class PendingOrderResource extends Resource
                 }
 
                 if ($hasCol) {
-                    $w->orWhereRaw('LOWER(payment_status) = ?', ['paid']);
+                    $w->orWhereRaw('LOWER(payment_status) = ?', ['unpaid']);
                 }
 
                 // Fall back to meta values (covers deployments where payment status is stored in JSON).
                 $w->orWhereRaw(
                     "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status'))), '') = ?",
-                    ['paid']
+                    ['unpaid']
                 );
 
                 $w->orWhereRaw(
                     "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status_label'))), '') = ?",
-                    ['paid']
+                    ['unpaid']
                 );
             });
         } catch (\Throwable $e) {
@@ -298,7 +298,7 @@ class PendingOrderResource extends Resource
                     })
                     ->html()
                     ->extraAttributes(['style' => 'text-align:center; width:5rem']),
-                
+
                 TextColumn::make('reference')
                     ->label('Ref')
                     ->searchable()
@@ -306,8 +306,7 @@ class PendingOrderResource extends Resource
                     ->copyable()
                     ->copyMessage('Reference copied')
                     ->toggleable(),
-
-
+                
                 TextColumn::make('created_at')
                     ->label('Order Created')
                     ->dateTime('d M Y, H:i')
@@ -336,8 +335,8 @@ class PendingOrderResource extends Resource
 
                                 if ($slug) {
                                     $fromSlug = ucwords(str_replace(['-', '_'], ' ', $slug));
-                                    // prefer the slug source if meta name is missing or looks generic
-                                    if (!$name || stripos($name, 'weight management') !== false || stripos($name, 'service') !== false) {
+                                    $looksGeneric = !$name || strtolower(trim((string)$name)) === 'service';
+                                    if ($looksGeneric) {
                                         $name = $fromSlug;
                                     }
                                 }
@@ -2171,12 +2170,366 @@ class PendingOrderResource extends Resource
                                 $action->getLivewire()->dispatch('$refresh');
                                 $action->getLivewire()->dispatch('refreshTable');
                             }),
+
+                        Action::make('createAppointment')
+                            ->label('Create Appointment')
+                            ->button()
+                            ->color('success')
+                            ->icon(Heroicon::OutlinedCalendarDays)
+                            ->requiresConfirmation()
+                            ->modalHeading('Create appointment?')
+                            ->modalDescription('This will create an appointment from the date and time shown in this order.')
+                            ->action(function ($record) {
+                                try {
+                                    if (! $record) {
+                                        Notification::make()->title('No record')->danger()->send();
+                                        return;
+                                    }
+
+                                    $ref = (string) ($record->reference ?? '');
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                    // underlying Order (optional)
+                                    $order = null;
+                                    if ($ref !== '') {
+                                        try { $order = Order::query()->where('reference', $ref)->latest('id')->first(); } catch (\Throwable $e) {}
+                                    }
+
+                                    // Prefer the same fields the UI uses (PendingOrder accessor/columns)
+                                    $dtRaw = $record->appointment_at
+                                        ?? $record->appointment_datetime
+                                        ?? data_get($meta, 'appointment_at')
+                                        ?? data_get($meta, 'appointmentAt')
+                                        ?? data_get($meta, 'appointment_datetime')
+                                        ?? data_get($meta, 'appointmentDateTime')
+                                        ?? data_get($meta, 'appointment.date')
+                                        ?? data_get($meta, 'appointment_at_iso')
+                                        ?? null;
+
+                                    if (! $dtRaw) {
+                                        $sid = data_get($meta, 'consultation_session_id')
+                                            ?? data_get($meta, 'consultation.sessionId')
+                                            ?? data_get($meta, 'session_id')
+                                            ?? null;
+
+                                        if ($sid) {
+                                            try {
+                                                $dtRaw = DB::table('consultation_sessions')->where('id', $sid)->value('appointment_at')
+                                                    ?: DB::table('consultation_sessions')->where('id', $sid)->value('scheduled_for');
+                                            } catch (\Throwable $e) {}
+                                        }
+                                    }
+
+                                    // Robust parsing (handles "27 Feb 2026, 16:45")
+                                    $when = null;
+                                    if ($dtRaw) {
+                                        try {
+                                            $when = Carbon::parse($dtRaw);
+                                        } catch (\Throwable $e) {
+                                            try {
+                                                $when = Carbon::createFromFormat('d M Y, H:i', (string) $dtRaw, 'Europe/London');
+                                            } catch (\Throwable $e2) {
+                                                $when = null;
+                                            }
+                                        }
+                                    }
+
+                                    if (! $when) {
+                                        Notification::make()->title('No appointment time')->body('No appointment date/time found on this order.')->danger()->send();
+                                        return;
+                                    }
+
+                                    // Avoid duplicates
+                                    if (DBSchema::hasColumn('appointments', 'order_id') && $order) {
+                                        if (Appointment::query()->where('order_id', $order->id)->exists()) {
+                                            Notification::make()->title('Already has an appointment')->success()->send();
+                                            return;
+                                        }
+                                    }
+                                    if (DBSchema::hasColumn('appointments', 'order_reference') && $ref !== '') {
+                                        if (Appointment::query()->where('order_reference', $ref)->exists()) {
+                                            Notification::make()->title('Already has an appointment')->success()->send();
+                                            return;
+                                        }
+                                    }
+
+                                    $appt = new Appointment();
+
+                                    // Link user/patient/order if columns exist
+                                    if (DBSchema::hasColumn('appointments', 'user_id')) {
+                                        $appt->user_id = $record->user_id ?: optional($record->user)->id ?: ($order->user_id ?? null);
+                                    }
+                                    if (DBSchema::hasColumn('appointments', 'patient_id')) {
+                                        $appt->patient_id = $record->patient_id ?: ($order->patient_id ?? null);
+                                    }
+                                    if (DBSchema::hasColumn('appointments', 'order_id') && $order) {
+                                        $appt->order_id = $order->id;
+                                    }
+                                    if (DBSchema::hasColumn('appointments', 'order_reference') && $ref !== '') {
+                                        $appt->order_reference = $ref;
+                                    }
+
+                                    // Store datetime into whichever column exists
+                                    foreach (['appointment_at', 'scheduled_for', 'starts_at', 'start_at', 'start_time'] as $col) {
+                                        if (DBSchema::hasColumn('appointments', $col)) {
+                                            $appt->{$col} = $when;
+                                            break;
+                                        }
+                                    }
+
+                                    // Default status
+                                    foreach (['status', 'booking_status'] as $col) {
+                                        if (DBSchema::hasColumn('appointments', $col)) {
+                                            $appt->{$col} = 'waiting';
+                                        }
+                                    }
+
+                                    // Service slug
+                                    $serviceSlug = data_get($meta, 'service_slug') ?: data_get($meta, 'serviceSlug') ?: null;
+                                    if (! $serviceSlug && $order) {
+                                        $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                        $serviceSlug = data_get($om, 'service_slug') ?: data_get($om, 'serviceSlug') ?: $serviceSlug;
+                                    }
+                                    foreach (['service_slug', 'service'] as $col) {
+                                        if (DBSchema::hasColumn('appointments', $col) && $serviceSlug) {
+                                            $appt->{$col} = $serviceSlug;
+                                        }
+                                    }
+
+                                    // meta snapshot
+                                    if (DBSchema::hasColumn('appointments', 'meta')) {
+                                        $appt->meta = [
+                                            'source' => 'unpaid_orders',
+                                            'reference' => $ref,
+                                            'service_slug' => $serviceSlug,
+                                            'appointment_at' => $when->toIso8601String(),
+                                        ];
+                                    }
+
+                                    $appt->save();
+
+                                    // Best-effort zoom creation if your Appointment model already supports it
+                                    $appt->save();
+
+                                    // Create Zoom meeting the same way AppointmentResource does
+                                    $joinUrl = null;
+
+                                    if ($order && class_exists(\App\Services\ZoomMeetingService::class)) {
+                                        try {
+                                            // Determine service slug
+                                            $serviceSlug2 = null;
+
+                                            if (is_string($appt->service_slug ?? null) && trim($appt->service_slug) !== '') {
+                                                $serviceSlug2 = trim((string) $appt->service_slug);
+                                            } elseif (is_string($appt->service ?? null) && trim($appt->service) !== '') {
+                                                $serviceSlug2 = Str::slug((string) $appt->service);
+                                            } elseif (is_string($appt->service_name ?? null) && trim($appt->service_name) !== '') {
+                                                $serviceSlug2 = Str::slug((string) $appt->service_name);
+                                            } else {
+                                                $serviceSlug2 = is_string(data_get($meta, 'service_slug') ?? null)
+                                                    ? trim((string) data_get($meta, 'service_slug'))
+                                                    : null;
+                                            }
+
+                                            $weightSlugs = ['weight-management', 'weight-loss', 'mounjaro', 'wegovy'];
+
+                                            if ($serviceSlug2 && in_array($serviceSlug2, $weightSlugs, true)) {
+                                                $zoom = app(\App\Services\ZoomMeetingService::class);
+                                                $zoomInfo = $zoom->createForAppointment($appt, $order);
+
+                                                if (is_array($zoomInfo) && !empty($zoomInfo['join_url'])) {
+                                                    $joinUrl = (string) $zoomInfo['join_url'];
+
+                                                    // Save into appointment meta.zoom
+                                                    if (DBSchema::hasColumn('appointments', 'meta')) {
+                                                        $ameta = $appt->meta;
+
+                                                        if (is_string($ameta)) {
+                                                            $decoded = json_decode($ameta, true);
+                                                            if (is_array($decoded)) {
+                                                                $ameta = $decoded;
+                                                            }
+                                                        }
+
+                                                        if (!is_array($ameta)) {
+                                                            $ameta = [];
+                                                        }
+
+                                                        $ameta['zoom'] = array_replace(
+                                                            $ameta['zoom'] ?? [],
+                                                            [
+                                                                'meeting_id' => $zoomInfo['id'] ?? null,
+                                                                'join_url'   => $zoomInfo['join_url'] ?? null,
+                                                                'start_url'  => $zoomInfo['start_url'] ?? null,
+                                                            ]
+                                                        );
+
+                                                        $appt->meta = $ameta;
+                                                        $appt->save();
+                                                    }
+
+                                                    // Also persist into order meta.zoom (matches reschedule behaviour)
+                                                    $om2 = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                                    if (!is_array($om2)) $om2 = [];
+
+                                                    $om2['zoom'] = array_replace(
+                                                        $om2['zoom'] ?? [],
+                                                        [
+                                                            'meeting_id' => $zoomInfo['id'] ?? null,
+                                                            'join_url'   => $zoomInfo['join_url'] ?? null,
+                                                            'start_url'  => $zoomInfo['start_url'] ?? null,
+                                                        ]
+                                                    );
+
+                                                    $order->meta = $om2;
+                                                    $order->save();
+                                                }
+                                            }
+                                        } catch (\Throwable $ze) {
+                                            \Log::warning('appointment.zoom.create_failed_from_unpaid', [
+                                                'appointment' => $appt->id ?? null,
+                                                'ref' => $ref,
+                                                'error' => $ze->getMessage(),
+                                            ]);
+                                        }
+                                    }
+
+                                    // Email patient about Zoom link (if we have it)
+                                    if ($joinUrl) {
+                                        $email = null;
+
+                                        if (is_string($appt->email ?? null) && trim($appt->email) !== '') {
+                                            $email = trim((string) $appt->email);
+                                        } elseif ($order) {
+                                            $om3 = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                            $email = data_get($om3, 'patient.email')
+                                                ?? data_get($om3, 'customer.email')
+                                                ?? $order->email
+                                                ?? optional($order->user)->email;
+                                            $email = is_string($email) ? trim($email) : null;
+                                        }
+
+                                        if ($email) {
+                                            $whenTxt = $when ? $when->copy()->tz('Europe/London')->format('d M Y, H:i') : null;
+                                            $serviceTxt = $appt->service_name ?? $appt->service ?? (data_get($meta, 'service') ?? '');
+                                            $serviceTxt = is_string($serviceTxt) ? trim($serviceTxt) : '';
+
+                                            $subject = 'Your online consultation link';
+
+                                            $lines = [];
+                                            $lines[] = 'Hello,';
+                                            $lines[] = '';
+                                            $lines[] = 'Your online consultation link is ready' . ($serviceTxt ? " for {$serviceTxt}" : '') . '.';
+                                            if ($whenTxt) $lines[] = "Appointment time: {$whenTxt}";
+                                            $lines[] = '';
+                                            $lines[] = 'Join your Zoom appointment using this link:';
+                                            $lines[] = $joinUrl;
+                                            $lines[] = '';
+                                            $lines[] = 'If you have any questions, please contact the pharmacy.';
+
+                                            $body = implode("\n", $lines);
+
+                                            try {
+                                                $fromAddress = config('mail.from.address') ?: 'info@pharmacy-express.co.uk';
+                                                $fromName    = config('mail.from.name') ?: 'Pharmacy Express';
+
+                                                Mail::raw($body, function ($m) use ($email, $subject, $fromAddress, $fromName) {
+                                                    $m->from($fromAddress, $fromName)->to($email)->subject($subject);
+                                                });
+                                            } catch (\Throwable $me) {
+                                                \Log::warning('appointment.zoom.email_failed_from_unpaid', [
+                                                    'appointment' => $appt->id ?? null,
+                                                    'ref' => $ref,
+                                                    'email' => $email,
+                                                    'error' => $me->getMessage(),
+                                                ]);
+                                            }
+                                        }
+                                    }
+
+                                    Notification::make()
+                                        ->title('Appointment created')
+                                        ->body('Appointment #' . $appt->id . ' created for ' . $when->format('d M Y, H:i'))
+                                        ->success()
+                                        ->send();
+                                } catch (\Throwable $e) {
+                                    Notification::make()
+                                        ->title('Create appointment failed')
+                                        ->body($e->getMessage())
+                                        ->danger()
+                                        ->send();
+                                }
+                            }),
+
                         Action::make('approve')
                             ->label('Approve')
                             ->color('success')
                             ->icon('heroicon-o-check')
                             ->action(function (PendingOrder $record, Action $action) {
                                 // Gate approval for Weight Management NEW orders: require both SCR and ID choices
+                                // Flip unpaid -> paid on approve (pending record + linked Order by reference)
+                                try {
+                                    $now = now();
+
+                                    // 1) Update the pending record itself (if it has payment_status / paid_at)
+                                    try {
+                                        $table = $record->getTable();
+
+                                        if (\Illuminate\Support\Facades\Schema::hasColumn($table, 'payment_status')) {
+                                            if (strtolower((string) ($record->payment_status ?? '')) !== 'paid') {
+                                                $record->payment_status = 'paid';
+                                            }
+                                        }
+
+                                        if (\Illuminate\Support\Facades\Schema::hasColumn($table, 'paid_at')) {
+                                            if (empty($record->paid_at)) {
+                                                $record->paid_at = $now;
+                                            }
+                                        }
+
+                                        // Meta flags (if meta exists)
+                                        $pm = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                        if (is_array($pm)) {
+                                            data_set($pm, 'payment_status', 'paid');
+                                            data_set($pm, 'payment_status_label', 'Paid');
+                                            data_set($pm, 'paid_at', $now->toIso8601String());
+                                            $record->meta = $pm;
+                                        }
+
+                                        $record->save();
+                                    } catch (\Throwable $e) {
+                                        // ignore
+                                    }
+
+                                    // 2) Update the real Order row by reference
+                                    try {
+                                        $ref = (string) ($record->reference ?? '');
+                                        if ($ref !== '') {
+                                            $order = \App\Models\Order::query()->where('reference', $ref)->latest('id')->first();
+                                            if ($order) {
+                                                if (\Illuminate\Support\Facades\Schema::hasColumn($order->getTable(), 'payment_status')) {
+                                                    $order->payment_status = 'paid';
+                                                }
+                                                if (\Illuminate\Support\Facades\Schema::hasColumn($order->getTable(), 'paid_at')) {
+                                                    $order->paid_at = $order->paid_at ?: $now;
+                                                }
+
+                                                $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+                                                if (!is_array($om)) $om = [];
+                                                data_set($om, 'payment_status', 'paid');
+                                                data_set($om, 'payment_status_label', 'Paid');
+                                                data_set($om, 'paid_at', $now->toIso8601String());
+                                                $order->meta = $om;
+
+                                                $order->save();
+                                            }
+                                        }
+                                    } catch (\Throwable $e) {
+                                        // ignore
+                                    }
+                                } catch (\Throwable $e) {
+                                    // ignore
+                                }
                                 try {
                                     /** @var \App\Models\PendingOrder $record */
                                     $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
@@ -2439,7 +2792,7 @@ class PendingOrderResource extends Resource
                                 $action->success();
                                 $action->getLivewire()->dispatch('$refresh');
                                 $action->getLivewire()->dispatch('refreshTable');
-                                return redirect(ListPendingOrders::getUrl());
+                                return redirect(ListUnpaidOrders::getUrl());
                             }),
                         Action::make('reject')
                             ->label('Reject')
@@ -2591,7 +2944,7 @@ class PendingOrderResource extends Resource
                                 $action->getLivewire()->dispatch('$refresh');
                                 $action->getLivewire()->dispatch('refreshTable');
 
-                                return redirect(ListPendingOrders::getUrl());
+                                return redirect(ListUnpaidOrders::getUrl());
                             }),
                             Action::make('addAdminNote')
                                 ->label('Add Admin Note')
@@ -2755,8 +3108,9 @@ class PendingOrderResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index' => ListPendingOrders::route('/'),
-      
+            'index' => Pages\ListUnpaidOrders::route('/'),
+            'create' => Pages\CreateUnpaidOrder::route('/create'),
+            'edit' => Pages\EditUnpaidOrder::route('/{record}/edit'),
         ];
     }
 
@@ -2794,3 +3148,5 @@ class PendingOrderResource extends Resource
         return ['reference'];
     }
 }
+
+    
