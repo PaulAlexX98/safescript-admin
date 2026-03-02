@@ -36,6 +36,8 @@ class AppointmentResource extends Resource
     protected static array $relatedOrderCache = [];
     protected static array $relatedPendingCache = [];
 
+    protected static bool $syncedMissingAppointments = false;
+
     // Sidebar placement
     protected static string | \BackedEnum | null $navigationIcon = 'heroicon-o-calendar';
     protected static ?string $navigationLabel = 'Appointments';
@@ -927,8 +929,164 @@ class AppointmentResource extends Resource
         return parent::getEloquentQuery();
     }
 
+    protected static function syncMissingAppointmentsFromOrders(): void
+    {
+        if (static::$syncedMissingAppointments) {
+            return;
+        }
+        static::$syncedMissingAppointments = true;
+
+        // Only attempt if appointments table has the required columns.
+        try {
+            if (! \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'start_at')) {
+                return;
+            }
+        } catch (\Throwable $e) {
+            return;
+        }
+
+        // Guard: avoid running on pages where the Appointment model isn't available.
+        if (! class_exists(\App\Models\Appointment::class) || ! class_exists(\App\Models\Order::class)) {
+            return;
+        }
+
+        try {
+            // Pull a small batch of pending-ish orders that have appointment_at but no appointment row.
+            // We keep this intentionally conservative to avoid heavy scans.
+            $orders = \App\Models\Order::query()
+                ->select(['id', 'reference', 'email', 'first_name', 'last_name', 'service', 'service_slug', 'meta', 'created_at'])
+                ->where(function ($q) {
+                    $q->where('status', 'pending')
+                      ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status')) = 'pending'");
+                })
+                ->whereRaw("JSON_EXTRACT(meta, '$.appointment_at') is not null")
+                ->whereNotExists(function ($sub) {
+                    $sub->select(\DB::raw('1'))
+                        ->from('appointments')
+                        ->whereColumn('appointments.order_id', 'orders.id')
+                        ->whereNull('appointments.deleted_at');
+                })
+                ->orderByDesc('id')
+                ->limit(100)
+                ->get();
+
+            foreach ($orders as $ord) {
+                $meta = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
+                $apptIso = data_get($meta, 'appointment_at');
+                if (! is_string($apptIso) || trim($apptIso) === '') {
+                    continue;
+                }
+
+                try {
+                    $start = \Carbon\Carbon::parse($apptIso)->setTimezone('UTC');
+                } catch (\Throwable $e) {
+                    continue;
+                }
+
+                // Only create future appointments (avoid backfilling historic data).
+                try {
+                    if ($start->copy()->setTimezone('Europe/London')->lt(now('Europe/London')->subHours(1))) {
+                        continue;
+                    }
+                } catch (\Throwable $e) {
+                    // If timezone calc fails, skip.
+                    continue;
+                }
+
+                $end = $start->copy()->addMinutes(20);
+
+                // Basic service naming.
+                $serviceSlug = is_string($ord->service_slug ?? null) && trim($ord->service_slug) !== ''
+                    ? trim($ord->service_slug)
+                    : (is_string(data_get($meta, 'service_slug')) ? trim((string) data_get($meta, 'service_slug')) : null);
+
+                $serviceName = is_string(data_get($meta, 'service')) ? trim((string) data_get($meta, 'service')) : '';
+                if ($serviceName === '' && $serviceSlug) {
+                    $serviceName = \Illuminate\Support\Str::of($serviceSlug)->replace('-', ' ')->title()->toString();
+                }
+
+                // Create appointment row.
+                $appt = new \App\Models\Appointment();
+
+                // Hard link to order if column exists.
+                try {
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'order_id')) {
+                        $appt->order_id = $ord->id;
+                    }
+                } catch (\Throwable $e) {
+                }
+
+                // Save order reference if available.
+                try {
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'order_reference')) {
+                        $appt->order_reference = $ord->reference;
+                    }
+                } catch (\Throwable $e) {
+                }
+
+                // Core times.
+                $appt->start_at = $start->format('Y-m-d H:i:s');
+                try {
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'end_at')) {
+                        $appt->end_at = $end->format('Y-m-d H:i:s');
+                    }
+                } catch (\Throwable $e) {
+                }
+
+                // Status default (if present) — keep consistent with your preference of new appointments being 'waiting'.
+                try {
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'status')) {
+                        $appt->status = 'waiting';
+                    }
+                } catch (\Throwable $e) {
+                }
+
+                // Patient/contact fields if present.
+                try {
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'email') && is_string($ord->email) && trim($ord->email) !== '') {
+                        $appt->email = trim($ord->email);
+                    }
+                } catch (\Throwable $e) {
+                }
+
+                try {
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'first_name') && is_string($ord->first_name) && trim($ord->first_name) !== '') {
+                        $appt->first_name = trim($ord->first_name);
+                    }
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'last_name') && is_string($ord->last_name) && trim($ord->last_name) !== '') {
+                        $appt->last_name = trim($ord->last_name);
+                    }
+                } catch (\Throwable $e) {
+                }
+
+                // Service fields if present.
+                try {
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'service')) {
+                        $appt->service = $serviceName !== '' ? $serviceName : ($serviceSlug ?? '');
+                    }
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'service_slug') && $serviceSlug) {
+                        $appt->service_slug = $serviceSlug;
+                    }
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'service_name') && $serviceName !== '') {
+                        $appt->service_name = $serviceName;
+                    }
+                } catch (\Throwable $e) {
+                }
+
+                try {
+                    $appt->save();
+                } catch (\Throwable $e) {
+                    // Don't break the page if a single row fails.
+                }
+            }
+        } catch (\Throwable $e) {
+            // Never break the list page.
+        }
+    }
+
     protected static function applyPendingOnlyAppointmentsConstraints(Builder $base): Builder
     {
+        static::syncMissingAppointmentsFromOrders();
         $pendingRefCol = null;
         try {
             $pendingRefCol = \Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'reference')
