@@ -10,6 +10,7 @@ use App\Filament\Widgets\ServicesPerformance;
 use App\Filament\Widgets\DailyRevenueTable;
 use App\Filament\Widgets\WeightManagementAlertsWidget;
 use App\Filament\Widgets\AppointmentsCalendarWidget;
+use App\Filament\Widgets\ClockWidget;
 
 class Dashboard extends Base
 {
@@ -40,14 +41,21 @@ class Dashboard extends Base
         // Note: Filament\Pages\Dashboard does not define mount(), so do not call parent::mount().
     }
 
+    public function getHeaderWidgets(): array
+    {
+        return [
+            ClockWidget::class,
+        ];
+    }
+
     public function getWidgets(): array
     {
         return [
             
             WeightManagementAlertsWidget::class,
             AppointmentsCalendarWidget::class,
-            KpiStats::class,               // KPI tiles at top
-               // left column     
+            KpiStats::class,         
+            
             BookingStatusTable::class,     // full width below the two-column row
             RevenueBookingsChart::class, 
             ServicesPerformance::class, 

@@ -19,6 +19,7 @@ use Guava\Calendar\CalendarPlugin;
 use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
 use App\Filament\Pages\Auth\EditProfile;
 use Filament\Enums\ThemeMode;
+use App\Filament\Widgets\ClockWidget;
 
 
 
@@ -77,6 +78,7 @@ class AdminPanelProvider extends PanelProvider
                 \Guava\Calendar\CalendarPlugin::make(),
             ])
             ->widgets([
+                \App\Filament\Widgets\ClockWidget::class,
                 \App\Filament\Widgets\WeightManagementAlertsWidget::class,
                 \App\Filament\Widgets\AppointmentsCalendarWidget::class,
                 \App\Filament\Widgets\KpiStats::class,
