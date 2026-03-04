@@ -133,7 +133,7 @@ class UnpaidOrderResource extends Resource
     }
 
 protected static string | \BackedEnum | null $navigationIcon = Heroicon::OutlinedBanknotes;
-protected static string|UnitEnum|null $navigationGroup = 'Orders';
+protected static string|UnitEnum|null $navigationGroup = 'Private Services';
 
     protected static ?string $navigationLabel = 'Unpaid Orders';
     protected static ?string $pluralLabel = 'Unpaid Orders';
