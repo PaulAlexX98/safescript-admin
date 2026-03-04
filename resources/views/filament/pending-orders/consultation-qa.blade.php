@@ -32,6 +32,86 @@
     $stateArr = $arr($state ?? []);
     $formsQA  = $arr(data_get($meta, 'formsQA') ?: data_get($meta, 'consultation.formsQA', []));
 
+    // --- Latest-only RAF selection ---
+    // If multiple RAF submissions exist (abandoned + retried), keep ONLY the newest RAF so admin doesn't show duplicates.
+    $pickLatestRaf = function (array $formsQA) use ($arr) {
+        $candidates = [];
+
+        $pushCandidate = function ($node) use (&$candidates, $arr) {
+            $n = $arr($node);
+            if (empty($n)) return;
+
+            // Only consider nodes that actually look like a RAF payload
+            $hasAnswers = is_array(data_get($n, 'answers')) && !empty(data_get($n, 'answers'));
+            $hasQa = is_array(data_get($n, 'qa')) && !empty(data_get($n, 'qa'));
+            if (!($hasAnswers || $hasQa)) return;
+
+            $sid = data_get($n, 'consultation_session_id')
+                ?? data_get($n, 'consultationSessionId')
+                ?? data_get($n, 'session_id')
+                ?? data_get($n, 'sessionId')
+                ?? null;
+
+            $tsRaw = data_get($n, 'submitted_at')
+                ?? data_get($n, 'updated_at')
+                ?? data_get($n, 'created_at')
+                ?? null;
+
+            $ts = 0;
+            if (is_string($tsRaw) && trim($tsRaw) !== '') {
+                try { $ts = \Carbon\Carbon::parse($tsRaw)->timestamp; } catch (\Throwable $e) { $ts = 0; }
+            }
+
+            $candidates[] = ['node' => $n, 'sid' => is_numeric($sid) ? (int) $sid : null, 'ts' => (int) $ts];
+        };
+
+        // Common patterns
+        if (isset($formsQA['raf'])) {
+            $raf = $formsQA['raf'];
+            // raf could be a single object or a list of submissions
+            if (is_array($raf) && isset($raf[0]) && is_array($raf[0])) {
+                foreach ($raf as $entry) { $pushCandidate($entry); }
+            } else {
+                $pushCandidate($raf);
+            }
+        }
+
+        if (isset($formsQA['raf_history']) && is_array($formsQA['raf_history'])) {
+            foreach ($formsQA['raf_history'] as $entry) { $pushCandidate($entry); }
+        }
+
+        // Scan first level keys for raf-like buckets (e.g. raf_1234)
+        foreach ($formsQA as $k => $v) {
+            if (!is_string($k)) continue;
+            if (str_starts_with($k, 'raf_') || $k === 'rafAttempt' || $k === 'raf_attempts') {
+                if (is_array($v) && isset($v[0]) && is_array($v[0])) {
+                    foreach ($v as $entry) { $pushCandidate($entry); }
+                } else {
+                    $pushCandidate($v);
+                }
+            }
+        }
+
+        if (empty($candidates)) return $formsQA;
+
+        // Pick newest: prefer timestamp, otherwise highest session id, otherwise last
+        usort($candidates, function ($a, $b) {
+            if (($a['ts'] ?? 0) !== ($b['ts'] ?? 0)) return ($b['ts'] ?? 0) <=> ($a['ts'] ?? 0);
+            if (($a['sid'] ?? 0) !== ($b['sid'] ?? 0)) return ($b['sid'] ?? 0) <=> ($a['sid'] ?? 0);
+            return 0;
+        });
+
+        $best = $candidates[0]['node'] ?? null;
+        if (is_array($best) && !empty($best)) {
+            $formsQA['raf'] = $best;
+        }
+
+        return $formsQA;
+    };
+
+    $formsQA = $pickLatestRaf($formsQA);
+    // --- /Latest-only RAF selection ---
+
     // formsQA-only finder  no cross-record lookups
     $findQa = function ($node) use (&$findQa, $arr) {
         if ($node instanceof \stdClass) $node = (array) $node;
@@ -249,7 +329,9 @@
             }
         }
 
-        $qa = $findQa($formsQA);
+        if (empty($qa)) {
+            $qa = $findQa($formsQA);
+        }
         if (!empty($qa) && $qaSource === '') { $qaSource = 'formsQA.scan'; }
         if (!empty($qa) && empty($qaKeyUsed)) {
             if (isset($formsQA['reorder'])) { $qaKeyUsed = 'reorder'; }
@@ -1178,16 +1260,33 @@
                 if (!isset($groups[$sectionGroupKey])) {
                     $groups[$sectionGroupKey] = [
                         'title' => $sectionTitlePretty,
+                        'rowsByKey' => [],
                         'rows' => [],
                     ];
                     $groupOrder[] = $sectionGroupKey;
                 }
 
-                $groups[$sectionGroupKey]['rows'][] = [
+                // De-dupe within a section: same question label (or key) should only show once.
+                // Keep the latest occurrence (last one wins).
+                $dedupeKey = \Illuminate\Support\Str::slug((string) $label);
+                if ($dedupeKey === '') {
+                    $dedupeKey = \Illuminate\Support\Str::slug((string) $key);
+                }
+                if ($dedupeKey === '') {
+                    $dedupeKey = 'row-' . $idx;
+                }
+
+                $groups[$sectionGroupKey]['rowsByKey'][$dedupeKey] = [
                     'key' => $key,
                     'label' => $label,
                     'answer' => $answer,
                 ];
+            }
+
+            // Finalise rows list after de-duplication
+            foreach ($groupOrder as $gkFinal) {
+                $by = $groups[$gkFinal]['rowsByKey'] ?? [];
+                $groups[$gkFinal]['rows'] = array_values($by);
             }
         @endphp
 
