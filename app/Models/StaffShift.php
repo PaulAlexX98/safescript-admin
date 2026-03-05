@@ -2,11 +2,14 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class StaffShift extends Model
 {
+    use HasFactory;
+
     protected $fillable = [
         'user_id',
         'created_by',
@@ -14,8 +17,8 @@ class StaffShift extends Model
         'clocked_in_at',
         'clocked_out_at',
         'clock_in_ip',
-        'clock_out_ip',
         'clock_in_ua',
+        'clock_out_ip',
         'clock_out_ua',
     ];
 

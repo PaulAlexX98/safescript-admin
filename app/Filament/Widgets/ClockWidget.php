@@ -5,6 +5,7 @@ namespace App\Filament\Widgets;
 use App\Models\StaffShift;
 use Filament\Notifications\Notification;
 use Filament\Widgets\Widget;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 
 class ClockWidget extends Widget
@@ -12,11 +13,32 @@ class ClockWidget extends Widget
     protected string $view = 'filament.widgets.clock-widget';
     protected int|string|array $columnSpan = 'full';
 
+    public ?string $start_time = null; // HH:MM
+    public ?string $end_time = null;   // HH:MM
+
     public static function canView(): bool
     {
         $u = auth()->user();
 
         return (bool) $u && ((bool) $u->is_pharmacist || (bool) $u->is_staff);
+    }
+
+    public function mount(): void
+    {
+        $now = now()->second(0);
+
+        // Round to nearest 5 minutes.
+        $minute = (int) $now->format('i');
+        $roundedMinute = (int) (round($minute / 5) * 5);
+        if ($roundedMinute === 60) {
+            $now->addHour();
+            $roundedMinute = 0;
+        }
+        $now->minute($roundedMinute);
+
+        $shift = $this->getOpenShift();
+        $this->start_time = $shift?->clocked_in_at?->format('H:i') ?? $now->format('H:i');
+        $this->end_time = $now->copy()->addMinutes(60)->format('H:i');
     }
 
     public function getOpenShift(): ?StaffShift
@@ -27,6 +49,26 @@ class ClockWidget extends Widget
             ->whereNull('clocked_out_at')
             ->latest('clocked_in_at')
             ->first();
+    }
+
+    private function parsePickedTime(?string $time): ?Carbon
+    {
+        if (!$time) return null;
+
+        // Expect HH:MM.
+        if (!preg_match('/^([01]\d|2[0-3]):([0-5]\d)$/', $time, $m)) return null;
+
+        $h = (int) $m[1];
+        $min = (int) $m[2];
+
+        // Enforce 5-minute increments.
+        if (($min % 5) !== 0) return null;
+
+        // Enforce 09:00–18:00 inclusive.
+        $total = $h * 60 + $min;
+        if ($total < (9 * 60) || $total > (18 * 60)) return null;
+
+        return now()->startOfDay()->addMinutes($total);
     }
 
     public function clockIn(): void
@@ -48,7 +90,17 @@ class ClockWidget extends Widget
             return;
         }
 
-        $now = now();
+        $picked = $this->parsePickedTime($this->start_time);
+        if (!$picked) {
+            Notification::make()
+                ->title('Invalid start time')
+                ->body('Choose a start time between 09:00 and 18:00 in 5-minute steps.')
+                ->warning()
+                ->send();
+            return;
+        }
+
+        $now = $picked;
 
         StaffShift::create([
             'user_id' => $u->id,
@@ -73,7 +125,25 @@ class ClockWidget extends Widget
             return;
         }
 
-        $now = now();
+        $picked = $this->parsePickedTime($this->end_time);
+        if (!$picked) {
+            Notification::make()
+                ->title('Invalid end time')
+                ->body('Choose an end time between 09:00 and 18:00 in 5-minute steps.')
+                ->warning()
+                ->send();
+            return;
+        }
+
+        $now = $picked;
+
+        if ($shift->clocked_in_at && $now->lessThanOrEqualTo($shift->clocked_in_at)) {
+            Notification::make()
+                ->title('End time must be after start time')
+                ->warning()
+                ->send();
+            return;
+        }
 
         $shift->update([
             'created_by' => $u->id,
