@@ -64,33 +64,74 @@ class ConsultationPdfController extends Controller
         $email = $patientModel?->email ?? ($meta['email'] ?? $meta['contact_email'] ?? null);
         $phone = $patientModel?->phone ?? ($meta['phone'] ?? $meta['mobile'] ?? $meta['contact_phone'] ?? null);
 
-        // Address (prefer Patient model fields; then fall back to meta/session)
-        $addr1 = $patientModel?->address1
-            ?? $meta['address1'] ?? data_get($meta, 'patient.address1') ?? data_get($session->meta ?? [], 'address1') ?? data_get($session->meta ?? [], 'patient.address1');
+        // Address (prefer shipping recipient address; then Patient model; then patient_snapshot; then meta/session)
+        $ship = data_get($meta, 'shipping.request.items.0.recipient.address', []);
 
-        $addr2 = $patientModel?->address2
-            ?? $meta['address2'] ?? data_get($meta, 'patient.address2') ?? data_get($session->meta ?? [], 'address2') ?? data_get($session->meta ?? [], 'patient.address2');
+        $shipFullName = data_get($ship, 'fullName');
+        $shipAddr1    = data_get($ship, 'addressLine1') ?? data_get($ship, 'address_line1') ?? data_get($ship, 'line1');
+        $shipAddr2    = data_get($ship, 'addressLine2') ?? data_get($ship, 'address_line2') ?? data_get($ship, 'line2');
+        $shipCity     = data_get($ship, 'city');
+        $shipPostcode = data_get($ship, 'postcode');
+        $shipCountry  = data_get($ship, 'country') ?? data_get($ship, 'countryName');
+        $shipCountryCode = data_get($ship, 'countryCode');
 
-        $city  = $patientModel?->city
-            ?? $meta['city'] ?? data_get($meta, 'patient.city') ?? data_get($session->meta ?? [], 'city') ?? data_get($session->meta ?? [], 'patient.city');
-
-        $pc    = $patientModel?->postcode
-            ?? $meta['postcode'] ?? $meta['postal_code'] ?? data_get($meta, 'patient.postcode') ?? data_get($session->meta ?? [], 'postcode') ?? data_get($session->meta ?? [], 'patient.postcode');
-
-        $ctry  = $patientModel?->country
-            ?? $meta['country'] ?? data_get($meta, 'patient.country') ?? data_get($session->meta ?? [], 'country') ?? data_get($session->meta ?? [], 'patient.country');
-
-        $address = trim(collect([$addr1, $addr2, $city, $pc, $ctry])->filter()->implode(', '));
-
-        if ($address === '') {
-            Log::info('PDF patient address empty', [
-                'session_id' => $session->id,
-                'order_id'   => $order?->id,
-                'resolved_patient_id' => $patientModel?->id,
-                'order_has_patient_rel' => (bool) $order?->patient,
-                'order_patient_id' => $order->patient_id ?? null,
-            ]);
+        // If shipping only provides a country code, map GB/UK to United Kingdom
+        if ((!$shipCountry || trim((string) $shipCountry) === '') && $shipCountryCode) {
+            $cc = strtoupper(trim((string) $shipCountryCode));
+            if (in_array($cc, ['GB', 'UK'], true)) {
+                $shipCountry = 'United Kingdom';
+            } else {
+                $shipCountry = $cc;
+            }
         }
+
+        $addr1 = $shipAddr1
+            ?? $patientModel?->address1
+            ?? data_get($meta, 'patient_snapshot.address1')
+            ?? $meta['address1'] ?? data_get($meta, 'patient.address1')
+            ?? data_get($session->meta ?? [], 'address1') ?? data_get($session->meta ?? [], 'patient.address1');
+
+        $addr2 = $shipAddr2
+            ?? $patientModel?->address2
+            ?? data_get($meta, 'patient_snapshot.address2')
+            ?? $meta['address2'] ?? data_get($meta, 'patient.address2')
+            ?? data_get($session->meta ?? [], 'address2') ?? data_get($session->meta ?? [], 'patient.address2');
+
+        $city  = $shipCity
+            ?? $patientModel?->city
+            ?? data_get($meta, 'patient_snapshot.city')
+            ?? $meta['city'] ?? data_get($meta, 'patient.city')
+            ?? data_get($session->meta ?? [], 'city') ?? data_get($session->meta ?? [], 'patient.city');
+
+        // Some datasets use county/state/region; include it if available
+        $county = $patientModel?->county
+            ?? data_get($meta, 'patient_snapshot.county')
+            ?? data_get($meta, 'patient_snapshot.state')
+            ?? data_get($meta, 'patient_snapshot.region')
+            ?? $meta['county'] ?? $meta['state'] ?? $meta['region']
+            ?? data_get($meta, 'patient.county') ?? data_get($meta, 'patient.state') ?? data_get($meta, 'patient.region')
+            ?? data_get($session->meta ?? [], 'county') ?? data_get($session->meta ?? [], 'state') ?? data_get($session->meta ?? [], 'region')
+            ?? data_get($session->meta ?? [], 'patient.county') ?? data_get($session->meta ?? [], 'patient.state') ?? data_get($session->meta ?? [], 'patient.region');
+
+        $pc    = $shipPostcode
+            ?? $patientModel?->postcode
+            ?? data_get($meta, 'patient_snapshot.postcode')
+            ?? $meta['postcode'] ?? $meta['postal_code'] ?? data_get($meta, 'patient.postcode')
+            ?? data_get($session->meta ?? [], 'postcode') ?? data_get($session->meta ?? [], 'patient.postcode');
+
+        $ctry  = $shipCountry
+            ?? $patientModel?->country
+            ?? data_get($meta, 'patient_snapshot.country')
+            ?? $meta['country'] ?? data_get($meta, 'patient.country')
+            ?? data_get($session->meta ?? [], 'country') ?? data_get($session->meta ?? [], 'patient.country');
+
+        $addressParts = collect([$addr1, $addr2, $city, $county, $pc, $ctry])
+            ->filter(fn ($v) => trim((string) $v) !== '')
+            ->values()
+            ->all();
+
+        $address = trim(implode(', ', $addressParts));
+        $addressMultiline = trim(implode("\n", $addressParts));
 
         // Items
         $items = Arr::wrap(
@@ -155,6 +196,8 @@ class ConsultationPdfController extends Controller
                 'email'   => $email,
                 'phone'   => $phone,
                 'address' => $address,
+                'address_multiline' => $addressMultiline,
+                'address_parts' => $addressParts,
             ],
             'pharmacist' => [
                 'name'      => $pharmacistName,
@@ -279,7 +322,7 @@ class ConsultationPdfController extends Controller
     public function prePatient(ConsultationSession $session)
     {
         $data = $this->baseData($session);
-        return Pdf::loadView('pdf.private-prescription-for patients', $data)
+        return Pdf::loadView('pdf.private-prescription-for-patients', $data)
             ->setPaper('a4')
             ->download("{$data['ref']}_private-prescription-patient.pdf");
     }
