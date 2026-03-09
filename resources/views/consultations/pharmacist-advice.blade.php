@@ -359,14 +359,12 @@ Seek urgent medical attention if you experience severe, persistent abdominal pai
 Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
 
 Medication Review:
-- New medication: (weight management)??
+
 - Dose: once weekly injection, same day each week
 - Storage: keep pen in fridge
 
 Clinical Consultation:
 - Weight management consultation
-- First time using or current repeat patient?
-- video call done new patient?
 
 Patient Education:
 - Injection technique: once weekly subcutaneous injection, same day each week
@@ -375,14 +373,15 @@ Patient Education:
 - Rare side effect counselling: pancreatitis symptoms (severe abdominal pain radiating to back, high temperature, vomiting) - seek medical advice immediately
 - Dosing schedule: start with current strength, reorder at end of week three via website, next dose. (either go down up or stay same in strengths)
 - Can remain on current strength if effective and weight loss achieved
--Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.
 
+Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.
 Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.
-
+Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
+Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.
 Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
 
 Plan:
-- Order dispatched today, delivery expected tomorrow
+- Order dispatched today or tomorrow latest 
 - Reorder via website at end of week three for next dose.
 - Continue current strength if effective weight loss achieved
 
