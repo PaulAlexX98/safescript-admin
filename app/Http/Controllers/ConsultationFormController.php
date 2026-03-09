@@ -2046,20 +2046,28 @@ class ConsultationFormController extends Controller
         $body = "Dear Patient,\n\n"
             . "Your order has been approved. Please see the attached documents, which include:\n\n";
 
-        if ($isWeight) {
-            $body .= "Nutrition and lifestyle advice\n"
-                . "What to expect\n"
-                . "Starter pack information\n"
-                . "Your record of supply\n"
-                . "Your invoice\n"
-                . "Notification of treatment to your GP\n\n"
-                . "You will also find a letter addressed to your GP. This letter is a notification of your treatment and it is very important that it is forwarded to your GP. Please ensure you send this on to them at your earliest convenience.\n\n"
-                . "Important safety information\n"
-                . "Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.\n\n"
-                . "Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.\n\n"
+       if ($isWeight) {
+            $body .= "Medication Review:\n\n"
+                . "• Dose: once weekly injection, same day each week\n"
+                . "• Storage: keep pen in fridge\n\n"
+                . "Clinical Consultation:\n"
+                . "• Weight management consultation\n\n"
+                . "Patient Education:\n"
+                . "• Injection technique: once weekly subcutaneous injection, same day each week\n"
+                . "• Fluid intake: 2-3 litres daily to prevent constipation/diarrhoea\n"
+                . "• Side effects discussed: initial nausea and headache (usually resolves), constipation or diarrhoea\n"
+                . "• Rare side effect counselling: pancreatitis symptoms (severe abdominal pain radiating to back, high temperature, vomiting) - seek medical advice immediately\n"
+                . "• Dosing schedule: start with current strength, reorder at end of week three via website, next dose. (either go down up or stay same in strengths)\n"
+                . "• Can remain on current strength if effective and weight loss achieved\n\n"
+                . "Important safety information:\n"
+                . "Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.\n"
+                . "Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.\n"
                 . "Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.\n\n"
-                . "Report suspected side effects through the Yellow Card scheme.\n\n";
-        } else {
+                . "Plan:\n"
+                . "• Order dispatched today or tomorrow latest\n"
+                . "• Reorder via website at end of week three for next dose.\n"
+                . "• Continue current strength if effective weight loss achieved\n\n";
+        }   else {
             $body .= "Your record of supply\n"
                 . "Your invoice\n\n";
         }
