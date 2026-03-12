@@ -252,64 +252,39 @@ class PatientsTable
                         if (!$record) {
                             return new \Illuminate\Support\HtmlString('<p class="text-sm text-gray-500">No record selected</p>');
                         }
-                        // Try to load orders related to the patient.
-                        // Priority: explicit relationship (if it returns rows) -> robust fallback lookup
+                        // Use one direct robust lookup path only. Relationship lookup is skipped here
+                        // because some historical orders are attached by email/meta rather than relation.
+                        $lookupError = null;
                         try {
                             // Pre-compute IDs for strict matching and filtering
                             $uid = optional($record)->user_id ?: optional($record->user)->id;
                             $pid = optional($record)->id;
                             $orders = collect();
 
-                            // 0) Try relationship first, but only trust it if it returns rows
-                            if (method_exists($record, 'orders')) {
-                                try {
-                                    $relRows = $record->orders()
-                                        ->latest('created_at')
-                                        ->take(150)
-                                        ->get(['id','reference','status','payment_status','created_at','meta','user_id']);
-                                    if ($relRows && $relRows->count() > 0) {
-                                        $orders = $relRows;
-                                    }
-                                } catch (\Throwable $e) {
-                                    // ignore and fall through
-                                }
+                            $emails = [];
+                            if (!empty($record->email)) {
+                                $emails[] = strtolower(trim((string) $record->email));
                             }
+                            if (!empty(optional($record->user)->email)) {
+                                $emails[] = strtolower(trim((string) $record->user->email));
+                            }
+                            $emails = array_values(array_unique(array_filter($emails)));
 
-                            if ($orders->isEmpty()) {
-                                // Build a robust lookup using user_id / patient_id / emails / phone
-                                $query = Order::query();
+                            $phone = trim((string) ($record->phone ?? optional($record->user)->phone ?? ''));
+                            $__uid = $uid;
+                            $__pid = $pid;
 
-                                $hasEmailColumn = \Schema::hasColumn('orders', 'email');
+                            $query = Order::query();
+                            $hasEmailColumn = \Schema::hasColumn('orders', 'email');
 
-                                $emails = [];
-
-                                if (!empty($record->email)) {
-                                    $emails[] = strtolower(trim((string) $record->email));
-                                }
-                                if (!empty(optional($record->user)->email)) {
-                                    $emails[] = strtolower(trim((string) $record->user->email));
-                                }
-                                $emails = array_values(array_unique(array_filter($emails)));
-
-                                $phone = trim((string) ($record->phone ?? optional($record->user)->phone ?? ''));
-                                $__uid = $uid;
-                                $__pid = $pid;
-
-                                // Strict precedence:
-                                // 1) If we have user_id or patient_id, match ONLY by those IDs (including JSON meta id paths).
-                                // 2) Otherwise (no IDs available), fall back to emails.
-                                // 3) Finally, fall back to phone if needed.
-                                $haveId = !empty($uid) || !empty($pid);
-
-                                if ($haveId) {
-                                    $query->where(function ($w) use ($uid, $pid) {
-                                        // user id matches (column or JSON)
+                            $query->where(function ($outer) use ($uid, $pid, $emails, $hasEmailColumn) {
+                                if (!empty($uid) || !empty($pid)) {
+                                    $outer->orWhere(function ($w) use ($uid, $pid) {
                                         if (!empty($uid)) {
                                             $w->orWhere('user_id', $uid);
                                             $w->orWhereRaw("JSON_EXTRACT(meta, '$.user_id') = ?", [$uid]);
                                             $w->orWhereRaw("JSON_EXTRACT(meta, '$.user.id') = ?", [$uid]);
                                         }
-                                        // patient id matches (column or JSON)
                                         if (!empty($pid)) {
                                             if (\Schema::hasColumn('orders', 'patient_id')) {
                                                 $w->orWhere('patient_id', $pid);
@@ -318,67 +293,94 @@ class PatientsTable
                                             $w->orWhereRaw("JSON_EXTRACT(meta, '$.patient.id') = ?", [$pid]);
                                         }
                                     });
-                                } else {
-                                    // No IDs available — do not attempt fuzzy matching
-                                    $query->whereRaw('1 = 0');
                                 }
 
-                                try {
-                                    $columns = ['id','reference','status','payment_status','created_at','meta','user_id'];
-                                    if ($hasEmailColumn) $columns[] = 'email';
-                                    $orders = $query
-                                        ->with([])
-                                        ->latest('created_at')
-                                        ->take(150)
-                                        ->get($columns);
-                                } catch (\Throwable $e) {
-                                    \Log::warning('patients.orders.lookup_failed', ['err' => $e->getMessage()]);
-                                    $orders = collect();
+                                if (!empty($emails)) {
+                                    $outer->orWhere(function ($w) use ($emails, $hasEmailColumn) {
+                                        foreach ($emails as $email) {
+                                            if ($hasEmailColumn) {
+                                                $w->orWhereRaw('LOWER(email) = ?', [$email]);
+                                            }
+                                            $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email'))) = ?", [$email]);
+                                            $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.email'))) = ?", [$email]);
+                                            $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.user.email'))) = ?", [$email]);
+                                        }
+                                    });
                                 }
-                            }
-                            // Final guard: keep only orders that match by strict IDs
-                            $orders = $orders->filter(function ($o) use ($uid, $pid) {
+                            });
+
+                            $columns = ['id','reference','status','payment_status','created_at','meta','user_id'];
+                            if ($hasEmailColumn) $columns[] = 'email';
+                            $orders = $query
+                                ->with([])
+                                ->latest('created_at')
+                                ->take(150)
+                                ->get($columns);
+                            // Final guard: keep only orders that match by strict IDs or exact emails used for lookup
+                            $orders = $orders->filter(function ($o) use ($uid, $pid, $emails) {
                                 $meta = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
                                 $match = false;
+
                                 if (!empty($uid)) {
                                     if ((string)($o->user_id ?? '') === (string)$uid) $match = true;
                                     if ((string) data_get($meta, 'user_id') === (string)$uid) $match = true;
                                     if ((string) data_get($meta, 'user.id') === (string)$uid) $match = true;
                                 }
+
                                 if (!empty($pid)) {
                                     if (property_exists($o, 'patient_id') && (string)($o->patient_id ?? '') === (string)$pid) $match = true;
                                     if ((string) data_get($meta, 'patient_id') === (string)$pid) $match = true;
                                     if ((string) data_get($meta, 'patient.id') === (string)$pid) $match = true;
                                 }
+
+                                if (!$match && !empty($emails)) {
+                                    $orderEmails = array_filter([
+                                        strtolower(trim((string) ($o->email ?? ''))),
+                                        strtolower(trim((string) data_get($meta, 'email', ''))),
+                                        strtolower(trim((string) data_get($meta, 'patient.email', ''))),
+                                        strtolower(trim((string) data_get($meta, 'user.email', ''))),
+                                    ]);
+
+                                    foreach ($emails as $email) {
+                                        if (in_array($email, $orderEmails, true)) {
+                                            $match = true;
+                                            break;
+                                        }
+                                    }
+                                }
+
                                 return $match;
                             })->values();
                         } catch (Throwable $e) {
+                            $lookupError = $e->getMessage();
+                            \Log::error('patients.orders.lookup_exception', [
+                                'patient_id' => $record->id ?? null,
+                                'user_id' => $record->user_id ?? null,
+                                'emails' => $emails ?? [],
+                                'err' => $e->getMessage(),
+                            ]);
                             $orders = collect();
                         }
 
                         if (!isset($emails) || !is_array($emails)) $emails = [];
-                        \Log::info('patients.orders.lookup_summary', [
+                        $liveDiag = [
                             'mode' => (!empty($record->user_id) || !empty($record->id)) ? 'id-first' : 'fallback',
                             'patient_id' => $record->id,
                             'user_id' => $record->user_id,
                             'user_email' => optional($record->user)->email,
                             'patient_email' => $record->email,
                             'emails_used' => $emails,
-                            'count' => $orders->count(),
-                        ]);
+                            'lookup_error' => $lookupError,
+                            'count_live' => $orders->count(),
+                            'refs_live' => $orders->pluck('reference')->values()->all(),
+                            'has_rel' => method_exists($record, 'orders') ? 'yes' : 'no',
+                        ];
+
+                        \Log::info('patients.orders.lookup_summary', $liveDiag);
 
                         if ($orders->isEmpty()) {
-                            $diag = [
-                                'patient_id' => $record->id,
-                                'user_id' => $record->user_id,
-                                'user_email' => optional($record->user)->email,
-                                'patient_email' => $record->email,
-                                'has_rel' => method_exists($record, 'orders') ? 'yes' : 'no',
-                            ];
-                            // Show a small grey diagnostics line in the modal to help debug
                             $hint = '<div style="margin-bottom:.5rem;color:#9ca3af;font-size:12px">Lookup used: '
-                                . e(json_encode($diag)) . '</div>';
-                            // Continue with empty message, but include the hint
+                                . e(json_encode($liveDiag)) . '</div>';
                             return new HtmlString($hint . '<p class="text-sm text-gray-500">No orders found for this patient</p>');
                         }
   
@@ -524,8 +526,21 @@ class PatientsTable
                             elseif ($__pid && (property_exists($o, 'patient_id') && (string)$o->patient_id === (string)$__pid)) $src = 'patient_id';
                             elseif ($__pid && ((string)$mPatientId === (string)$__pid)) $src = 'meta.patient_id';
                             else {
-                                // No fallback – we already filtered by strict IDs only
-                                $src = '';
+                                $rowEmails = array_filter([
+                                    strtolower(trim((string) ($o->email ?? ''))),
+                                    strtolower(trim((string) data_get($meta, 'email', ''))),
+                                    strtolower(trim((string) data_get($meta, 'patient.email', ''))),
+                                    strtolower(trim((string) data_get($meta, 'user.email', ''))),
+                                ]);
+                                foreach ($emails as $lookupEmail) {
+                                    if (in_array($lookupEmail, $rowEmails, true)) {
+                                        $src = 'email';
+                                        break;
+                                    }
+                                }
+                                if (!$src) {
+                                    $src = '';
+                                }
                             }
                             $srcBadge = $src ? "<span style=\"margin-left:.35rem;font-size:.65rem;color:#9ca3af;border:1px solid rgba(156,163,175,.35);padding:.05rem .3rem;border-radius:.25rem\">{$src}</span>" : '';
                             $refRaw = (string)($o->reference ?? ('#' . $o->id));
