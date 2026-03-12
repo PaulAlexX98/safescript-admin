@@ -147,10 +147,13 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
     {
         $q = parent::getEloquentQuery();
 
+        $baseTable = $q->getModel()->getTable();
+        $outerTable = $baseTable;
+
         // Only show records that are still pending.
         // Be defensive because deployments may have slightly different column names.
         try {
-            $table = $q->getModel()->getTable();
+            $table = $baseTable;
 
             if (DBSchema::hasColumn($table, 'status')) {
                 $q->whereIn('status', ['pending', 'awaiting', 'waiting']);
@@ -196,7 +199,7 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
 
         // Only show UNPAID orders in this resource.
         try {
-            $table = $q->getModel()->getTable();
+            $table = $baseTable;
 
             $q->where(function (Builder $w) use ($table) {
                 $hasCol = false;
@@ -220,6 +223,41 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                     "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status_label'))), '') = ?",
                     ['unpaid']
                 );
+            });
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
+        // Hide duplicate unpaid records when the same patient already has a paid/completed
+        // order within 7 days of the pending order being created.
+        try {
+            $q->whereNotExists(function ($sub) use ($outerTable) {
+                $sub->selectRaw('1')
+                    ->from('orders as paid_orders')
+                    ->where(function ($paid) use ($outerTable) {
+                        $paid->whereRaw("paid_orders.user_id = {$outerTable}.user_id")
+                            ->orWhereRaw(
+                                "LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.email')), paid_orders.email, '')) = LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT({$outerTable}.meta, '$.email')), ''))"
+                            )
+                            ->orWhereRaw(
+                                "REGEXP_REPLACE(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.phone')), ''), '[^0-9]', '') = REGEXP_REPLACE(COALESCE(JSON_UNQUOTE(JSON_EXTRACT({$outerTable}.meta, '$.phone')), ''), '[^0-9]', '')"
+                            );
+                    })
+                    ->whereRaw("paid_orders.id <> {$outerTable}.id")
+                    ->whereRaw("paid_orders.created_at >= {$outerTable}.created_at")
+                    ->whereRaw("paid_orders.created_at <= DATE_ADD({$outerTable}.created_at, INTERVAL 7 DAY)")
+                    ->where(function ($paid) {
+                        $paid->whereRaw("LOWER(COALESCE(paid_orders.payment_status, '')) = ?", ['paid'])
+                            ->orWhereRaw("LOWER(COALESCE(paid_orders.status, '')) = ?", ['completed'])
+                            ->orWhereRaw(
+                                "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.payment_status'))), '') = ?",
+                                ['paid']
+                            )
+                            ->orWhereRaw(
+                                "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.payment_status_label'))), '') = ?",
+                                ['paid']
+                            );
+                    });
             });
         } catch (\Throwable $e) {
             // ignore
