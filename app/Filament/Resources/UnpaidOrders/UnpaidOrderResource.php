@@ -149,6 +149,7 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
 
         $baseTable = $q->getModel()->getTable();
         $outerTable = $baseTable;
+        $q->orderByDesc($baseTable . '.created_at');
 
         // Only show records that are still pending.
         // Be defensive because deployments may have slightly different column names.
@@ -230,34 +231,30 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
 
         // Hide duplicate unpaid records when the same patient already has a paid/completed
         // order within 7 days of the pending order being created.
+        // Keep this version cheap by matching on user_id only.
         try {
-            $q->whereNotExists(function ($sub) use ($outerTable) {
-                $sub->selectRaw('1')
-                    ->from('orders as paid_orders')
-                    ->where(function ($paid) use ($outerTable) {
-                        $paid->whereRaw("paid_orders.user_id = {$outerTable}.user_id")
-                            ->orWhereRaw(
-                                "LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.email')), paid_orders.email, '')) = LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT({$outerTable}.meta, '$.email')), ''))"
-                            )
-                            ->orWhereRaw(
-                                "REGEXP_REPLACE(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.phone')), ''), '[^0-9]', '') = REGEXP_REPLACE(COALESCE(JSON_UNQUOTE(JSON_EXTRACT({$outerTable}.meta, '$.phone')), ''), '[^0-9]', '')"
-                            );
-                    })
-                    ->whereRaw("paid_orders.id <> {$outerTable}.id")
-                    ->whereRaw("paid_orders.created_at >= {$outerTable}.created_at")
-                    ->whereRaw("paid_orders.created_at <= DATE_ADD({$outerTable}.created_at, INTERVAL 7 DAY)")
-                    ->where(function ($paid) {
-                        $paid->whereRaw("LOWER(COALESCE(paid_orders.payment_status, '')) = ?", ['paid'])
-                            ->orWhereRaw("LOWER(COALESCE(paid_orders.status, '')) = ?", ['completed'])
-                            ->orWhereRaw(
-                                "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.payment_status'))), '') = ?",
-                                ['paid']
-                            )
-                            ->orWhereRaw(
-                                "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.payment_status_label'))), '') = ?",
-                                ['paid']
-                            );
-                    });
+            $q->where(function (Builder $w) use ($outerTable) {
+                $w->whereNull("{$outerTable}.user_id")
+                  ->orWhereNotExists(function ($sub) use ($outerTable) {
+                      $sub->selectRaw('1')
+                          ->from('orders as paid_orders')
+                          ->whereRaw("paid_orders.user_id = {$outerTable}.user_id")
+                          ->whereRaw("paid_orders.id <> {$outerTable}.id")
+                          ->whereRaw("paid_orders.created_at >= {$outerTable}.created_at")
+                          ->whereRaw("paid_orders.created_at <= DATE_ADD({$outerTable}.created_at, INTERVAL 7 DAY)")
+                          ->where(function ($paid) {
+                              $paid->whereRaw("LOWER(COALESCE(paid_orders.payment_status, '')) = ?", ['paid'])
+                                  ->orWhereRaw("LOWER(COALESCE(paid_orders.status, '')) = ?", ['completed'])
+                                  ->orWhereRaw(
+                                      "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.payment_status'))), '') = ?",
+                                      ['paid']
+                                  )
+                                  ->orWhereRaw(
+                                      "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.payment_status_label'))), '') = ?",
+                                      ['paid']
+                                  );
+                          });
+                  });
             });
         } catch (\Throwable $e) {
             // ignore
