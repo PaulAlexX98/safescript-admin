@@ -24,8 +24,12 @@ class WeightManagementAlertsWidget extends Widget
         if (Schema::hasTable('wm_alerts')) {
             return WmAlert::query()
                 ->orderByDesc('created_at')
-                ->limit(10)
                 ->get()
+                ->reject(function ($a) {
+                    $key = (string) ($a->key ?? '');
+                    return $key !== '' && Cache::has('wm_alert_dismissed_' . $key);
+                })
+                ->take(10)
                 ->map(function ($a) {
                     $userId = (int) ($a->user_id ?? 0);
 
@@ -44,9 +48,12 @@ class WeightManagementAlertsWidget extends Widget
                             $q = Order::query()->where('user_id', $userId);
                             $q = $applyWeight($q);
 
-                            if (($a->title ?? null) === 'Registered 3 months ago') {
-                                // First ever weight management order for this user (PWMN)
-                                $q->where('reference', 'like', 'PWMN%')
+                            if (($a->title ?? null) === 'Weight management review due') {
+                                // First ever weight management order for this user (PWMN or PWMR)
+                                $q->where(function ($qq) {
+                                        $qq->where('reference', 'like', 'PWMN%')
+                                           ->orWhere('reference', 'like', 'PWMR%');
+                                    })
                                   ->orderBy('created_at', 'asc');
                             } else {
                                 // Latest WM order for this user (PWMN or PWMR)
@@ -60,14 +67,16 @@ class WeightManagementAlertsWidget extends Widget
                             $order = $q->first();
                         }
 
-                        // Fallback: if alert key contains a reference (registered_3m_PWMNxxxx)
-                        if (! $order && is_string($a->key ?? null) && str_starts_with($a->key, 'registered_3m_')) {
-                            $ref = (string) str_replace('registered_3m_', '', $a->key);
-                            if ($ref !== '') {
-                                $q = Order::query()->where('reference', $ref);
-                                $q = $applyWeight($q);
-                                $order = $q->first();
-                            }
+                        // Fallback: if alert key contains a review key (wm_alert_review_{user}_{months}m)
+                        if (! $order && is_string($a->key ?? null) && str_starts_with($a->key, 'wm_alert_review_') && $userId) {
+                            $q = Order::query()->where('user_id', $userId);
+                            $q = $applyWeight($q);
+                            $q->where(function ($qq) {
+                                    $qq->where('reference', 'like', 'PWMN%')
+                                       ->orWhere('reference', 'like', 'PWMR%');
+                                })
+                              ->orderBy('created_at', 'asc');
+                            $order = $q->first();
                         }
                     } catch (\Throwable $e) {
                         // ignore
@@ -104,7 +113,7 @@ class WeightManagementAlertsWidget extends Widget
                 ->where('notifiable_id', $user->getKey())
                 ->whereIn('data->title', [
                     'No order for 45 days',
-                    'Registered 3 months ago',
+                    'Weight management review due',
                 ])
                 ->orderByDesc('created_at')
                 ->limit(10)
@@ -180,10 +189,21 @@ class WeightManagementAlertsWidget extends Widget
 
     public function dismissAlert(int $id): void
     {
-        if (Schema::hasTable('wm_alerts')) {
-            WmAlert::query()->whereKey($id)->delete();
-            $this->dispatch('wm-alerts-updated');
+        if (! Schema::hasTable('wm_alerts')) {
             return;
         }
+
+        $alert = WmAlert::query()->find($id);
+        if (! $alert) {
+            return;
+        }
+
+        $key = (string) ($alert->key ?? '');
+        if ($key !== '') {
+            Cache::forever('wm_alert_dismissed_' . $key, true);
+        }
+
+        $alert->delete();
+        $this->dispatch('wm-alerts-updated');
     }
 }

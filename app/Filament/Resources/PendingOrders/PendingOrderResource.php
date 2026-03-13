@@ -70,6 +70,90 @@ class PendingOrderResource extends Resource
         return strtoupper(preg_replace('/\s+/', '', trim((string) ($v ?? ''))));
     }
 
+    protected static function isWeightManagementRecord($record): bool
+    {
+        if (! $record) {
+            return false;
+        }
+
+        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+        $ref = strtoupper((string) ($record->reference ?? ''));
+        $slug = strtolower(trim((string) (data_get($meta, 'service_slug') ?? '')));
+
+        return $slug === 'weight-management'
+            || str_starts_with($ref, 'PWMN')
+            || str_starts_with($ref, 'PWMR');
+    }
+
+    protected static function sixMonthReviewBannerForPending($record): ?string
+    {
+        if (! $record || ! static::isWeightManagementRecord($record)) {
+            return null;
+        }
+
+        $userId = (int) ($record->user_id ?? optional($record->user)->id ?? 0);
+        if ($userId < 1) {
+            return null;
+        }
+
+        $wmFilter = function ($query) {
+            return $query->where(function ($q) {
+                $q->where('reference', 'like', 'PWMN%')
+                  ->orWhere('reference', 'like', 'PWMR%')
+                  ->orWhereRaw("LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service_slug')), '')) = ?", ['weight-management']);
+            });
+        };
+
+        $firstOrder = $wmFilter(Order::query()->where('user_id', $userId))
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->first();
+
+        if (! $firstOrder || ! $firstOrder->created_at || ! $record->created_at) {
+            return null;
+        }
+
+        try {
+            $firstAt = Carbon::parse($firstOrder->created_at);
+            $currentAt = Carbon::parse($record->created_at);
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        $daysSinceFirst = (int) floor($firstAt->diffInSeconds($currentAt, false) / 86400);
+        if ($daysSinceFirst < 180) {
+            return null;
+        }
+
+        $cycle = (int) floor($daysSinceFirst / 180);
+        if ($cycle < 1) {
+            return null;
+        }
+
+        $dueAt = $firstAt->copy()->addDays($cycle * 180);
+        $nextDueAt = $firstAt->copy()->addDays(($cycle + 1) * 180);
+
+        $firstOrderAfterDue = $wmFilter(Order::query()->where('user_id', $userId))
+            ->where('created_at', '>=', $dueAt)
+            ->where('created_at', '<', $nextDueAt)
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->first();
+
+        if (! $firstOrderAfterDue) {
+            return null;
+        }
+
+        $currentRef = (string) ($record->reference ?? '');
+        $firstRef = (string) ($firstOrderAfterDue->reference ?? '');
+
+        if ($currentRef === '' || $firstRef === '' || $currentRef !== $firstRef) {
+            return null;
+        }
+
+        return 'This patient is due for their 6-month weight management review.';
+    }
+
     /**
      * Find up to 3 similar users for this pending order (email, phone, name+dob, postcode+lastname, address1+postcode).
      */
@@ -711,6 +795,13 @@ class PendingOrderResource extends Resource
 
                         $html = '<div class="space-y-1">'
                             . '<div><span class="text-xs text-gray-400">Order Ref: ' . $ref . '</span></div>';
+
+                        $reviewBanner = static::sixMonthReviewBannerForPending($record);
+                        if ($reviewBanner) {
+                            $html .= '<div style="margin-top:10px;padding:12px 14px;border-radius:10px;border:1px solid rgba(251,191,36,0.45);background:rgba(245,158,11,0.12);box-shadow:inset 0 0 0 1px rgba(251,191,36,0.08);">'
+                                . '<span style="display:block;font-size:14px;line-height:1.5;font-weight:700;color:#fcd34d;">' . e($reviewBanner) . '</span>'
+                                . '</div>';
+                        }
 
                         try {
                             $matches = static::findSimilarUsersForPending($record);

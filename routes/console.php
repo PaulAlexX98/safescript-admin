@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Schedule;
 
-Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--registered-days=90}', function () {
+Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--registered-days=180}', function () {
     $now = now();
 
     $noOrderDays = (int) ($this->option('no-order-days') ?? 45);
@@ -16,7 +16,7 @@ Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--regi
         $noOrderDays = 45;
     }
 
-    $registeredDays = (int) ($this->option('registered-days') ?? 90);
+    $registeredDays = (int) ($this->option('registered-days') ?? 180);
     if ($registeredDays < 1) {
         $registeredDays = 90;
     }
@@ -95,11 +95,14 @@ Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--regi
         return $query->where('meta->service_slug', 'weight-management');
     };
 
-    // (1) Registered X days ago (ONLY PWMN...) — ONE alert per user, based on their FIRST WM PWMN order
+    // (1) Repeating 6-month review reminders based on the FIRST WM order (PWMN or PWMR)
     $firstByUserQuery = DB::table('orders')
         ->selectRaw('user_id, MIN(created_at) as first_order_at')
         ->whereNotNull('user_id')
-        ->where('reference', 'like', 'PWMN%');
+        ->where(function ($q) {
+            $q->where('reference', 'like', 'PWMN%')
+              ->orWhere('reference', 'like', 'PWMR%');
+        });
 
     if (Schema::hasColumn('orders', 'service_slug')) {
         $firstByUserQuery->where(function ($q) {
@@ -112,8 +115,7 @@ Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--regi
 
     $firstByUser = $firstByUserQuery
         ->groupBy('user_id')
-        ->havingRaw('MIN(created_at) <= ?', [$cutoffRegistered])
-        ->limit(1000)
+        ->limit(5000)
         ->get();
 
     $registeredKeys = [];
@@ -123,10 +125,36 @@ Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--regi
             continue;
         }
 
-        // Fetch the actual first order record for patientLine() + View button logic
+        $firstOrderAt = null;
+        try {
+            $firstOrderAt = \Carbon\Carbon::parse($row->first_order_at);
+        } catch (\Throwable $e) {
+            $firstOrderAt = null;
+        }
+
+        if (! $firstOrderAt) {
+            continue;
+        }
+
+        $daysSince = (int) floor($firstOrderAt->diffInSeconds($now) / 86400);
+        if ($daysSince < 180) {
+            continue;
+        }
+
+        $cycle = (int) floor($daysSince / 180);
+        if ($cycle < 1) {
+            continue;
+        }
+
+        $monthsDue = $cycle * 6;
+
+        // Fetch the actual first WM order record for patientLine() + View button logic
         $firstOrderQuery = Order::query()
             ->where('user_id', $userId)
-            ->where('reference', 'like', 'PWMN%')
+            ->where(function ($q) {
+                $q->where('reference', 'like', 'PWMN%')
+                  ->orWhere('reference', 'like', 'PWMR%');
+            })
             ->where('created_at', $row->first_order_at)
             ->orderBy('id', 'asc');
 
@@ -137,30 +165,18 @@ Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--regi
             continue;
         }
 
-        $daysSince = (int) $registeredDays;
-        try {
-            // Force integer day count (avoid any float output)
-            $daysSince = (int) floor(\Carbon\Carbon::parse($order->created_at)->diffInSeconds($now) / 86400);
-            if ($daysSince < 0) {
-                $daysSince = 0;
-            }
-        } catch (\Throwable $e) {
-            $daysSince = (int) $registeredDays;
-        }
-
-        // Display wording: show “3 months” when the *actual* age is >= 90 days (eg 92 days)
-        $titleLabel = ($daysSince >= 90) ? '3 months' : ($daysSince . ' days');
-        $actualLabel = $daysSince . ' days';
-
-        // ONE alert per user (keeps updating in place, does not spam)
-        $key = 'registered_' . $userId;
+        $key = 'wm_alert_review_' . $userId . '_' . $monthsDue . 'm';
         $registeredKeys[] = $key;
+
+        if (cache()->has('wm_alert_dismissed_' . $key)) {
+            continue;
+        }
 
         $pushAlert(
             $key,
             $userId,
-            'Registered ' . $titleLabel . ' ago',
-            $patientLine($order) . ' was registered ' . $titleLabel . ' ago (first WM order was ' . $actualLabel . ' ago)',
+            'Weight management review due',
+            $patientLine($order) . ' is due for their ' . $monthsDue . '-month weight management review. First WM order: ' . ((string) ($order->reference ?? '—')) . ' on ' . $firstOrderAt->copy()->tz('Europe/London')->format('d M Y'),
             'info'
         );
     }
@@ -216,6 +232,10 @@ Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--regi
         $key = 'no_order_' . $userId . '_' . $weekKey;
         $noOrderKeys[] = $key;
 
+        if (cache()->has('wm_alert_dismissed_' . $key)) {
+            continue;
+        }
+
         // Fixed threshold wording for the pill title (use “45 days” when configured)
         $titleLabel = ($noOrderDays === 45) ? '45 days' : ($noOrderDays . ' days');
 
@@ -251,10 +271,10 @@ Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--regi
 
     // Cleanup: remove stale alerts that no longer match current computation
     try {
-        // Registered: keep only registered_* keys we computed this run
+        // Review reminders: keep only wm_alert_review_* keys we computed this run
         if (! empty($registeredKeys)) {
             WmAlert::query()
-                ->where('key', 'like', 'registered_%')
+                ->where('key', 'like', 'wm_alert_review_%')
                 ->whereNotIn('key', $registeredKeys)
                 ->delete();
         }
@@ -272,12 +292,12 @@ Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--regi
 
     $this->info('Weight management alerts processed.');
     return 0;
-})->purpose('Send admin notifications for weight management inactivity and 3-month registration.');
+})->purpose('Send admin notifications for weight management inactivity and repeating 6-month review reminders.');
 
 // Scheduling
 // Local testing: run every minute but with real thresholds
 if (app()->environment('local')) {
-    Schedule::command('alerts:weight-management-patients --no-order-days=45 --registered-days=90')->everyMinute();
+    Schedule::command('alerts:weight-management-patients --no-order-days=45 --registered-days=180')->everyMinute();
 } else {
     // Production run daily at 09:00
     Schedule::command('alerts:weight-management-patients')->dailyAt('09:00');

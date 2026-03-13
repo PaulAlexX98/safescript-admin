@@ -24,7 +24,7 @@
                         <x-filament::icon icon="heroicon-o-bell-alert" class="h-5 w-5 text-gray-500 dark:text-gray-300 mt-0.5" />
                         <div>
                             <div class="text-sm font-medium text-gray-900 dark:text-white">No alerts right now</div>
-                            <div class="mt-1 text-xs text-gray-600 dark:text-gray-300">Alerts will appear here when a patient has not ordered for 45 days or was registered 3 months ago.</div>
+                            <div class="mt-1 text-xs text-gray-600 dark:text-gray-300">Alerts will appear here when a patient has not ordered for 45 days or was registered 6 months ago.</div>
                         </div>
                     </div>
                 </div>

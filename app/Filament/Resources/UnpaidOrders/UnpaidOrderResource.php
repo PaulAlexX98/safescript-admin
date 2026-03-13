@@ -3129,6 +3129,35 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                                 $action->success();
                             }),
                     ]),
+
+                    Action::make('deleteOrder')
+        ->label('Delete')
+        ->button()
+        ->color('danger')
+        ->requiresConfirmation()
+        ->modalHeading('Delete unpaid order')
+        ->modalDescription(fn ($record) => 'Are you sure you want to delete unpaid order ' . ($record->reference ?? '—') . '? This cannot be undone.')
+        ->modalSubmitActionLabel('Delete')
+        ->action(function ($record) {
+            if (! $record) {
+                return;
+            }
+
+            try {
+                $record->delete();
+
+                Notification::make()
+                    ->title('Unpaid order deleted')
+                    ->success()
+                    ->send();
+            } catch (\Throwable $e) {
+                Notification::make()
+                    ->title('Failed to delete unpaid order')
+                    ->body($e->getMessage())
+                    ->danger()
+                    ->send();
+            }
+        }),
             ])
             ->defaultSort('created_at', 'desc');
     }
