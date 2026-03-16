@@ -392,8 +392,8 @@ class PendingOrderResource extends Resource
                     ->toggleable(),
 
 
-                TextColumn::make('created_at')
-                    ->label('Order Created')
+                TextColumn::make('paid_at')
+                    ->label('Paid At')
                     ->dateTime('d M Y, H:i')
                     ->sortable()
                     ->toggleable(),
