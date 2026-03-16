@@ -201,7 +201,7 @@ Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--regi
 
     $lastByUser = $lastByUserQuery
         ->groupBy('user_id')
-        ->havingRaw('MAX(created_at) < ?', [$cutoffNoOrder])
+        ->havingRaw('MAX(CASE WHEN status = ? THEN created_at END) IS NULL OR MAX(CASE WHEN status = ? THEN created_at END) < ?', ['pending', 'pending', $cutoffNoOrder])
         ->limit(5000)
         ->get();
 
@@ -218,6 +218,7 @@ Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--regi
                 $q->where('reference', 'like', 'PWMN%')
                   ->orWhere('reference', 'like', 'PWMR%');
             })
+            ->where('status', 'pending')
             ->orderByDesc('created_at');
 
         $orderQuery = $applyWeightManagementFilter($orderQuery);
@@ -239,7 +240,7 @@ Artisan::command('alerts:weight-management-patients {--no-order-days=45} {--regi
         // Fixed threshold wording for the pill title (use “45 days” when configured)
         $titleLabel = ($noOrderDays === 45) ? '45 days' : ($noOrderDays . ' days');
 
-        // Display actual inactivity days since last WM order
+        // Display actual inactivity days since last pending WM order
         $daysSinceLast = (int) $noOrderDays;
         try {
             $daysSinceLast = (int) floor(\Carbon\Carbon::parse($order->created_at)->diffInSeconds($now) / 86400);
