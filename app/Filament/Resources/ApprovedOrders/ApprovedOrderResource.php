@@ -64,7 +64,7 @@ class ApprovedOrderResource extends Resource
     {
         return $table
             
-            ->defaultSort('created_at', 'desc')
+            ->defaultSort('paid_at', 'desc')
             ->columns([
 
                 TextColumn::make('patient_priority_dot')

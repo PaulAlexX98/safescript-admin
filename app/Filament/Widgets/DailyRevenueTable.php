@@ -54,7 +54,7 @@ class DailyRevenueTable extends Base
             }
 
             $inner = $q
-                ->selectRaw('DATE(payments.created_at) as day')
+                ->selectRaw('DATE(payments.paid_at) as day')
                 ->selectRaw("$paymentAmountExpr as revenue")
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
                 ->selectRaw('MIN(orders.id) as id')
@@ -91,7 +91,7 @@ class DailyRevenueTable extends Base
             $inner = Order::query()->withoutGlobalScopes()
                 ->leftJoin('order_items', 'order_items.order_id', '=', 'orders.id')
                 ->tap(fn (Builder $q) => $this->applyPaidOnlyFilter($q))
-                ->selectRaw('DATE(orders.created_at) as day')
+                ->selectRaw('DATE(orders.paid_at) as day')
                 ->selectRaw("$itemExpr as revenue")
                 ->selectRaw('COUNT(DISTINCT orders.id) as bookings')
                 ->selectRaw('MIN(orders.id) as id')
@@ -109,7 +109,7 @@ class DailyRevenueTable extends Base
         // Default path: sum from orders table
         $inner = Order::query()->withoutGlobalScopes()
             ->tap(fn (Builder $q) => $this->applyPaidOnlyFilter($q))
-            ->selectRaw('DATE(orders.created_at) as day')
+            ->selectRaw('DATE(orders.paid_at) as day')
             ->selectRaw("$sumExpr as revenue")
             ->selectRaw('COUNT(*) as bookings')
             ->selectRaw('MIN(orders.id) as id')

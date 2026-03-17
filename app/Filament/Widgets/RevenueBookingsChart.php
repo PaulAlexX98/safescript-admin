@@ -97,15 +97,10 @@ class RevenueBookingsChart extends ChartWidget
         // This chart represents realised activity, so use completed orders (not raw payments).
         // Payments can exist without a completed consultation.
 
-        // Use completed_at as the anchor so charts match realised revenue.
-        // Fall back to paid_at, then created_at.
+        // Use paid_at as the only anchor so charts match paid revenue.
         $dateExpr = null;
-        if (Schema::hasColumn($t, 'completed_at')) {
-            $dateExpr = 'completed_at';
-        } elseif (Schema::hasColumn($t, 'paid_at')) {
+        if (Schema::hasColumn($t, 'paid_at')) {
             $dateExpr = 'paid_at';
-        } elseif (Schema::hasColumn($t, 'created_at')) {
-            $dateExpr = 'created_at';
         }
 
         // Build the numeric revenue expression (covers both columns and JSON meta fallbacks).
@@ -202,20 +197,20 @@ class RevenueBookingsChart extends ChartWidget
             ->selectRaw("{$keyExpr} as k, COUNT(*) as bookings, {$sumExpr} as revenue")
             ->whereBetween(DB::raw($dateExpr), [$rangeStart, $rangeEnd]);
 
-        // Completed-only: realised bookings/revenue.
+        // Paid-only: chart revenue/bookings by paid date.
         $q->where(function ($w) use ($t) {
             $w->whereRaw('1=0');
 
-            if (Schema::hasColumn($t, 'status')) {
-                $w->orWhere($t . '.status', 'completed');
+            if (Schema::hasColumn($t, 'payment_status')) {
+                $w->orWhereRaw('LOWER(' . $t . '.payment_status) = ?', ['paid']);
             }
 
-            if (Schema::hasColumn($t, 'booking_status')) {
-                $w->orWhere($t . '.booking_status', 'completed');
+            if (Schema::hasColumn($t, 'paid_at')) {
+                $w->orWhereNotNull($t . '.paid_at');
             }
 
-            if (Schema::hasColumn($t, 'completed_at')) {
-                $w->orWhereNotNull($t . '.completed_at');
+            if (Schema::hasColumn($t, 'meta')) {
+                $w->orWhereRaw('LOWER(JSON_UNQUOTE(JSON_EXTRACT(' . $t . '.meta, "$.payment_status"))) = ?', ['paid']);
             }
         });
 
@@ -287,7 +282,9 @@ class RevenueBookingsChart extends ChartWidget
             (Schema::hasColumn($pt, 'order_reference') && Schema::hasColumn($orders, 'reference'))
         );
 
-        $anchorCol = $hasOrdersJoin && Schema::hasColumn($orders, 'paid_at') ? ($orders . '.paid_at') : ($pt . '.created_at');
+        $anchorCol = $hasOrdersJoin && Schema::hasColumn($orders, 'paid_at')
+            ? ($orders . '.paid_at')
+            : (Schema::hasColumn($pt, 'paid_at') ? ($pt . '.paid_at') : ($pt . '.created_at'));
 
         // Override key expression + range filter to use the anchor column
         if ($period === 'day') {
@@ -433,9 +430,9 @@ class RevenueBookingsChart extends ChartWidget
             return 0;
         }
 
-        // Use a completion-like timestamp expression when available
+        // Use paid_at only so revenue matches paid activity
         $dateCols = [];
-        foreach (['completed_at', 'paid_at', 'created_at'] as $c) {
+        foreach (['paid_at'] as $c) {
             if (Schema::hasColumn($t, $c)) {
                 $dateCols[] = $c;
             }
@@ -454,12 +451,22 @@ class RevenueBookingsChart extends ChartWidget
             $q->whereBetween(DB::raw($dateExpr), [$start, $end]);
         }
 
-        // Completed-only for realised revenue.
-        if (Schema::hasColumn($t, 'status')) {
-            $q->where('status', 'completed');
-        } elseif (Schema::hasColumn($t, 'booking_status')) {
-            $q->where('booking_status', 'completed');
-        }
+        // Paid-only for realised revenue.
+        $q->where(function ($w) use ($t) {
+            $w->whereRaw('1=0');
+
+            if (Schema::hasColumn($t, 'payment_status')) {
+                $w->orWhereRaw('LOWER(' . $t . '.payment_status) = ?', ['paid']);
+            }
+
+            if (Schema::hasColumn($t, 'paid_at')) {
+                $w->orWhereNotNull($t . '.paid_at');
+            }
+
+            if (Schema::hasColumn($t, 'meta')) {
+                $w->orWhereRaw('LOWER(JSON_UNQUOTE(JSON_EXTRACT(' . $t . '.meta, "$.payment_status"))) = ?', ['paid']);
+            }
+        });
 
         if (Schema::hasColumn($t, 'total')) {
             return (float) $q->sum('total');
@@ -504,9 +511,9 @@ class RevenueBookingsChart extends ChartWidget
             return 0;
         }
 
-        // Use an order completion-like timestamp expression when available so counts align with completed orders
+        // Use paid_at only so booking counts align with paid orders
         $dateCols = [];
-        foreach (['completed_at', 'paid_at', 'created_at'] as $c) {
+        foreach (['paid_at'] as $c) {
             if (Schema::hasColumn($t, $c)) {
                 $dateCols[] = $c;
             }
@@ -525,12 +532,22 @@ class RevenueBookingsChart extends ChartWidget
             $q->whereBetween(DB::raw($dateExpr), [$start, $end]);
         }
 
-        // Completed-only so booking counts match realised consultations.
-        if (Schema::hasColumn($t, 'status')) {
-            $q->where('status', 'completed');
-        } elseif (Schema::hasColumn($t, 'booking_status')) {
-            $q->where('booking_status', 'completed');
-        }
+        // Paid-only so booking counts match paid orders.
+        $q->where(function ($w) use ($t) {
+            $w->whereRaw('1=0');
+
+            if (Schema::hasColumn($t, 'payment_status')) {
+                $w->orWhereRaw('LOWER(' . $t . '.payment_status) = ?', ['paid']);
+            }
+
+            if (Schema::hasColumn($t, 'paid_at')) {
+                $w->orWhereNotNull($t . '.paid_at');
+            }
+
+            if (Schema::hasColumn($t, 'meta')) {
+                $w->orWhereRaw('LOWER(JSON_UNQUOTE(JSON_EXTRACT(' . $t . '.meta, "$.payment_status"))) = ?', ['paid']);
+            }
+        });
 
         // Soft deletes
         if (Schema::hasColumn($t, 'deleted_at')) {
