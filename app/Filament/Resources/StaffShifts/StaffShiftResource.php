@@ -21,13 +21,13 @@ class StaffShiftResource extends Resource
     protected static ?string $model = StaffShift::class;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedClock;
-    protected static ?string $navigationLabel = 'Pharmacist Check In';
+    protected static ?string $navigationLabel = 'Responsible Pharmacist Log';
     
-    protected static ?string $modelLabel = 'Check In';
-    protected static ?string $pluralModelLabel = 'Pharmacist Check In';
+    protected static ?string $modelLabel = 'Logs';
+    protected static ?string $pluralModelLabel = 'Responsible Pharmacist Log';
 
     // Put it under Operations (as you asked)
-    protected static string|\UnitEnum|null $navigationGroup = 'Operations';
+    protected static string|\UnitEnum|null $navigationGroup = 'Logs';
 
     // Optional: control ordering in the sidebar
     protected static ?int $navigationSort = 30;
