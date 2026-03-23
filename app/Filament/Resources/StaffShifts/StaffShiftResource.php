@@ -51,29 +51,41 @@ class StaffShiftResource extends Resource
                 Tables\Columns\TextColumn::make('user_display')
                     ->label('Staff')
                     ->getStateUsing(function (StaffShift $record) {
+                        $shiftName = $record->getAttribute('pharmacist_name') ?: data_get($record->attributesToArray(), 'pharmacist_name');
+                        if (filled($shiftName)) {
+                            return $shiftName;
+                        }
+
                         $u = $record->user;
                         if (!$u) return '—';
+
                         return $u->pharmacist_display_name
                             ?: $u->name
                             ?: trim(($u->first_name ?? '') . ' ' . ($u->last_name ?? ''))
                             ?: '—';
                     })
                     ->searchable(query: function (Builder $query, string $search) {
-                        // Search user fields
-                        $query->whereHas('user', function (Builder $q) use ($search) {
-                            $q->where('name', 'like', "%{$search}%")
-                                ->orWhere('email', 'like', "%{$search}%")
-                                ->orWhere('first_name', 'like', "%{$search}%")
-                                ->orWhere('last_name', 'like', "%{$search}%")
-                                ->orWhere('pharmacist_display_name', 'like', "%{$search}%")
-                                ->orWhere('gphc_number', 'like', "%{$search}%");
+                        $query->where(function (Builder $q) use ($search) {
+                            $q->where('pharmacist_name', 'like', "%{$search}%")
+                                ->orWhere('gphc_number', 'like', "%{$search}%")
+                                ->orWhereHas('user', function (Builder $uq) use ($search) {
+                                    $uq->where('name', 'like', "%{$search}%")
+                                        ->orWhere('email', 'like', "%{$search}%")
+                                        ->orWhere('first_name', 'like', "%{$search}%")
+                                        ->orWhere('last_name', 'like', "%{$search}%")
+                                        ->orWhere('pharmacist_display_name', 'like', "%{$search}%")
+                                        ->orWhere('gphc_number', 'like', "%{$search}%");
+                                });
                         });
                     }),
 
-                Tables\Columns\TextColumn::make('user.gphc_number')
+                Tables\Columns\TextColumn::make('gphc_display')
                     ->label('Reg no')
-                    ->toggleable()
-                    ->placeholder('—'),
+                    ->getStateUsing(function (StaffShift $record) {
+                        $shiftReg = $record->getAttribute('gphc_number') ?: data_get($record->attributesToArray(), 'gphc_number');
+                        return $shiftReg ?: ($record->user?->gphc_number ?: '—');
+                    })
+                    ->toggleable(),
 
                 Tables\Columns\TextColumn::make('clocked_in_at')
                     ->label('Clock in')
@@ -204,9 +216,19 @@ class StaffShiftResource extends Resource
 
             Section::make('Staff')
                 ->schema([
-                    TextEntry::make('user.name')->label('Name')->placeholder('—'),
+                    TextEntry::make('pharmacist_name')
+                        ->label('Name')
+                        ->getStateUsing(function (StaffShift $record) {
+                            $shiftName = $record->getAttribute('pharmacist_name') ?: data_get($record->attributesToArray(), 'pharmacist_name');
+                            return $shiftName ?: ($record->user?->name ?: '—');
+                        }),
                     TextEntry::make('user.email')->label('Email')->placeholder('—'),
-                    TextEntry::make('user.gphc_number')->label('Reg no')->placeholder('—'),
+                    TextEntry::make('gphc_number')
+                        ->label('Reg no')
+                        ->getStateUsing(function (StaffShift $record) {
+                            $shiftReg = $record->getAttribute('gphc_number') ?: data_get($record->attributesToArray(), 'gphc_number');
+                            return $shiftReg ?: ($record->user?->gphc_number ?: '—');
+                        }),
                 ])
                 ->columns(2),
 

@@ -5,11 +5,6 @@
             $u = auth()->user();
             $shift = $this->getOpenShift();
 
-            $displayName = $u?->pharmacist_display_name
-                ?: $u?->name
-                ?: trim(($u?->first_name ?? '') . ' ' . ($u?->last_name ?? ''));
-
-            $reg = $u?->gphc_number ?: null;
             $today = now()->format('d M Y');
         @endphp
 
@@ -19,40 +14,61 @@
                     <div class="text-xs text-gray-500">Time clock</div>
                     <div class="mt-2"></div>
 
-                    <div class="flex flex-wrap items-center gap-y-2">
-                        <div class="truncate text-base font-semibold text-gray-900 dark:text-white">
-                            {{ $displayName ?: '—' }}
+                    <div class="space-y-4 max-w-[760px]">
+                        <div class="grid gap-1.5">
+                            <div class="text-xs text-gray-500">Name</div>
+                            <div class="flex flex-wrap items-center gap-3">
+                                <input
+                                    type="text"
+                                    wire:model.defer="pharmacist_name"
+                                    placeholder="Enter pharmacist name"
+                                    style="background:#fff;color:#000;"
+                                    class="w-[320px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-black shadow-sm placeholder:text-gray-500 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/25 dark:border-gray-600 dark:bg-white dark:text-black"
+                                />
+                                <x-filament::badge size="sm" color="gray" class="whitespace-nowrap">
+                                    {{ ($this->pharmacist_name ?? null) ? $this->pharmacist_name : '—' }}
+                                </x-filament::badge>
+                            </div>
                         </div>
-                        <span style="display:inline-block;width:16px;height:1px"></span>
 
-                        @if($reg)
-                            <x-filament::badge size="sm" color="gray" class="whitespace-nowrap">
-                                {{ $reg }}
-                            </x-filament::badge>
-                        @else
-                            <x-filament::badge size="sm" color="warning" class="whitespace-nowrap">
-                                Reg missing
-                            </x-filament::badge>
-                        @endif
-                        <span style="display:inline-block;width:16px;height:1px"></span>
+                        <div class="grid gap-1.5">
+                            <div class="text-xs text-gray-500">GPhC</div>
+                            <div class="flex flex-wrap items-center gap-3">
+                                <input
+                                    type="text"
+                                    wire:model.defer="pharmacist_reg"
+                                    placeholder="Enter GPhC number"
+                                    style="background:#fff;color:#000;"
+                                    class="w-[320px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-black shadow-sm placeholder:text-gray-500 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/25 dark:border-gray-600 dark:bg-white dark:text-black"
+                                />
+                                @if(($this->pharmacist_reg ?? null))
+                                    <x-filament::badge size="sm" color="gray" class="whitespace-nowrap">
+                                        {{ $this->pharmacist_reg }}
+                                    </x-filament::badge>
+                                @else
+                                    <x-filament::badge size="sm" color="warning" class="whitespace-nowrap">
+                                        Reg missing
+                                    </x-filament::badge>
+                                @endif
 
-                        <x-filament::badge size="sm" color="gray" class="whitespace-nowrap">
-                            {{ $today }}
-                        </x-filament::badge>
-                        <span style="display:inline-block;width:16px;height:1px"></span>
+                                <x-filament::badge size="sm" color="gray" class="whitespace-nowrap">
+                                    {{ $today }}
+                                </x-filament::badge>
 
-                        @if($shift)
-                            <x-filament::badge size="sm" color="success" class="whitespace-nowrap">
-                                In {{ $shift->clocked_in_at?->format('H:i') }}
-                            </x-filament::badge>
-                        @else
-                            <x-filament::badge size="sm" color="gray" class="whitespace-nowrap">
-                                Not clocked in
-                            </x-filament::badge>
-                        @endif
+                                @if($shift)
+                                    <x-filament::badge size="sm" color="success" class="whitespace-nowrap">
+                                        In {{ $shift->clocked_in_at?->format('H:i') }}
+                                    </x-filament::badge>
+                                @else
+                                    <x-filament::badge size="sm" color="gray" class="whitespace-nowrap">
+                                        Not clocked in
+                                    </x-filament::badge>
+                                @endif
+                            </div>
+                        </div>
                     </div>
 
-                    <div class="mt-3 text-xs text-gray-500">
+                    <div class="mt-4 text-xs text-gray-500">
                         @if($shift)
                             Started at {{ $shift->clocked_in_at?->format('H:i:s') }}
                         @else
@@ -84,7 +100,7 @@
                                         icon="heroicon-m-play"
                                         class="min-w-[120px] justify-center mt-0"
                                     >
-                                        Clock in
+                                        Sign in
                                     </x-filament::button>
                                 </div>
                             </div>
@@ -110,7 +126,7 @@
                                         icon="heroicon-m-stop"
                                         class="min-w-[120px] justify-center mt-0"
                                     >
-                                        Clock out
+                                        Sign out
                                     </x-filament::button>
                                 </div>
                             </div>

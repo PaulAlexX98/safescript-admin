@@ -29,7 +29,11 @@ class CompletedOrderResource extends OrderResource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->whereRaw('LOWER(status) = ?', ['completed']);
+        return parent::getEloquentQuery()
+            ->whereRaw('LOWER(status) = ?', ['completed'])
+            ->reorder()
+            ->orderByRaw('COALESCE(completed_at, paid_at, approved_at, created_at) DESC')
+            ->orderByDesc('id');
     }
 
     public static function getPages(): array

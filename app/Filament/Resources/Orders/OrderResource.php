@@ -82,10 +82,19 @@ class OrderResource extends Resource
         return $record->completed_at ?? $record->paid_at ?? $record->approved_at ?? $record->created_at;
     })
     ->dateTime('d M Y, H:i')
-    ->sortable(query: function (\Illuminate\Database\Eloquent\Builder $query, string $direction) {
-        $col = static::class === \App\Filament\Resources\Orders\RejectedOrderResource::class ? 'rejected_at' : 'completed_at';
-        return $query->orderBy($col, $direction);
-    }),
+   ->sortable(query: function (\Illuminate\Database\Eloquent\Builder $query, string $direction) {
+    $dir = strtolower($direction) === 'asc' ? 'ASC' : 'DESC';
+
+    if (static::class === \App\Filament\Resources\Orders\RejectedOrderResource::class) {
+        return $query->reorder()
+            ->orderByRaw("COALESCE(rejected_at, updated_at, created_at) {$dir}")
+            ->orderByDesc('id');
+    }
+
+    return $query->reorder()
+        ->orderByRaw("COALESCE(completed_at, paid_at, approved_at, created_at) {$dir}")
+        ->orderByDesc('id');
+}),
 
                 TextColumn::make('reference')
                     ->label('Reference')
@@ -580,6 +589,7 @@ class OrderResource extends Resource
             ->with(['user'])
             ->whereRaw("reference NOT REGEXP '^PTC[A-Z]*H[0-9]{6}$'")
             ->whereRaw("(JSON_VALID(meta) = 0 OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.type'))) <> 'nhs')")
+            ->orderByRaw('COALESCE(completed_at, paid_at, approved_at, created_at) DESC')
             ->orderByDesc('id');
     }
 

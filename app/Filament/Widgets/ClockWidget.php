@@ -16,6 +16,9 @@ class ClockWidget extends Widget
     public ?string $start_time = null; // HH:MM
     public ?string $end_time = null;   // HH:MM
 
+    public ?string $pharmacist_name = null;
+    public ?string $pharmacist_reg = null;
+
     public static function canView(): bool
     {
         $u = auth()->user();
@@ -26,6 +29,9 @@ class ClockWidget extends Widget
     public function mount(): void
     {
         $now = now()->second(0);
+        $u = Auth::user();
+        $this->pharmacist_name = trim((string) ($u?->name ?: collect([$u?->first_name, $u?->last_name])->filter()->implode(' ')));
+        $this->pharmacist_reg = $u?->gphc_number;
 
         // Round to nearest 5 minutes.
         $minute = (int) $now->format('i');
@@ -76,10 +82,22 @@ class ClockWidget extends Widget
         $u = Auth::user();
         if (!$u) return;
 
-        if (empty($u->gphc_number)) {
+        $enteredName = trim((string) $this->pharmacist_name);
+        $enteredReg = trim((string) $this->pharmacist_reg);
+
+        if ($enteredName === '') {
+            Notification::make()
+                ->title('Name missing')
+                ->body('Enter your name before clocking in.')
+                ->warning()
+                ->send();
+            return;
+        }
+
+        if ($enteredReg === '') {
             Notification::make()
                 ->title('GPhC number missing')
-                ->body('Set your GPhC number before clocking in.')
+                ->body('Enter your GPhC number before clocking in.')
                 ->warning()
                 ->send();
             return;
@@ -102,10 +120,23 @@ class ClockWidget extends Widget
 
         $now = $picked;
 
+        $updates = [];
+        if (($u->name ?? null) !== $enteredName) {
+            $updates['name'] = $enteredName;
+        }
+        if (($u->gphc_number ?? null) !== $enteredReg) {
+            $updates['gphc_number'] = $enteredReg;
+        }
+        if (!empty($updates)) {
+            $u->fill($updates)->save();
+        }
+
         StaffShift::create([
             'user_id' => $u->id,
             'created_by' => $u->id,
             'shift_date' => $now->toDateString(),
+            'pharmacist_name' => $enteredName,
+            'gphc_number' => $enteredReg,
             'clocked_in_at' => $now,
             'clock_in_ip' => request()->ip(),
             'clock_in_ua' => request()->userAgent(),

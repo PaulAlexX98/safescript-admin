@@ -14,6 +14,8 @@ class StaffShift extends Model
         'user_id',
         'created_by',
         'shift_date',
+        'pharmacist_name',
+        'gphc_number',
         'clocked_in_at',
         'clocked_out_at',
         'clock_in_ip',
