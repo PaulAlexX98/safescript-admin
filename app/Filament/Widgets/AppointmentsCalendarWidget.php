@@ -106,23 +106,22 @@ class AppointmentsCalendarWidget extends CalendarWidget
                         }
                     });
 
-                    $q->where(function ($qq) {
-                        $qq->whereNull('orders.id')
-                            ->orWhere(function ($paid) {
-                                if (Schema::hasColumn('orders', 'payment_status')) {
-                                    $paid->whereRaw("LOWER(COALESCE(orders.payment_status, '')) <> ?", ['unpaid']);
-                                } else {
-                                    $paid->whereRaw('1=1');
-                                }
+                    $q->whereNotNull('orders.id');
 
-                                $paid->whereRaw(
-                                    "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))), '') <> ?",
-                                    ['unpaid']
-                                )->whereRaw(
-                                    "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))), '') <> ?",
-                                    ['unpaid']
-                                );
-                            });
+                    $q->where(function ($paid) {
+                        if (Schema::hasColumn('orders', 'payment_status')) {
+                            $paid->whereRaw("LOWER(COALESCE(orders.payment_status, '')) <> ?", ['unpaid']);
+                        } else {
+                            $paid->whereRaw('1=1');
+                        }
+
+                        $paid->whereRaw(
+                            "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))), '') <> ?",
+                            ['unpaid']
+                        )->whereRaw(
+                            "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))), '') <> ?",
+                            ['unpaid']
+                        );
                     });
                 }
             }

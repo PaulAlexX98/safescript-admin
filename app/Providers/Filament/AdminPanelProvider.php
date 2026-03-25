@@ -11,6 +11,7 @@ use Filament\PanelProvider;
 use Filament\Navigation\NavigationGroup;
 use Filament\Navigation\NavigationItem;
 use App\Filament\Resources\Appointments\AppointmentResource as AppointmentsAppointmentResource;
+use App\Filament\Resources\WalkIns\WalkInResource;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Route;
@@ -143,6 +144,11 @@ HTML;
                         NavigationItem::make('Appointments')
                             ->icon('heroicon-o-calendar')
                             ->url(fn () => AppointmentsAppointmentResource::getUrl('index'))
+                            ->visible(true),
+
+                        NavigationItem::make('Walk In')
+                            ->icon('heroicon-o-user-plus')
+                            ->url(fn () => WalkInResource::getUrl('index'))
                             ->visible(true),
 
                         NavigationItem::make('Pending Approval')

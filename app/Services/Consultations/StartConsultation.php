@@ -15,6 +15,7 @@ use App\Models\ApprovedOrder;
 use App\Models\Service;
 use App\Models\ClinicForm;
 use App\Models\ConsultationSession;
+use App\Models\Order;
 
 class StartConsultation
 {
@@ -118,7 +119,7 @@ class StartConsultation
         return $out;
     }
 
-    public function __invoke(ApprovedOrder $order, array $context = []): ConsultationSession
+    public function __invoke(ApprovedOrder|Order $order, array $context = []): ConsultationSession
     {
         // Reuse an existing session for this order if present.
         $session = ConsultationSession::where('order_id', $order->id)->first();

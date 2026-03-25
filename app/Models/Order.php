@@ -16,6 +16,17 @@ class Order extends Model
 
     protected $table = 'orders';
 
+    protected $fillable = [
+        'reference',
+        'status',
+        'booking_status',
+        'payment_status',
+        'meta',
+        'user_id',
+        'patient_id',
+        'paid_at',
+    ];
+
     public function scopePendingNhs($q)
     {
         return $q

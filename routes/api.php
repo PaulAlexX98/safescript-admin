@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Route;
 use App\Models\Order;
 use App\Http\Controllers\ClinicFormApiController;
 use App\Http\Controllers\SubmitAssessmentController;
+use App\Http\Controllers\GpSearchController;
 use App\Models\ClinicForm;
 
 Route::get('/debug/order/by-ref/{reference}', function (Request $req, string $reference) {
@@ -35,6 +36,7 @@ Route::get('/raf/{service}', function (string $service) {
     $schema = ClinicForm::where('service_slug', $service)->value('raf_schema') ?? ['stages' => []];
     return response()->json(['ok' => true, 'schema' => $schema]);
 });
+Route::get('/gp-search', [GpSearchController::class, 'index']);
 
 use App\Support\Settings as AppSettings;
 
