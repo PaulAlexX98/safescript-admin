@@ -233,16 +233,28 @@ class WalkInsTable
                     ->searchable()
                     ->toggleable(isToggledHiddenByDefault: true),
 
-                Tables\Columns\TextColumn::make('booking_status')
-                    ->label('Status')
+                Tables\Columns\TextColumn::make('type')
+                    ->label('Type')
+                    ->getStateUsing(function ($record) {
+                        $meta = is_array($record->meta ?? null) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                        $type = (string) (
+                            data_get($meta, 'type')
+                            ?: data_get($meta, 'consultation.type')
+                            ?: ''
+                        );
+
+                        $type = str_replace('_', ' ', strtolower(trim($type)));
+
+                        return $type !== '' ? ucwords($type) : '—';
+                    })
                     ->badge()
                     ->color(fn ($state) => match (strtolower((string) $state)) {
-                        'approved', 'booked', 'paid', 'completed' => 'success',
-                        'pending' => 'warning',
-                        'rejected', 'cancelled', 'failed' => 'danger',
+                        'reorder' => 'warning',
+                        'risk assessment' => 'primary',
                         default => 'gray',
                     })
-                    ->formatStateUsing(fn ($state) => $state ? ucfirst((string) $state) : '—')
+                    ->sortable()
                     ->toggleable(),
             ])
             ->filters([])

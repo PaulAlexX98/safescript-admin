@@ -26,6 +26,7 @@ class CreateWalkIn extends CreateRecord
     protected function mutateFormDataBeforeCreate(array $data): array
     {
         $patientWasSelected = ! empty($data['patient_id']);
+        $patientWasOriginallySelected = $patientWasSelected;
         if (! $patientWasSelected) {
             $manualFirstName = trim((string) ($data['first_name'] ?? ''));
             $manualLastName = trim((string) ($data['last_name'] ?? ''));
@@ -105,7 +106,8 @@ class CreateWalkIn extends CreateRecord
             }
         }
 
-        $prefix = $patientWasSelected ? 'PWMR' : 'PWMN';
+        $prefix = $patientWasOriginallySelected ? 'PWMR' : 'PWMN';
+        $orderType = $prefix === 'PWMR' ? 'reorder' : 'risk_assessment';
 
         $gender = $data['gender'] ?? null;
         if (is_string($gender) && trim($gender) !== '') {
@@ -188,7 +190,7 @@ class CreateWalkIn extends CreateRecord
         $reference = $this->generateReference($prefix);
 
         $meta = [
-            'type' => 'reorder',
+            'type' => $orderType,
             'source' => 'walk_in',
             'appointment_type' => 'walk_in',
             'is_walk_in' => true,
@@ -211,8 +213,8 @@ class CreateWalkIn extends CreateRecord
             'serviceName' => $serviceName,
             'service_slug' => $serviceSlug !== '' ? $serviceSlug : null,
             'consultation' => [
-                'type' => 'risk_assessment',
-                'mode' => 'risk_assessment',
+                'type' => $orderType,
+                'mode' => $orderType,
             ],
             'selectedProduct' => [
                 'name' => $selectedProductName,
