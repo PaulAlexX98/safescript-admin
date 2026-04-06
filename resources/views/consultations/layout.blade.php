@@ -165,10 +165,10 @@
       $activeView = collect($viewCandidates)->first(fn($v) => view()->exists((string) $v));
     @endphp
 
-    <div class="mt-6">
+    <div class="mt-8">
       @if ($activeView)
-        @if ($currentTab === 'risk-assessment')
-          <div id="wm-bmi-helper-layout" class="mb-4 rounded-xl border border-white/10 bg-white/5 p-4" style="display:none;">
+        @if (in_array($currentTab, ['risk-assessment', 'reorder'], true))
+          <div id="wm-bmi-helper-layout" class="mb-8 rounded-xl border border-white/10 bg-white/5 p-4" style="display:none;">
             <div class="flex flex-wrap items-center gap-3">
               <x-filament::button type="button" color="gray" size="sm" id="wm-open-bmi-layout">
                 Calculate BMI
@@ -177,7 +177,8 @@
                 Find GP
               </x-filament::button>
             </div>
-            <div id="wm-gp-helper-layout" class="hidden w-full rounded-xl border border-white/10 bg-white/5 p-4 mt-3">
+            <p class="mt-3 text-sm text-gray-300">Enter height in cm and weight in kg for BMI to be added automatically.</p>
+            <div id="wm-gp-helper-layout" class="hidden w-full rounded-xl border border-white/10 bg-white/5 p-4 mt-4">
               <div class="w-full space-y-3">
                 <input
                   type="text"
@@ -329,8 +330,8 @@
         return aliases[key] || aliases[name] || name;
       }
 
-      function getRiskForm() {
-        return document.getElementById('cf_risk-assessment');
+      function getActiveConsultForm() {
+        return document.getElementById('cf_risk-assessment') || document.getElementById('cf_reorder');
       }
 
       function shouldShowWmHelper(form) {
@@ -454,13 +455,13 @@
         return [];
       }
 
-      const riskForm = getRiskForm();
+      const riskForm = getActiveConsultForm();
       if (bmiHelperWrap && shouldShowWmHelper(riskForm)) {
         bmiHelperWrap.style.display = '';
       }
 
       function applyGpPractice(item) {
-        const form = getRiskForm();
+        const form = getActiveConsultForm();
         if (!form) return;
         const gpInput = getFirstExisting(form, ['gp']);
         const gpEmailInput = getFirstExisting(form, ['gp_email','gp-email']);
@@ -572,7 +573,7 @@
 
       if (bmiBtn) {
         bmiBtn.addEventListener('click', function () {
-          const form = getRiskForm();
+          const form = getActiveConsultForm();
           if (!form) return;
 
           const bmiInput = getFirstExisting(form, ['bmi']);

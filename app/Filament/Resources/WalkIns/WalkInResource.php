@@ -89,6 +89,7 @@ class WalkInResource extends Resource
                         ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.is_walk_in')) = '1'");
                 }
             })
+            ->whereNotIn('status', ['completed', 'approved'])
             ->latest('id');
     }
 
