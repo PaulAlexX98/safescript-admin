@@ -735,12 +735,26 @@ class AppointmentResource extends Resource
                         $oldStart = $record->start_at;
                         $oldEnd   = $record->end_at;
 
+                        $newStartAt = $data['start_at'] ?? null;
+                        $newStartLondon = null;
+                        $newStartUtc = null;
+
+                        try {
+                            if (is_string($newStartAt) && trim($newStartAt) !== '') {
+                                $newStartLondon = \Carbon\Carbon::createFromFormat('Y-m-d H:i:s', trim($newStartAt), 'Europe/London');
+                                $newStartUtc = $newStartLondon->copy()->utc();
+                            }
+                        } catch (\Throwable $e) {
+                            $newStartLondon = null;
+                            $newStartUtc = null;
+                        }
+
                         // 0) Resolve related order once using the OLD appointment time
                         //    so we do not lose the link when start_at changes.
                         $order = static::findRelatedOrder($record);
 
                         // 1) Update appointment start / end (default to 20 minutes if we don't have an existing duration)
-                        $record->start_at = $data['start_at'];
+                        $record->start_at = $newStartUtc?->format('Y-m-d H:i:s') ?? $data['start_at'];
 
                         if (! empty($data['end_at'])) {
                             $record->end_at = $data['end_at'];
@@ -754,7 +768,11 @@ class AppointmentResource extends Resource
                                     $duration   = max(1, $oldEndDt->diffInMinutes($oldStartDt));
                                 }
 
-                                $record->end_at = \Carbon\Carbon::parse($data['start_at'])->addMinutes($duration);
+                                $baseStart = $newStartUtc
+                                    ? $newStartUtc->copy()
+                                    : \Carbon\Carbon::parse($data['start_at'], 'Europe/London')->utc();
+
+                                $record->end_at = $baseStart->copy()->addMinutes($duration)->format('Y-m-d H:i:s');
                             } catch (\Throwable $e) {
                                 // If parsing fails, leave end_at as-is
                             }
@@ -764,7 +782,7 @@ class AppointmentResource extends Resource
                         $record->refresh(); // make sure "When" column updates
 
                         // 1.5) If we successfully found an order, hard-link it to the appointment
-                        //      so we no longer rely on the heuristic start_at match.
+                        //      and keep the order appointment datetime in sync with the reschedule.
                         if ($order) {
                             try {
                                 if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'order_id') && empty($record->order_id)) {
@@ -781,6 +799,55 @@ class AppointmentResource extends Resource
 
                             $record->save();
                             $record->refresh();
+
+                            try {
+                                $meta = is_array($order->meta)
+                                    ? $order->meta
+                                    : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                                if ($newStartLondon) {
+                                    data_set($meta, 'appointment_at', $newStartLondon->copy()->toIso8601String());
+                                    data_set($meta, 'appointment_start_at', $newStartLondon->copy()->toIso8601String());
+                                    data_set($meta, 'appointment_start', $newStartLondon->copy()->toIso8601String());
+                                    data_set($meta, 'appointment_datetime', $newStartLondon->copy()->toIso8601String());
+                                    data_set($meta, 'appointmentDateTime', $newStartLondon->copy()->toIso8601String());
+                                    data_set($meta, 'booking_date', $newStartLondon->copy()->format('Y-m-d'));
+                                    data_set($meta, 'booking_time', $newStartLondon->copy()->format('H:i'));
+                                    data_set($meta, 'consultation_date', $newStartLondon->copy()->format('Y-m-d'));
+                                    data_set($meta, 'consultation_time', $newStartLondon->copy()->format('H:i'));
+                                }
+
+                                $update = [
+                                    'meta' => $meta,
+                                ];
+
+                                try {
+                                    if (\Illuminate\Support\Facades\Schema::hasColumn('orders', 'appointment_at') && $newStartUtc) {
+                                        $update['appointment_at'] = $newStartUtc->copy()->format('Y-m-d H:i:s');
+                                    }
+                                } catch (\Throwable $e) {
+                                    // ignore schema errors
+                                }
+
+                                $order->update($update);
+                                $order->refresh();
+
+                                \Log::info('appointment.rescheduled.order_synced', [
+                                    'appointment_id' => $record->id ?? null,
+                                    'order_id' => $order->id ?? null,
+                                    'order_reference' => $order->reference ?? null,
+                                    'appointment_start_at_utc' => $record->start_at ?? null,
+                                    'order_appointment_at' => $order->appointment_at ?? null,
+                                    'meta_appointment_at' => data_get($order->meta, 'appointment_at'),
+                                ]);
+                            } catch (\Throwable $e) {
+                                \Log::warning('appointment.rescheduled.order_sync_failed', [
+                                    'appointment_id' => $record->id ?? null,
+                                    'order_id' => $order->id ?? null,
+                                    'order_reference' => $order->reference ?? null,
+                                    'error' => $e->getMessage(),
+                                ]);
+                            }
                         }
 
                         // 2) Optionally regenerate a Zoom link for weight management style services
@@ -861,9 +928,11 @@ class AppointmentResource extends Resource
                                 ? \Carbon\Carbon::parse($oldStart)->tz('Europe/London')->format('d M Y, H:i')
                                 : 'your previous time';
 
-                            $whenNew = $record->start_at
-                                ? \Carbon\Carbon::parse($record->start_at)->tz('Europe/London')->format('d M Y, H:i')
-                                : 'a new time';
+                            $whenNew = $newStartLondon
+                                ? $newStartLondon->copy()->format('d M Y, H:i')
+                                : ($record->start_at
+                                    ? \Carbon\Carbon::parse($record->start_at)->tz('Europe/London')->format('d M Y, H:i')
+                                    : 'a new time');
 
                             $service = $record->service_name
                                 ?? $record->service
@@ -912,6 +981,18 @@ class AppointmentResource extends Resource
                                 return;
                             }
                         }
+
+                        \Log::info('appointment.rescheduled.completed', [
+                            'appointment_id' => $record->id ?? null,
+                            'order_id' => $order->id ?? null,
+                            'order_reference' => $order->reference ?? null,
+                            'old_start' => $oldStart,
+                            'new_start_input' => $newStartAt,
+                            'new_start_utc' => $record->start_at ?? null,
+                            'new_start_london' => $newStartLondon?->format('Y-m-d H:i:s'),
+                            'email' => $email,
+                            'zoom_join_url' => $joinUrl,
+                        ]);
 
                         Notification::make()
                             ->success()
