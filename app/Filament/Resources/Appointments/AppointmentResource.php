@@ -239,14 +239,16 @@ class AppointmentResource extends Resource
                 TextColumn::make('start_at')
                     ->label('When')
                     ->getStateUsing(function ($record) {
-                        if (! $record || empty($record->start_at)) {
+                        if (! $record) {
                             return null;
                         }
 
                         try {
-                            return \Carbon\Carbon::parse($record->start_at)
-                                ->tz('Europe/London')
-                                ->format('d M Y, H:i');
+                            $display = static::displayStartAtFor($record);
+
+                            return $display
+                                ? $display->copy()->tz('Europe/London')->format('d M Y, H:i')
+                                : null;
                         } catch (\Throwable $e) {
                             return null;
                         }
@@ -633,14 +635,12 @@ class AppointmentResource extends Resource
                             ->live()
                             ->dehydrated(false)
                             ->afterStateHydrated(function ($state, \Filament\Schemas\Components\Utilities\Set $set, $record) {
-                                if (! $record || empty($record->start_at)) {
+                                // Updated logic to use displayStartAtFor
+                                $dt = static::displayStartAtFor($record)?->copy()->tz('Europe/London');
+                                if (! $dt) {
                                     return;
                                 }
-                                try {
-                                    $dt = \Carbon\Carbon::parse($record->start_at)->tz('Europe/London');
-                                    $set('start_date', $dt->format('Y-m-d'));
-                                } catch (\Throwable $e) {
-                                }
+                                $set('start_date', $dt->format('Y-m-d'));
                             })
                             ->afterStateUpdated(function ($state, \Filament\Schemas\Components\Utilities\Get $get, \Filament\Schemas\Components\Utilities\Set $set) {
                                 $date = $get('start_date');
@@ -689,30 +689,28 @@ class AppointmentResource extends Resource
                             ->live()
                             ->dehydrated(false)
                             ->afterStateHydrated(function ($state, \Filament\Schemas\Components\Utilities\Set $set, $record) {
-                                if (! $record || empty($record->start_at)) {
+                                // Updated logic to use displayStartAtFor
+                                $dt = static::displayStartAtFor($record)?->copy()->tz('Europe/London');
+                                if (! $dt) {
                                     return;
                                 }
-                                try {
-                                    $dt = \Carbon\Carbon::parse($record->start_at)->tz('Europe/London');
-                                    $t = $dt->format('H:i');
+                                $t = $dt->format('H:i');
 
-                                    [$hh, $mm] = array_pad(explode(':', $t, 2), 2, null);
-                                    $h = is_numeric($hh) ? (int) $hh : -1;
-                                    $m = is_numeric($mm) ? (int) $mm : -1;
+                                [$hh, $mm] = array_pad(explode(':', $t, 2), 2, null);
+                                $h = is_numeric($hh) ? (int) $hh : -1;
+                                $m = is_numeric($mm) ? (int) $mm : -1;
 
-                                    $ok = false;
+                                $ok = false;
 
-                                    if ($h >= 8 && $h <= 17 && $m >= 0 && $m < 60 && ($m % 15 === 0)) {
-                                        $ok = true;
-                                    }
-
-                                    if ($h === 18 && $m === 0) {
-                                        $ok = true;
-                                    }
-
-                                    $set('start_time', $ok ? $t : null);
-                                } catch (\Throwable $e) {
+                                if ($h >= 8 && $h <= 17 && $m >= 0 && $m < 60 && ($m % 15 === 0)) {
+                                    $ok = true;
                                 }
+
+                                if ($h === 18 && $m === 0) {
+                                    $ok = true;
+                                }
+
+                                $set('start_time', $ok ? $t : null);
                             })
                             ->afterStateUpdated(function ($state, \Filament\Schemas\Components\Utilities\Get $get, \Filament\Schemas\Components\Utilities\Set $set) {
                                 $date = $get('start_date');
@@ -1257,13 +1255,64 @@ class AppointmentResource extends Resource
     
     public static function formatWhenFor(?\App\Models\Appointment $a): ?string
     {
-        if (!$a) return null;
-        $s = \Carbon\Carbon::parse($a->start_at)->tz('Europe/London');
-        $e = $a->end_at ? \Carbon\Carbon::parse($a->end_at)->tz('Europe/London') : null;
+        if (! $a) return null;
+
+        $s = static::displayStartAtFor($a);
+        if (! $s) {
+            return null;
+        }
+
+        $s = $s->copy()->tz('Europe/London');
+
+        $e = null;
+        try {
+            if ($a->end_at) {
+                $e = \Carbon\Carbon::parse($a->end_at, 'UTC')->tz('Europe/London');
+            }
+        } catch (\Throwable $e2) {
+            $e = null;
+        }
 
         return $e && $s->isSameDay($e)
             ? $s->format('d M Y, H:i') . ' — ' . $e->format('H:i')
             : $s->format('d M Y, H:i') . ($e ? ' — ' . $e->format('d M Y, H:i') : '');
+    }
+
+    protected static function displayStartAtFor($record): ?\Carbon\Carbon
+    {
+        if (! $record) {
+            return null;
+        }
+
+        try {
+            $order = static::findRelatedOrder($record);
+            if ($order) {
+                $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                $metaAt = data_get($meta, 'appointment_at')
+                    ?? data_get($meta, 'appointment_start_at')
+                    ?? data_get($meta, 'appointment_start')
+                    ?? data_get($meta, 'appointment_datetime')
+                    ?? data_get($meta, 'appointmentDateTime');
+
+                if (is_string($metaAt) && trim($metaAt) !== '') {
+                    return \Carbon\Carbon::parse(trim($metaAt));
+                }
+            }
+        } catch (\Throwable $e) {
+            // fall back to appointment row value below
+        }
+
+        try {
+            $raw = method_exists($record, 'getRawOriginal') ? $record->getRawOriginal('start_at') : $record->start_at;
+            if (! $raw) {
+                return null;
+            }
+
+            return \Carbon\Carbon::parse($raw, 'UTC');
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     public static function getPages(): array
