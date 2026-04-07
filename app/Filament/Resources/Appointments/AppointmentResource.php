@@ -238,7 +238,19 @@ class AppointmentResource extends Resource
             ->columns([
                 TextColumn::make('start_at')
                     ->label('When')
-                    ->dateTime('d M Y, H:i')
+                    ->getStateUsing(function ($record) {
+                        if (! $record || empty($record->start_at)) {
+                            return null;
+                        }
+
+                        try {
+                            return \Carbon\Carbon::parse($record->start_at)
+                                ->tz('Europe/London')
+                                ->format('d M Y, H:i');
+                        } catch (\Throwable $e) {
+                            return null;
+                        }
+                    })
                     ->sortable()
                     ->searchable(),
 
@@ -574,7 +586,18 @@ class AppointmentResource extends Resource
                     ->query(function (Builder $query, array $data): Builder {
                         $on = $data['on'] ?? null;
 
-                        return $on ? $query->whereDate('start_at', $on) : $query;
+                        if (! $on) {
+                            return $query;
+                        }
+
+                        try {
+                            $start = \Carbon\Carbon::parse($on, 'Europe/London')->startOfDay()->utc();
+                            $end = \Carbon\Carbon::parse($on, 'Europe/London')->endOfDay()->utc();
+
+                            return $query->whereBetween('start_at', [$start, $end]);
+                        } catch (\Throwable $e) {
+                            return $query->whereDate('start_at', $on);
+                        }
                     })
                     ->indicateUsing(function ($state) {
                         $d = is_array($state) ? ($state['on'] ?? null) : null;
@@ -1075,7 +1098,7 @@ class AppointmentResource extends Resource
         }
         $count = Appointment::query()
             ->whereNotNull('start_at')
-            ->whereDate('start_at', '>=', now()->toDateString())
+            ->where('start_at', '>=', now('Europe/London')->startOfDay()->utc())
             ->when($hasStatusCol, function (Builder $q) {
                 $q->where(function (Builder $qq) {
                     $qq->whereNull('status')
@@ -1171,7 +1194,7 @@ class AppointmentResource extends Resource
         }
         $hasWaiting = Appointment::query()
             ->whereNotNull('start_at')
-            ->whereDate('start_at', '>=', now()->toDateString())
+            ->where('start_at', '>=', now('Europe/London')->startOfDay()->utc())
             ->when($hasStatusCol, function (Builder $q) {
                 $q->where(function (Builder $qq) {
                     $qq->whereNull('status')
