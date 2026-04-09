@@ -244,10 +244,9 @@ class PendingOrderResource extends Resource
                 $q->whereIn('state', ['pending', 'awaiting', 'waiting']);
             }
 
-            // If the table stores decision timestamps, treat “pending” as not yet decided.
-            if (DBSchema::hasColumn($table, 'approved_at')) {
-                $q->whereNull('approved_at');
-            }
+            // Keep rejected / decided records out of Pending Approval,
+            // but do not exclude rows just because approved_at was set earlier.
+            // Some orders are later moved back to pending while retaining an approved_at timestamp.
             if (DBSchema::hasColumn($table, 'rejected_at')) {
                 $q->whereNull('rejected_at');
             }
@@ -1209,8 +1208,35 @@ class PendingOrderResource extends Resource
                                         if (! $record) {
                                             return '—';
                                         }
-                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        return (string) (data_get($meta, 'admin_notes') ?: '—');
+
+                                        $meta = is_array($record->meta)
+                                            ? $record->meta
+                                            : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                        $notes = data_get($meta, 'admin_notes');
+
+                                        if (blank($notes)) {
+                                            return '—';
+                                        }
+
+                                        if (is_array($notes)) {
+                                            return collect($notes)
+                                                ->map(function ($note) {
+                                                    if (is_array($note)) {
+                                                        return json_encode($note, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                                                    }
+
+                                                    if (is_bool($note)) {
+                                                        return $note ? 'true' : 'false';
+                                                    }
+
+                                                    return (string) $note;
+                                                })
+                                                ->filter()
+                                                ->implode("\n");
+                                        }
+
+                                        return (string) $notes;
                                     })
                                     ->formatStateUsing(fn ($state) => nl2br(e($state)))
                                     ->extraAttributes(function ($record) {

@@ -107,7 +107,7 @@ class CreateWalkIn extends CreateRecord
         }
 
         $prefix = $patientWasOriginallySelected ? 'PWMR' : 'PWMN';
-        $orderType = $prefix === 'PWMR' ? 'reorder' : 'risk_assessment';
+        $orderType = $prefix === 'PWMR' ? 'reorder' : 'new';
 
         $gender = $data['gender'] ?? null;
         if (is_string($gender) && trim($gender) !== '') {

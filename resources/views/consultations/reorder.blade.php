@@ -502,9 +502,13 @@
       .cf-section-card{border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:24px;margin-top:20px;box-shadow:0 1px 2px rgba(0,0,0,.45)}
       .cf-grid{display:grid;grid-template-columns:1fr;gap:16px}
       .cf-field-card{border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:18px}
+      .cf-field-card.is-required{border-color:rgba(34,197,94,.45);box-shadow:0 0 0 1px rgba(34,197,94,.12) inset}
       .cf-title{font-weight:600;font-size:16px;margin:0 0 6px 0}
       .cf-summary{font-size:13px;margin:0}
       .cf-label{font-size:14px;display:block;margin-bottom:6px}
+      .cf-required{color:#22c55e;font-weight:700}
+      .cf-required-banner{margin:0 0 16px 0;padding:12px 14px;border:1px solid rgba(34,197,94,.45);border-radius:12px;background:rgba(34,197,94,.10);color:#22c55e;font-weight:700}
+      .cf-required-banner.is-hidden{display:none}
       .cf-help{font-size:12px;margin-top:6px}
       /* Checkbox styles (no Tailwind, no :has dependency) */
       .cf-checkbox-row{display:flex;align-items:center;gap:12px}
@@ -565,6 +569,8 @@
                 <div>answers_found {{ count((array) ($oldData ?? [])) }} keys {{ implode(', ', $__seen) }}</div>
             </div>
         @endif
+
+        <div id="cf_required_banner" class="cf-required-banner">Please fill all the required fields</div>
 
         <div class="space-y-10">
             @foreach ($sections as $section)
@@ -765,9 +771,9 @@
                         @endif
 
                         @if ($type === 'radio')
-                            <div {!! $wrapperAttrs !!}>
+                            <div {!! str_replace('class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"', 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').($req ? ' is-required' : '').'"', $wrapperAttrs) !!}>
                                 @if($label)
-                                    <label class="cf-label">{{ $label }}</label>
+                                    <label class="cf-label">{{ $label }}@if($req)<span class="cf-required"> * required</span>@endif</label>
                                 @endif
                                 @php
                                     // Normalise saved value into a comparable string
@@ -832,9 +838,9 @@
                                 @endif
                             </div>
                         @elseif ($type === 'textarea')
-                            <div {!! $wrapperAttrs !!}>
+                            <div {!! str_replace('class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"', 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').($req ? ' is-required' : '').'"', $wrapperAttrs) !!}>
                                 @if($label)
-                                    <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
+                                    <label for="{{ $name }}" class="cf-label">{{ $label }}@if($req)<span class="cf-required"> * required</span>@endif</label>
                                 @endif
                                 <textarea id="{{ $name }}" name="{{ $name }}" rows="6" placeholder="{{ $ph }}" data-req="{{ $req ? 1 : 0 }}" class="cf-textarea">{{ $val }}</textarea>
                                 @if($help)
@@ -843,9 +849,9 @@
                             </div>
                         @elseif ($type === 'select')
                             @php $isMultiple = (bool) ($field['multiple'] ?? false); @endphp
-                            <div {!! $wrapperAttrs !!}>
+                            <div {!! str_replace('class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"', 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').($req ? ' is-required' : '').'"', $wrapperAttrs) !!}>
                                 @if($label)
-                                    <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
+                                    <label for="{{ $name }}" class="cf-label">{{ $label }}@if($req)<span class="cf-required"> * required</span>@endif</label>
                                 @endif
                                 @php
                                     $vals = $val;
@@ -886,7 +892,7 @@
                                 @endif
                             </div>
                         @elseif ($type === 'checkbox')
-                            <div {!! $wrapperAttrs !!}>
+                            <div {!! str_replace('class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"', 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').($req ? ' is-required' : '').'"', $wrapperAttrs) !!}>
                                 @php
                                     $checked = false;
                                     if (is_bool($val)) {
@@ -910,7 +916,7 @@
                                             {{ $checked ? 'checked' : '' }}
                                         >
                                         <span class="cf-check-box" aria-hidden="true"></span>
-                                        <span class="cf-check-text">{{ $label }}</span>
+                                        <span class="cf-check-text">{{ $label }}@if($req)<span class="cf-required"> * required</span>@endif</span>
                                     </label>
                                 </div>
 
@@ -919,9 +925,9 @@
                                 @endif
                             </div>
                         @elseif ($type === 'date')
-                            <div {!! $wrapperAttrs !!}>
+                            <div {!! str_replace('class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"', 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').($req ? ' is-required' : '').'"', $wrapperAttrs) !!}>
                                 @if($label)
-                                    <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
+                                    <label for="{{ $name }}" class="cf-label">{{ $label }}@if($req)<span class="cf-required"> * required</span>@endif</label>
                                 @endif
                                 <input type="date" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" />
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
@@ -999,9 +1005,9 @@
                                     $initialThumbs = array_slice($initialThumbs, -1);
                                 }
                             @endphp
-                            <div {!! $wrapperAttrs !!}>
+                            <div {!! str_replace('class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"', 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').($req ? ' is-required' : '').'"', $wrapperAttrs) !!}>
                                 @if($label)
-                                    <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
+                                    <label for="{{ $name }}" class="cf-label">{{ $label }}@if($req)<span class="cf-required"> * required</span>@endif</label>
                                 @endif
                                 <input type="file" id="{{ $name }}" name="{{ $name }}{{ $multiple ? '[]' : '' }}" @if($accept) accept="{{ $accept }}" @endif @if($multiple) multiple @endif class="cf-file-input" data-has-initial="{{ !empty($initialThumbs) ? '1' : '0' }}" />
                                 <label for="{{ $name }}" class="cf-file cf-file-btn">Choose Files</label>
@@ -1022,9 +1028,9 @@
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @else
-                            <div {!! $wrapperAttrs !!}>
+                            <div {!! str_replace('class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"', 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').($req ? ' is-required' : '').'"', $wrapperAttrs) !!}>
                                 @if($label)
-                                    <label for="{{ $name }}" class="cf-label">{{ $label }}</label>
+                                    <label for="{{ $name }}" class="cf-label">{{ $label }}@if($req)<span class="cf-required"> * required</span>@endif</label>
                                 @endif
                                 <input type="text" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" placeholder="{{ $ph }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" />
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
@@ -1039,6 +1045,7 @@
     <script>
 (function(){
   var form = document.getElementById('cf_reorder'); if (!form) return;
+  var requiredBanner = document.getElementById('cf_required_banner');
   var __cfAliases = @json($__fieldAliases, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
   function canonicalName(s){
     if (s == null) return s;
@@ -1137,6 +1144,59 @@
         return true;
     }
   }
+  function isActuallyVisible(el){
+    if (!el) return false;
+    if (el.hidden) return false;
+    var cur = el;
+    while (cur && cur !== document.body) {
+      var st = window.getComputedStyle(cur);
+      if (st.display === 'none' || st.visibility === 'hidden') return false;
+      cur = cur.parentElement;
+    }
+    return true;
+  }
+  function cardIsComplete(card){
+    if (!card || !isActuallyVisible(card)) return true;
+    if (!card.classList.contains('is-required')) return true;
+
+    var enabledInputs = Array.from(card.querySelectorAll('input, select, textarea')).filter(function(el){
+      if (!el) return false;
+      if (el.disabled) return false;
+      if (el.type === 'hidden') return false;
+      if (el.name === '__go_next') return false;
+      if (el.type === 'file') return true;
+      return isActuallyVisible(el);
+    });
+    if (!enabledInputs.length) return true;
+
+    var radios = enabledInputs.filter(function(el){ return el.type === 'radio'; });
+    if (radios.length) return radios.some(function(el){ return el.checked; });
+
+    var checks = enabledInputs.filter(function(el){ return el.type === 'checkbox'; });
+    if (checks.length) return checks.some(function(el){ return el.checked; });
+
+    var first = enabledInputs[0];
+    if (first.type === 'file') {
+      var hasInitial = first.getAttribute('data-has-initial') === '1';
+      var hasFiles = first.files && first.files.length > 0;
+      return hasInitial || hasFiles;
+    }
+    if (first.tagName === 'SELECT' && first.multiple) {
+      return Array.from(first.options || []).some(function(o){ return o.selected && String(o.value || '').trim() !== ''; });
+    }
+    if (first.tagName === 'SELECT') {
+      return String(first.value || '').trim() !== '';
+    }
+    return String(first.value || '').trim() !== '';
+  }
+  function syncRequiredBanner(){
+    if (!requiredBanner) return;
+    var requiredCards = Array.from(form.querySelectorAll('.cf-field-card.is-required')).filter(function(card){
+      return isActuallyVisible(card);
+    });
+    var allComplete = requiredCards.length > 0 && requiredCards.every(cardIsComplete);
+    requiredBanner.classList.toggle('is-hidden', allComplete);
+  }
   function setReqAndDisabledFor(node, visible){
     var inputs = node.querySelectorAll('input, select, textarea');
     inputs.forEach(function(el){
@@ -1173,6 +1233,7 @@
         setReqAndDisabledFor(card, true);
       }
     });
+    syncRequiredBanner();
   }
   function hookFilePreviews(){
     var inputs = form.querySelectorAll('input[type="file"]');
@@ -1205,9 +1266,15 @@
   }
   hookFilePreviews();
   form.addEventListener('change', evaluate, true);
-  form.addEventListener('input', function(e){ if (e.target && (e.target.type==='radio' || e.target.type==='checkbox' || e.target.tagName==='SELECT')) evaluate(); }, true);
+  form.addEventListener('input', function(e){
+    if (!e.target) return;
+    if (e.target.type==='radio' || e.target.type==='checkbox' || e.target.tagName==='SELECT' || e.target.tagName==='TEXTAREA' || e.target.tagName==='INPUT') {
+      evaluate();
+    }
+  }, true);
   evaluate();
+  syncRequiredBanner();
 })();
 </script>
     </form>
-@endif
+        @endif
