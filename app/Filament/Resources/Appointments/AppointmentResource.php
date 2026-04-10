@@ -94,7 +94,7 @@ class AppointmentResource extends Resource
                             return;
                         }
                         try {
-                            $dt = \Carbon\Carbon::parse($record->start_at)->tz('Europe/London');
+                            $dt = \Carbon\Carbon::parse($record->start_at, 'UTC')->tz('Europe/London');
                             $set('start_date', $dt->format('Y-m-d'));
                         } catch (\Throwable $e) {
                         }
@@ -109,8 +109,8 @@ class AppointmentResource extends Resource
                         }
                         try {
                             $dt = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, 'Europe/London');
-                            $set('start_at', $dt->format('Y-m-d H:i:s'));
-                            $set('end_at', $dt->copy()->addMinutes(20)->format('Y-m-d H:i:s'));
+                            $set('start_at', $dt->copy()->utc()->format('Y-m-d H:i:s'));
+                            $set('end_at', $dt->copy()->utc()->addMinutes(20)->format('Y-m-d H:i:s'));
                         } catch (\Throwable $e) {
                             $set('start_at', null);
                             $set('end_at', null);
@@ -153,7 +153,7 @@ class AppointmentResource extends Resource
                             return;
                         }
                         try {
-                            $dt = \Carbon\Carbon::parse($record->start_at)->tz('Europe/London');
+                            $dt = \Carbon\Carbon::parse($record->start_at, 'UTC')->tz('Europe/London');
                             $t = $dt->format('H:i');
 
                             [$hh, $mm] = array_pad(explode(':', $t, 2), 2, null);
@@ -184,8 +184,8 @@ class AppointmentResource extends Resource
                         }
                         try {
                             $dt = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, 'Europe/London');
-                            $set('start_at', $dt->format('Y-m-d H:i:s'));
-                            $set('end_at', $dt->copy()->addMinutes(20)->format('Y-m-d H:i:s'));
+                            $set('start_at', $dt->copy()->utc()->format('Y-m-d H:i:s'));
+                            $set('end_at', $dt->copy()->utc()->addMinutes(20)->format('Y-m-d H:i:s'));
                         } catch (\Throwable $e) {
                             $set('start_at', null);
                             $set('end_at', null);

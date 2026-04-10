@@ -44,6 +44,7 @@ class CreateAppointment extends CreateRecord
             $data['order_reference'] = $ref;
         }
 
+        
         return $data;
     }
 
@@ -262,7 +263,7 @@ class CreateAppointment extends CreateRecord
         try {
             $startAtRaw = $record->getRawOriginal('start_at');
             $when = $startAtRaw
-                ? Carbon::parse($startAtRaw)->tz('Europe/London')->format('d M Y, H:i')
+                ? Carbon::parse($startAtRaw, 'UTC')->tz('Europe/London')->format('d M Y, H:i')
                 : null;
         } catch (\Throwable $e) {}
 
