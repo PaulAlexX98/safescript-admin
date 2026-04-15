@@ -547,6 +547,153 @@ class ApprovedOrderResource extends Resource
                                         TextEntry::make('created_at')
                                             ->label('Created At')
                                             ->dateTime('d-m-Y H:i'),
+
+                                        TextEntry::make('patient_address_block')
+                                            ->label('Home address')
+                                            ->columnSpan(1)
+                                            ->getStateUsing(function ($record) {
+                                                if (! $record) { return null; }
+                                                $pick = function (array $arr, array $keys) {
+                                                    foreach ($keys as $k) {
+                                                        $v = data_get($arr, $k);
+                                                        if (is_string($v) && trim($v) !== '') return trim($v);
+                                                    }
+                                                    return null;
+                                                };
+
+                                                // 1) Meta-first lookup across common shapes
+                                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                                $a1 = $pick($meta, [
+                                                    'address1','address_1','patient.address1','patient.address_1',
+                                                    'billingAddress.address1','billingAddress.address_1','shippingAddress.address1','shippingAddress.address_1',
+                                                    'address.line1','address.line_1','line1','line_1',
+                                                ]);
+                                                $a2 = $pick($meta, [
+                                                    'address2','address_2','patient.address2','patient.address_2',
+                                                    'billingAddress.address2','billingAddress.address_2','shippingAddress.address2','shippingAddress.address_2',
+                                                    'address.line2','address.line_2','line2','line_2',
+                                                ]);
+                                                $city = $pick($meta, [
+                                                    'city','town','patient.city','patient.town',
+                                                    'billingAddress.city','shippingAddress.city',
+                                                    'address.city',
+                                                ]);
+                                                $pc = $pick($meta, [
+                                                    'postcode','post_code','zip','zip_code','patient.postcode','patient.post_code',
+                                                    'billingAddress.postcode','shippingAddress.postcode',
+                                                    'address.postcode',
+                                                ]);
+                                                $country = $pick($meta, [
+                                                    'country','patient.country','billingAddress.country','shippingAddress.country','address.country',
+                                                ]);
+
+                                                // 2) If mostly empty, fall back to related user's address fields if present
+                                                if (!$a1 && optional($record->user)) {
+                                                    $u = $record->user;
+                                                    $a1 = $a1 ?: ($u->address1 ?? $u->address_1 ?? null);
+                                                    $a2 = $a2 ?: ($u->address2 ?? $u->address_2 ?? null);
+                                                    $city = $city ?: ($u->city ?? $u->town ?? null);
+                                                    $pc = $pc ?: ($u->postcode ?? $u->post_code ?? $u->zip ?? null);
+                                                    $country = $country ?: ($u->country ?? null);
+                                                }
+
+                                                $lines = array_values(array_filter([
+                                                    $a1,
+                                                    $a2,
+                                                    trim(trim((string)$city) . ' ' . trim((string)$pc)) ?: null,
+                                                    $country,
+                                                ], fn($v) => is_string($v) && $v !== ''));
+
+                                                if (empty($lines)) {
+                                                    return '—';
+                                                }
+
+                                                return implode("\n", $lines);
+                                            })
+                                            ->formatStateUsing(fn ($state) => $state ? nl2br(e($state)) : '—')
+                                            ->html(),
+                                        TextEntry::make('patient_shipping_address_block')
+                                            ->label('Shipping address')
+                                            ->columnSpan(1)
+                                            ->getStateUsing(function ($record) {
+                                                if (! $record) { return null; }
+                                                $pick = function (array $arr, array $keys) {
+                                                    foreach ($keys as $k) {
+                                                        $v = data_get($arr, $k);
+                                                        if (is_string($v) && trim($v) !== '') return trim($v);
+                                                    }
+                                                    return null;
+                                                };
+
+                                                // Prefer explicit shipping or delivery shapes
+                                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                                $a1 = $pick($meta, [
+                                                    'shippingAddress.address1','shippingAddress.address_1','deliveryAddress.address1','deliveryAddress.address_1',
+                                                    'shipping.address1','shipping.address_1','delivery.address1','delivery.address_1',
+                                                    'address.shipping.line1','address.delivery.line1','shipping.line1','delivery.line1',
+                                                ]);
+                                                $a2 = $pick($meta, [
+                                                    'shippingAddress.address2','shippingAddress.address_2','deliveryAddress.address2','deliveryAddress.address_2',
+                                                    'shipping.address2','shipping.address_2','delivery.address2','delivery.address_2',
+                                                    'address.shipping.line2','address.delivery.line2','shipping.line2','delivery.line2',
+                                                ]);
+                                                $city = $pick($meta, [
+                                                    'shippingAddress.city','deliveryAddress.city','shipping.city','delivery.city',
+                                                    'address.shipping.city','address.delivery.city',
+                                                ]);
+                                                $pc = $pick($meta, [
+                                                    'shippingAddress.postcode','shippingAddress.post_code','deliveryAddress.postcode','deliveryAddress.post_code',
+                                                    'shipping.postcode','delivery.postcode','shipping.zip','delivery.zip',
+                                                    'address.shipping.postcode','address.delivery.postcode',
+                                                ]);
+                                                $country = $pick($meta, [
+                                                    'shippingAddress.country','deliveryAddress.country','shipping.country','delivery.country',
+                                                    'address.shipping.country','address.delivery.country',
+                                                ]);
+
+                                                // If not present, fall back to generic meta keys or user shipping fields
+                                                if (!$a1) {
+                                                    $a1 = $a1 ?: $pick($meta, ['address.shipping.line1','address.line1','line1','address1','address_1']);
+                                                    $a2 = $a2 ?: $pick($meta, ['address.shipping.line2','address.line2','line2','address2','address_2']);
+                                                    $city = $city ?: $pick($meta, ['address.shipping.city','address.city','city','town']);
+                                                    $pc = $pc ?: $pick($meta, ['address.shipping.postcode','address.postcode','postcode','post_code','zip','zip_code']);
+                                                    $country = $country ?: $pick($meta, ['address.shipping.country','address.country','country']);
+                                                }
+
+                                                // User fallbacks if available
+                                                if (!$a1 && optional($record->user)) {
+                                                    $u = $record->user;
+                                                    // try common custom columns for shipping
+                                                    $a1 = $a1 ?: ($u->shipping_address1 ?? $u->shipping_address_1 ?? null);
+                                                    $a2 = $a2 ?: ($u->shipping_address2 ?? $u->shipping_address_2 ?? null);
+                                                    $city = $city ?: ($u->shipping_city ?? null);
+                                                    $pc = $pc ?: ($u->shipping_postcode ?? $u->shipping_post_code ?? $u->shipping_zip ?? null);
+                                                    $country = $country ?: ($u->shipping_country ?? null);
+                                                    // fall back to home if shipping not set
+                                                    if (!$a1) {
+                                                        $a1 = $u->address1 ?? $u->address_1 ?? null;
+                                                        $a2 = $a2 ?: ($u->address2 ?? $u->address_2 ?? null);
+                                                        $city = $city ?: ($u->city ?? $u->town ?? null);
+                                                        $pc = $pc ?: ($u->postcode ?? $u->post_code ?? $u->zip ?? null);
+                                                        $country = $country ?: ($u->country ?? null);
+                                                    }
+                                                }
+
+                                                $lines = array_values(array_filter([
+                                                    $a1,
+                                                    $a2,
+                                                    trim(trim((string)$city) . ' ' . trim((string)$pc)) ?: null,
+                                                    $country,
+                                                ], fn($v) => is_string($v) && $v !== ''));
+
+                                                if (empty($lines)) {
+                                                    return '—';
+                                                }
+
+                                                return implode("\n", $lines);
+                                            })
+                                            ->formatStateUsing(fn ($state) => $state ? nl2br(e($state)) : '—')
+                                            ->html(),
                                     ]),
                                 ]),
                             Grid::make(1)
