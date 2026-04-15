@@ -724,7 +724,19 @@ class ConsultationFormController extends Controller
             $field = (string)($cond['field'] ?? '');
             if ($field === '') return true; // no field -> treat as visible
 
-            $raw = $data[$field] ?? null;
+            $raw = null;
+            foreach (array_values(array_unique(array_filter([
+                $field,
+                str_replace('-', '_', $field),
+                str_replace('_', '-', $field),
+                \Illuminate\Support\Str::slug($field, '_'),
+                \Illuminate\Support\Str::slug($field, '-'),
+            ]))) as $fieldKey) {
+                if (array_key_exists($fieldKey, $data)) {
+                    $raw = $data[$fieldKey];
+                    break;
+                }
+            }
             $rawVals = is_array($raw) ? array_map('strval', $raw) : [ (string) $raw ];
             // Build slug-normalised versions to allow "Yes" vs "yes" vs "YES" etc.
             $normVals = array_map(function ($v) {
