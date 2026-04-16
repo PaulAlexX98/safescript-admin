@@ -441,6 +441,84 @@
         return null;
     };
 
+    $isBmiField = function ($field) {
+        $key = $field['key'] ?? null;
+        $label = $field['label'] ?? null;
+
+        $slug = function ($s) {
+            if ($s === true) return 'true';
+            if ($s === false) return 'false';
+            $s = is_scalar($s) ? (string) $s : '';
+            $s = strtolower(trim($s));
+            $s = preg_replace('/[^a-z0-9]+/', '-', $s);
+            return trim($s, '-');
+        };
+
+        $keySlug = $key ? $slug($key) : '';
+        $labelSlug = $label ? $slug($label) : '';
+
+        if ($keySlug === 'bmi') return true;
+        if ($labelSlug === 'bmi') return true;
+        if (str_contains($labelSlug, 'body-mass-index')) return true;
+        if (preg_match('/\bbmi\b/i', (string) ($label ?? ''))) return true;
+
+        return false;
+    };
+
+    $isGpField = function ($field) {
+        $key = $field['key'] ?? null;
+        $label = $field['label'] ?? null;
+
+        $slug = function ($s) {
+            if ($s === true) return 'true';
+            if ($s === false) return 'false';
+            $s = is_scalar($s) ? (string) $s : '';
+            $s = strtolower(trim($s));
+            $s = preg_replace('/[^a-z0-9]+/', '-', $s);
+            return trim($s, '-');
+        };
+
+        $keySlug = $key ? $slug($key) : '';
+        $labelSlug = $label ? $slug($label) : '';
+
+        $emailish = [
+            'gp-email',
+            'gp-email-preferred',
+            'gp-email-address',
+            'gp_email',
+            'gpemail',
+            'email',
+            'email-address',
+        ];
+
+        foreach ($emailish as $bad) {
+            $badSlug = $slug($bad);
+            if ($keySlug === $badSlug || $labelSlug === $badSlug) return false;
+            if ($keySlug !== '' && str_contains($keySlug, $badSlug)) return false;
+            if ($labelSlug !== '' && str_contains($labelSlug, $badSlug)) return false;
+        }
+
+        $exactKeys = [
+            'gp',
+            'gp-practice',
+            'gp-surgery',
+            'gp-name',
+            'gp-address',
+            'gp-name-address',
+            'search-gp',
+            'search-the-name-and-address-of-your-gp',
+        ];
+
+        if (in_array($keySlug, $exactKeys, true)) return true;
+        if (in_array($labelSlug, $exactKeys, true)) return true;
+
+        if (preg_match('/\bsearch\b.*\bgp\b/i', (string) ($label ?? ''))) return true;
+        if (preg_match('/\bname\b.*\baddress\b.*\bgp\b/i', (string) ($label ?? ''))) return true;
+        if (preg_match('/\bgp\b.*\bname\b.*\baddress\b/i', (string) ($label ?? ''))) return true;
+
+        return false;
+    };
+
     // Helper to evaluate showIf condition server-side with alias resolution
     $evaluateShowIf = function ($cond) use ($answerFor, $__fieldAliases) {
         if (!is_array($cond)) return true;
@@ -542,6 +620,29 @@
       .cf-radio-input:focus-visible + .cf-radio-pill{outline:2px solid rgba(34,197,94,.6);outline-offset:2px}
       .cf-radio-input:checked + .cf-radio-pill{border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.12)}
       .cf-radio-input:checked + .cf-radio-pill::before{border-color:rgba(34,197,94,1);box-shadow:inset 0 0 0 5px rgba(34,197,94,1)}
+      .cf-bmi-wrap{display:grid;gap:14px}
+      .cf-bmi-toggle{display:grid;gap:12px}
+      .cf-bmi-toggle-group{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+      .cf-bmi-toggle-label{font-size:13px;font-weight:600;opacity:.9;min-width:110px}
+      .cf-bmi-toggle-btn{display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:9999px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.035);cursor:pointer;user-select:none;transition:background .15s ease,border-color .15s ease,transform .08s ease}
+      .cf-bmi-toggle-btn:hover{background:rgba(255,255,255,.055);border-color:rgba(255,255,255,.26)}
+      .cf-bmi-toggle-btn:active{transform:translateY(1px)}
+      .cf-bmi-toggle-btn.is-active{border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.12);color:#dcfce7}
+      .cf-bmi-grid{display:grid;grid-template-columns:1fr;gap:12px}
+      .cf-bmi-subgrid{display:grid;grid-template-columns:1fr;gap:12px}
+      .cf-bmi-result{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-radius:12px;border:1px solid rgba(34,197,94,.32);background:rgba(34,197,94,.08)}
+      .cf-bmi-result strong{font-size:15px}
+      .cf-bmi-hint{font-size:12px;opacity:.85;margin-top:4px}
+      @media(min-width:768px){.cf-bmi-grid{grid-template-columns:1fr 1fr}.cf-bmi-subgrid{grid-template-columns:1fr 1fr}}
+      .cf-gp-wrap{display:grid;gap:12px}
+      .cf-gp-search-row{display:grid;grid-template-columns:1fr;gap:10px}
+      .cf-gp-results{display:grid;gap:8px}
+      .cf-gp-result{display:block;width:100%;text-align:left;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:12px;padding:12px 14px;cursor:pointer;transition:background .15s ease,border-color .15s ease}
+      .cf-gp-result:hover{background:rgba(255,255,255,.055);border-color:rgba(255,255,255,.26)}
+      .cf-gp-result-title{font-size:14px;font-weight:600;margin:0 0 4px 0}
+      .cf-gp-result-meta{font-size:12px;opacity:.82;line-height:1.45}
+      .cf-gp-error{font-size:12px;color:#fca5a5}
+      .cf-gp-muted{font-size:12px;opacity:.78}
     </style>
 @endonce
 
@@ -656,6 +757,8 @@
 
                             $valRaw = $answerFor($name, $label);
                             $val    = old($name, $valRaw ?? '');
+                            $isBmi = $isBmiField($field);
+                            $isGp = $isGpField($field);
                             $cond = $field['showIf'] ?? null;
                             $visible = $evaluateShowIf($cond);
                             $wrapperAttrs = 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"';
@@ -1028,13 +1131,134 @@
                                 @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
                             </div>
                         @else
-                            <div {!! str_replace('class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"', 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').($req ? ' is-required' : '').'"', $wrapperAttrs) !!}>
-                                @if($label)
-                                    <label for="{{ $name }}" class="cf-label">{{ $label }}@if($req)<span class="cf-required"> * required</span>@endif</label>
-                                @endif
-                                <input type="text" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" placeholder="{{ $ph }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" />
-                                @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
-                            </div>
+                            @if ($isBmi)
+                                @php
+                                    $metricHeight = $answerFor('height_cm', 'height_cm') ?? $answerFor('heightcm', 'heightcm');
+                                    $rawHeightText = $answerFor('height', 'height');
+                                    if (($metricHeight === null || $metricHeight === '') && is_string($rawHeightText)) {
+                                        if (preg_match('/([0-9]+(?:\.[0-9]+)?)\s*cm\b/i', (string) $rawHeightText, $m)) {
+                                            $metricHeight = $m[1];
+                                        }
+                                    }
+
+                                    $metricWeight = $answerFor('weight_kg', 'weight_kg') ?? $answerFor('weightkg', 'weightkg');
+                                    $rawWeightText = $answerFor('weight', 'weight');
+                                    if (($metricWeight === null || $metricWeight === '') && is_string($rawWeightText)) {
+                                        if (preg_match('/([0-9]+(?:\.[0-9]+)?)\s*kg\b/i', (string) $rawWeightText, $m)) {
+                                            $metricWeight = $m[1];
+                                        }
+                                    }
+
+                                    $imperialFt = $answerFor('height_ft', 'height_ft') ?? $answerFor('heightft', 'heightft') ?? $answerFor('feet', 'feet') ?? $answerFor('ft', 'ft');
+                                    $imperialIn = $answerFor('height_in', 'height_in') ?? $answerFor('heightin', 'heightin') ?? $answerFor('inches', 'inches') ?? $answerFor('inch', 'inch');
+                                    $imperialSt = $answerFor('weight_st', 'weight_st') ?? $answerFor('weightst', 'weightst') ?? $answerFor('stone', 'stone') ?? $answerFor('st', 'st');
+                                    $imperialLb = $answerFor('weight_lb', 'weight_lb') ?? $answerFor('weightlb', 'weightlb') ?? $answerFor('weight_lbs', 'weight_lbs') ?? $answerFor('pounds', 'pounds') ?? $answerFor('lbs', 'lbs') ?? $answerFor('lb', 'lb');
+                                @endphp
+                                <div {!! str_replace('class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"', 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').($req ? ' is-required' : '').'"', $wrapperAttrs) !!}>
+                                    @if($label)
+                                        <label for="{{ $name }}" class="cf-label">{{ $label }}@if($req)<span class="cf-required"> * required</span>@endif</label>
+                                    @endif
+
+                                    <div class="cf-bmi-wrap" data-bmi-wrap="1" data-bmi-target="{{ $name }}">
+                                        <div class="cf-bmi-toggle">
+                                            <div class="cf-bmi-toggle-group" role="tablist" aria-label="Height units">
+                                                <span class="cf-bmi-toggle-label">Height units</span>
+                                                <button type="button" class="cf-bmi-toggle-btn is-active" data-bmi-height-mode="metric">Metric</button>
+                                                <button type="button" class="cf-bmi-toggle-btn" data-bmi-height-mode="imperial">Imperial</button>
+                                            </div>
+                                            <div class="cf-bmi-toggle-group" role="tablist" aria-label="Weight units">
+                                                <span class="cf-bmi-toggle-label">Weight units</span>
+                                                <button type="button" class="cf-bmi-toggle-btn is-active" data-bmi-weight-mode="metric">Metric</button>
+                                                <button type="button" class="cf-bmi-toggle-btn" data-bmi-weight-mode="imperial">Imperial</button>
+                                            </div>
+                                        </div>
+
+                                        <div class="cf-bmi-grid">
+                                            <div class="cf-bmi-subgrid" data-bmi-height-panel="metric">
+                                                <div>
+                                                    <label class="cf-label" for="{{ $name }}__height_cm">Height (cm)</label>
+                                                    <input type="number" step="0.1" min="0" id="{{ $name }}__height_cm" value="{{ $metricHeight }}" class="cf-input" data-bmi-height-cm="1">
+                                                </div>
+                                            </div>
+
+                                            <div class="cf-bmi-subgrid" data-bmi-height-panel="imperial" style="display:none">
+                                                <div>
+                                                    <label class="cf-label" for="{{ $name }}__height_ft">Height (ft)</label>
+                                                    <input type="number" step="1" min="0" id="{{ $name }}__height_ft" value="{{ $imperialFt }}" class="cf-input" data-bmi-height-ft="1">
+                                                </div>
+                                                <div>
+                                                    <label class="cf-label" for="{{ $name }}__height_in">Height (in)</label>
+                                                    <input type="number" step="0.1" min="0" id="{{ $name }}__height_in" value="{{ $imperialIn }}" class="cf-input" data-bmi-height-in="1">
+                                                </div>
+                                            </div>
+
+                                            <div class="cf-bmi-subgrid" data-bmi-weight-panel="metric">
+                                                <div>
+                                                    <label class="cf-label" for="{{ $name }}__weight_kg">Weight (kg)</label>
+                                                    <input type="number" step="0.1" min="0" id="{{ $name }}__weight_kg" value="{{ $metricWeight }}" class="cf-input" data-bmi-weight-kg="1">
+                                                </div>
+                                            </div>
+
+                                            <div class="cf-bmi-subgrid" data-bmi-weight-panel="imperial" style="display:none">
+                                                <div>
+                                                    <label class="cf-label" for="{{ $name }}__weight_st">Weight (st)</label>
+                                                    <input type="number" step="0.1" min="0" id="{{ $name }}__weight_st" value="{{ $imperialSt }}" class="cf-input" data-bmi-weight-st="1">
+                                                </div>
+                                                <div>
+                                                    <label class="cf-label" for="{{ $name }}__weight_lb">Weight (lb)</label>
+                                                    <input type="number" step="0.1" min="0" id="{{ $name }}__weight_lb" value="{{ $imperialLb }}" class="cf-input" data-bmi-weight-lb="1">
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="cf-bmi-result">
+                                            <div>
+                                                <strong>BMI</strong>
+                                                <div class="cf-bmi-hint">Enter your measurements and the BMI value will be calculated automatically.</div>
+                                            </div>
+                                            <div style="min-width:120px">
+                                                <input type="text" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" placeholder="{{ $ph ?: 'BMI' }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" data-bmi-output="1" readonly />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
+                                </div>
+                            @elseif ($isGp)
+                                <div {!! str_replace('class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"', 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').($req ? ' is-required' : '').'"', $wrapperAttrs) !!}>
+                                    @if($label)
+                                        <label for="{{ $name }}" class="cf-label">{{ $label }}@if($req)<span class="cf-required"> * required</span>@endif</label>
+                                    @endif
+
+                                    <div class="cf-gp-wrap" data-gp-wrap="1" data-gp-target="{{ $name }}">
+                                        <input
+                                            type="text"
+                                            id="{{ $name }}"
+                                            name="{{ $name }}"
+                                            value="{{ $val }}"
+                                            placeholder="{{ $ph ?: 'Search GP practice by name, postcode or town' }}"
+                                            data-req="{{ $req ? 1 : 0 }}"
+                                            class="cf-input"
+                                            data-gp-input="1"
+                                            autocomplete="off"
+                                        />
+                                        <div class="cf-gp-muted" data-gp-hint="1">Start typing to search for a GP practice.</div>
+                                        <div class="cf-gp-error" data-gp-error="1" style="display:none"></div>
+                                        <div class="cf-gp-results" data-gp-results="1" style="display:none"></div>
+                                    </div>
+
+                                    @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
+                                </div>
+                            
+                            @else
+                                <div {!! str_replace('class="'.$fieldCard.($cond ? ' cf-conditional' : '').'"', 'class="'.$fieldCard.($cond ? ' cf-conditional' : '').($req ? ' is-required' : '').'"', $wrapperAttrs) !!}>
+                                    @if($label)
+                                        <label for="{{ $name }}" class="cf-label">{{ $label }}@if($req)<span class="cf-required"> * required</span>@endif</label>
+                                    @endif
+                                    <input type="text" id="{{ $name }}" name="{{ $name }}" value="{{ $val }}" placeholder="{{ $ph }}" data-req="{{ $req ? 1 : 0 }}" class="cf-input" />
+                                    @if($help)<p class="cf-help">{!! nl2br(e($help)) !!}</p>@endif
+                                </div>
+                            @endif
                         @endif
                     @endforeach
                 </div>
@@ -1235,46 +1459,500 @@
     });
     syncRequiredBanner();
   }
-  function hookFilePreviews(){
-    var inputs = form.querySelectorAll('input[type="file"]');
-    inputs.forEach(function(inp){
-      inp.addEventListener('change', function(){
-        var wrap = inp.closest('.cf-field-card') || inp.parentElement;
-        var box = wrap.querySelector('#'+CSS.escape(inp.id)+'__thumbs');
-        if (!box) {
-          box = document.createElement('div');
-          box.className = 'cf-thumbs';
-          box.id = inp.id + '__thumbs';
-          wrap.appendChild(box);
+
+  function debounce(fn, wait){
+    var t = null;
+    return function(){
+        var args = arguments;
+        var ctx = this;
+        clearTimeout(t);
+        t = setTimeout(function(){ fn.apply(ctx, args); }, wait || 250);
+    };
+    }
+
+  function parseNum(v){
+    if (v == null) return null;
+    var n = parseFloat(String(v).replace(/,/g, '').trim());
+    return Number.isFinite(n) ? n : null;
+  }
+  function round1(v){
+    return Math.round(v * 10) / 10;
+  }
+  function calcBmiMetric(heightCm, weightKg){
+    var h = parseNum(heightCm);
+    var w = parseNum(weightKg);
+    if (!(h > 0) || !(w > 0)) return null;
+    var hm = h / 100;
+    if (!(hm > 0)) return null;
+    return round1(w / (hm * hm));
+  }
+  function calcBmiImperial(ft, inches, st, lb){
+    var f = parseNum(ft) || 0;
+    var i = parseNum(inches) || 0;
+    var s = parseNum(st) || 0;
+    var l = parseNum(lb) || 0;
+    var totalIn = (f * 12) + i;
+    var totalLb = (s * 14) + l;
+    if (!(totalIn > 0) || !(totalLb > 0)) return null;
+    return round1((totalLb / (totalIn * totalIn)) * 703);
+  }
+  function setInputValue(name, value){
+    if (!name) return;
+    var selector = '[name="' + CSS.escape(name) + '"]';
+    var el = form.querySelector(selector);
+    if (!el) {
+      var byId = form.querySelector('#' + CSS.escape(name));
+      if (byId) el = byId;
+    }
+    if (!el) return;
+    el.value = value == null ? '' : String(value);
+  }
+  function clearNamedValues(names){
+    (names || []).forEach(function(n){ setInputValue(n, ''); });
+  }
+  function firstFilledValue(names){
+  for (var i = 0; i < (names || []).length; i++) {
+    var v = getValue(names[i]);
+    if (v == null) continue;
+    if (Array.isArray(v)) {
+      if (v.length) return v[0];
+      continue;
+    }
+    if (String(v).trim() !== '') return v;
+  }
+  return '';
+}
+
+function parseMetricHeightFromText(raw){
+  raw = String(raw || '').trim().toLowerCase();
+  if (!raw) return null;
+  var m = raw.match(/([0-9]+(?:\.[0-9]+)?)\s*cm\b/);
+  if (m) return parseNum(m[1]);
+  return null;
+}
+
+function parseMetricWeightFromText(raw){
+  raw = String(raw || '').trim().toLowerCase();
+  if (!raw) return null;
+  var m = raw.match(/([0-9]+(?:\.[0-9]+)?)\s*kg\b/);
+  if (m) return parseNum(m[1]);
+  return null;
+}
+
+function parseImperialHeightFromText(raw){
+  raw = String(raw || '').trim().toLowerCase();
+  if (!raw) return null;
+  var ft = null;
+  var inches = null;
+  var mFt = raw.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:ft|feet|foot)\b/);
+  var mIn = raw.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:in|inch|inches)\b/);
+  if (mFt) ft = parseNum(mFt[1]);
+  if (mIn) inches = parseNum(mIn[1]);
+  if (ft == null && inches == null) return null;
+  return { ft: ft || 0, inches: inches || 0 };
+}
+
+function parseImperialWeightFromText(raw){
+  raw = String(raw || '').trim().toLowerCase();
+  if (!raw) return null;
+  var st = null;
+  var lb = null;
+  var mSt = raw.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:st|stone)\b/);
+  var mLb = raw.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:lb|lbs|pound|pounds)\b/);
+  if (mSt) st = parseNum(mSt[1]);
+  if (mLb) lb = parseNum(mLb[1]);
+  if (st == null && lb == null) return null;
+  return { st: st || 0, lb: lb || 0 };
+}
+
+  function writeMetricAliases(heightCm, weightKg){
+    var h = heightCm == null ? '' : String(heightCm);
+    var w = weightKg == null ? '' : String(weightKg);
+    ['height_cm','heightcm'].forEach(function(n){ setInputValue(n, h); });
+    ['weight_kg','weightkg'].forEach(function(n){ setInputValue(n, w); });
+    if (h) {
+      ['height','height_text','height_str','patient_height'].forEach(function(n){ setInputValue(n, h + ' cm'); });
+    }
+    if (w) {
+      ['weight','weight_text','weight_str','patient_weight'].forEach(function(n){ setInputValue(n, w + ' kg'); });
+    }
+  }
+  function writeImperialAliases(ft, inches, st, lb){
+    var f = ft == null ? '' : String(ft);
+    var i = inches == null ? '' : String(inches);
+    var s = st == null ? '' : String(st);
+    var l = lb == null ? '' : String(lb);
+    ['height_ft','heightft','height_feet','feet','ft'].forEach(function(n){ setInputValue(n, f); });
+    ['height_in','heightin','height_inches','inches','inch'].forEach(function(n){ setInputValue(n, i); });
+    ['weight_st','weightst','weight_stone','stone','st'].forEach(function(n){ setInputValue(n, s); });
+    ['weight_lb','weightlb','weight_lbs','pounds','lbs','lb'].forEach(function(n){ setInputValue(n, l); });
+    if (f || i) {
+      ['height','height_text','height_str','patient_height'].forEach(function(n){ setInputValue(n, ((f || '0') + ' ft ' + (i || '0') + ' in').trim()); });
+    }
+    if (s || l) {
+      ['weight','weight_text','weight_str','patient_weight'].forEach(function(n){ setInputValue(n, ((s || '0') + ' st ' + (l || '0') + ' lb').trim()); });
+    }
+  }
+
+  function hookBmiCalculators(){
+    var wraps = form.querySelectorAll('[data-bmi-wrap="1"]');
+    wraps.forEach(function(wrap){
+      var output = wrap.querySelector('[data-bmi-output="1"]');
+      if (!output) return;
+      var targetName = wrap.getAttribute('data-bmi-target') || output.name || output.id;
+
+      var heightMetricPanel = wrap.querySelector('[data-bmi-height-panel="metric"]');
+      var heightImperialPanel = wrap.querySelector('[data-bmi-height-panel="imperial"]');
+      var weightMetricPanel = wrap.querySelector('[data-bmi-weight-panel="metric"]');
+      var weightImperialPanel = wrap.querySelector('[data-bmi-weight-panel="imperial"]');
+
+      var heightMetricBtn = wrap.querySelector('[data-bmi-height-mode="metric"]');
+      var heightImperialBtn = wrap.querySelector('[data-bmi-height-mode="imperial"]');
+      var weightMetricBtn = wrap.querySelector('[data-bmi-weight-mode="metric"]');
+      var weightImperialBtn = wrap.querySelector('[data-bmi-weight-mode="imperial"]');
+
+      var hCm = wrap.querySelector('[data-bmi-height-cm="1"]');
+      var wKg = wrap.querySelector('[data-bmi-weight-kg="1"]');
+      var hFt = wrap.querySelector('[data-bmi-height-ft="1"]');
+      var hIn = wrap.querySelector('[data-bmi-height-in="1"]');
+      var wSt = wrap.querySelector('[data-bmi-weight-st="1"]');
+      var wLb = wrap.querySelector('[data-bmi-weight-lb="1"]');
+
+      var heightMode = 'metric';
+      var weightMode = 'metric';
+
+      var savedHeightText = firstFilledValue(['height','height_text','height_str','patient_height']);
+        var savedWeightText = firstFilledValue(['weight','weight_text','weight_str','patient_weight']);
+
+        if ((!hCm || !String(hCm.value || '').trim()) && savedHeightText) {
+        var parsedMetricHeight = parseMetricHeightFromText(savedHeightText);
+        var parsedImperialHeight = parseImperialHeightFromText(savedHeightText);
+        if (parsedMetricHeight != null && hCm) {
+            hCm.value = String(parsedMetricHeight);
+        } else if (parsedImperialHeight) {
+            if (hFt) hFt.value = String(parsedImperialHeight.ft || '');
+            if (hIn) hIn.value = String(parsedImperialHeight.inches || '');
         }
-        box.innerHTML = '';
-        if (!inp.files) return;
-        Array.from(inp.files).forEach(function(f){
-          if (!/^image\//.test(f.type)) return;
-          var reader = new FileReader();
-          reader.onload = function(e){
-            var img = document.createElement('img');
-            img.src = e.target.result;
-            img.alt = f.name || 'image';
-            img.className = 'cf-thumb';
-            box.appendChild(img);
-          };
-          reader.readAsDataURL(f);
+        }
+
+        if ((!wKg || !String(wKg.value || '').trim()) && savedWeightText) {
+        var parsedMetricWeight = parseMetricWeightFromText(savedWeightText);
+        var parsedImperialWeight = parseImperialWeightFromText(savedWeightText);
+        if (parsedMetricWeight != null && wKg) {
+            wKg.value = String(parsedMetricWeight);
+        } else if (parsedImperialWeight) {
+            if (wSt) wSt.value = String(parsedImperialWeight.st || '');
+            if (wLb) wLb.value = String(parsedImperialWeight.lb || '');
+        }
+}
+
+      function toCm(){
+        if (heightMode === 'metric') return parseNum(hCm && hCm.value);
+        var ft = parseNum(hFt && hFt.value) || 0;
+        var inches = parseNum(hIn && hIn.value) || 0;
+        var totalIn = (ft * 12) + inches;
+        if (!(totalIn > 0)) return null;
+        return totalIn * 2.54;
+      }
+
+      function toKg(){
+        if (weightMode === 'metric') return parseNum(wKg && wKg.value);
+        var st = parseNum(wSt && wSt.value) || 0;
+        var lb = parseNum(wLb && wLb.value) || 0;
+        var totalLb = (st * 14) + lb;
+        if (!(totalLb > 0)) return null;
+        return totalLb * 0.45359237;
+      }
+
+      function applyHeightMode(nextMode){
+        heightMode = nextMode === 'imperial' ? 'imperial' : 'metric';
+        if (heightMetricPanel) heightMetricPanel.style.display = heightMode === 'metric' ? '' : 'none';
+        if (heightImperialPanel) heightImperialPanel.style.display = heightMode === 'imperial' ? '' : 'none';
+        if (heightMetricBtn) heightMetricBtn.classList.toggle('is-active', heightMode === 'metric');
+        if (heightImperialBtn) heightImperialBtn.classList.toggle('is-active', heightMode === 'imperial');
+        compute();
+      }
+
+      function applyWeightMode(nextMode){
+        weightMode = nextMode === 'imperial' ? 'imperial' : 'metric';
+        if (weightMetricPanel) weightMetricPanel.style.display = weightMode === 'metric' ? '' : 'none';
+        if (weightImperialPanel) weightImperialPanel.style.display = weightMode === 'imperial' ? '' : 'none';
+        if (weightMetricBtn) weightMetricBtn.classList.toggle('is-active', weightMode === 'metric');
+        if (weightImperialBtn) weightImperialBtn.classList.toggle('is-active', weightMode === 'imperial');
+        compute();
+      }
+
+      function compute(){
+        var cm = toCm();
+        var kg = toKg();
+        var bmi = calcBmiMetric(cm, kg);
+
+        if (heightMode === 'metric') {
+          ['height_cm','heightcm'].forEach(function(n){ setInputValue(n, hCm && hCm.value ? hCm.value : ''); });
+          if (hCm && hCm.value) {
+            ['height','height_text','height_str','patient_height'].forEach(function(n){ setInputValue(n, hCm.value + ' cm'); });
+          }
+          clearNamedValues(['height_ft','heightft','height_feet','feet','ft','height_in','heightin','height_inches','inches','inch']);
+        } else {
+          ['height_ft','heightft','height_feet','feet','ft'].forEach(function(n){ setInputValue(n, hFt && hFt.value ? hFt.value : ''); });
+          ['height_in','heightin','height_inches','inches','inch'].forEach(function(n){ setInputValue(n, hIn && hIn.value ? hIn.value : ''); });
+          if ((hFt && hFt.value) || (hIn && hIn.value)) {
+            ['height','height_text','height_str','patient_height'].forEach(function(n){ setInputValue(n, ((hFt && hFt.value) || '0') + ' ft ' + ((hIn && hIn.value) || '0') + ' in'); });
+          }
+          clearNamedValues(['height_cm','heightcm']);
+        }
+
+        if (weightMode === 'metric') {
+          ['weight_kg','weightkg'].forEach(function(n){ setInputValue(n, wKg && wKg.value ? wKg.value : ''); });
+          if (wKg && wKg.value) {
+            ['weight','weight_text','weight_str','patient_weight'].forEach(function(n){ setInputValue(n, wKg.value + ' kg'); });
+          }
+          clearNamedValues(['weight_st','weightst','weight_stone','stone','st','weight_lb','weightlb','weight_lbs','pounds','lbs','lb']);
+        } else {
+          ['weight_st','weightst','weight_stone','stone','st'].forEach(function(n){ setInputValue(n, wSt && wSt.value ? wSt.value : ''); });
+          ['weight_lb','weightlb','weight_lbs','pounds','lbs','lb'].forEach(function(n){ setInputValue(n, wLb && wLb.value ? wLb.value : ''); });
+          if ((wSt && wSt.value) || (wLb && wLb.value)) {
+            ['weight','weight_text','weight_str','patient_weight'].forEach(function(n){ setInputValue(n, ((wSt && wSt.value) || '0') + ' st ' + ((wLb && wLb.value) || '0') + ' lb'); });
+          }
+          clearNamedValues(['weight_kg','weightkg']);
+        }
+
+        output.value = bmi == null ? '' : String(bmi.toFixed(1));
+        setInputValue(targetName, output.value);
+        syncRequiredBanner();
+      }
+
+      if (heightMetricBtn) heightMetricBtn.addEventListener('click', function(){ applyHeightMode('metric'); });
+      if (heightImperialBtn) heightImperialBtn.addEventListener('click', function(){ applyHeightMode('imperial'); });
+      if (weightMetricBtn) weightMetricBtn.addEventListener('click', function(){ applyWeightMode('metric'); });
+      if (weightImperialBtn) weightImperialBtn.addEventListener('click', function(){ applyWeightMode('imperial'); });
+
+      [hCm, wKg, hFt, hIn, wSt, wLb].forEach(function(el){
+        if (!el) return;
+        el.addEventListener('input', compute);
+        el.addEventListener('change', compute);
+      });
+
+      var hasImperialHeightSeed = !!(parseNum(hFt && hFt.value) || parseNum(hIn && hIn.value));
+var hasImperialWeightSeed = !!(parseNum(wSt && wSt.value) || parseNum(wLb && wLb.value));
+      applyHeightMode(hasImperialHeightSeed ? 'imperial' : 'metric');
+      applyWeightMode(hasImperialWeightSeed ? 'imperial' : 'metric');
+    });
+  }
+
+  function parseCsvLine(line){
+  var out = [];
+  var cur = '';
+  var inQuotes = false;
+  for (var i = 0; i < line.length; i++) {
+    var ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+function parseCsv(text){
+  var lines = String(text || '').split(/\r?\n/).filter(function(line){ return String(line).trim() !== ''; });
+  if (!lines.length) return [];
+  var headers = parseCsvLine(lines[0]).map(function(h){ return String(h || '').trim(); });
+  return lines.slice(1).map(function(line){
+    var row = parseCsvLine(line);
+    var obj = {};
+    headers.forEach(function(h, idx){ obj[h] = row[idx] == null ? '' : row[idx]; });
+    return obj;
+  });
+}
+
+function formatPractice(item){
+  var name = item.name || item.practice || item.Practice || item.organisation || item.Organisation || item.practice_name || '';
+  var line1 = item.address || item.address1 || item.Address1 || item.line1 || item.street || '';
+  var town = item.town || item.city || item.post_town || item.PostTown || '';
+  var postcode = item.postcode || item.Postcode || item.zip || '';
+  var email = item.email || item.Email || item.practice_email || '';
+  var parts = [line1, town, postcode].filter(function(v){ return String(v || '').trim() !== ''; });
+  return {
+    title: String(name || '').trim(),
+    address: parts.join(', '),
+    postcode: String(postcode || '').trim(),
+    email: String(email || '').trim(),
+    raw: item
+  };
+}
+
+async function searchEpracurLocal(query){
+  try {
+    var res = await fetch('/data/epraccur.csv', { credentials: 'same-origin' });
+    if (!res.ok) return [];
+    var text = await res.text();
+    var rows = parseCsv(text);
+    var q = slug(query || '');
+    if (!q) return [];
+    var results = [];
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i] || {};
+      var formatted = formatPractice(row);
+      var hay = slug([formatted.title, formatted.address, formatted.postcode, formatted.email].join(' '));
+      if (hay && hay.indexOf(q) !== -1) {
+        results.push(formatted);
+      }
+      if (results.length >= 8) break;
+    }
+    return results;
+  } catch (e) {
+    return [];
+  }
+}
+
+async function runGpSearch(query){
+  var q = String(query || '').trim();
+  if (q.length < 2) return [];
+
+  try {
+    var res = await fetch('/api/gp-search?q=' + encodeURIComponent(q), {
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' }
+    });
+    if (res.ok) {
+      var data = await res.json();
+      var rows = Array.isArray(data)
+        ? data
+        : (Array.isArray(data.items)
+            ? data.items
+            : (Array.isArray(data.data)
+                ? data.data
+                : (Array.isArray(data.results) ? data.results : [])));
+      var mapped = rows.map(formatPractice).filter(function(item){ return item.title || item.address || item.postcode; });
+      if (mapped.length) return mapped.slice(0, 8);
+    }
+  } catch (e) {}
+
+  return await searchEpracurLocal(q);
+}
+
+function setGpEmailValue(email){
+  if (!email) return;
+  ['gp-email','gp_email','gpemail'].forEach(function(name){
+    var el = form.querySelector('[name="' + CSS.escape(name) + '"]') || form.querySelector('#' + CSS.escape(name));
+    if (el) el.value = email;
+  });
+}
+
+function renderGpResults(resultsWrap, items, onPick){
+  resultsWrap.innerHTML = '';
+  if (!items || !items.length) {
+    resultsWrap.style.display = 'none';
+    return;
+  }
+  items.forEach(function(item){
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cf-gp-result';
+
+    var title = document.createElement('div');
+    title.className = 'cf-gp-result-title';
+    title.textContent = item.title || 'GP Practice';
+
+    var meta = document.createElement('div');
+    meta.className = 'cf-gp-result-meta';
+    meta.textContent = [item.address, item.email].filter(function(v){ return String(v || '').trim() !== ''; }).join(' • ');
+
+    btn.appendChild(title);
+    btn.appendChild(meta);
+    btn.addEventListener('click', function(){ onPick(item); });
+    resultsWrap.appendChild(btn);
+  });
+  resultsWrap.style.display = '';
+}
+
+function hookGpSearches(){
+  var wraps = form.querySelectorAll('[data-gp-wrap="1"]');
+  wraps.forEach(function(wrap){
+    var input = wrap.querySelector('[data-gp-input="1"]');
+    var resultsWrap = wrap.querySelector('[data-gp-results="1"]');
+    var errorWrap = wrap.querySelector('[data-gp-error="1"]');
+    var hintWrap = wrap.querySelector('[data-gp-hint="1"]');
+    if (!input || !resultsWrap) return;
+
+    var search = debounce(async function(){
+      var q = String(input.value || '').trim();
+      if (errorWrap) { errorWrap.style.display = 'none'; errorWrap.textContent = ''; }
+      if (hintWrap) hintWrap.textContent = q.length < 2 ? 'Start typing to search for a GP practice.' : 'Searching GP practices…';
+
+      if (q.length < 2) {
+        resultsWrap.innerHTML = '';
+        resultsWrap.style.display = 'none';
+        syncRequiredBanner();
+        return;
+      }
+
+      var items = await runGpSearch(q);
+      if (hintWrap) hintWrap.textContent = items.length ? 'Select your GP practice from the list below.' : 'No matching GP practice found. You can keep typing manually.';
+      renderGpResults(resultsWrap, items, function(item){
+        var value = item.title;
+        if (item.address) value += ' — ' + item.address;
+        input.value = value;
+        setGpEmailValue(item.email || '');
+        resultsWrap.innerHTML = '';
+        resultsWrap.style.display = 'none';
+        if (hintWrap) hintWrap.textContent = 'GP practice selected.';
+        syncRequiredBanner();
+      });
+    }, 250);
+
+    input.addEventListener('input', search);
+    input.addEventListener('focus', function(){
+      if (String(input.value || '').trim().length >= 2) search();
+    });
+  });
+}
+
+  function hookFilePreviews(){
+    form.querySelectorAll('input[type="file"]').forEach(function(inp){
+      inp.addEventListener('change', function(){
+        var target = document.getElementById(inp.id + '__thumbs');
+        if (!target) return;
+        target.innerHTML = '';
+        Array.from(inp.files || []).forEach(function(file){
+          if (!file.type || !file.type.startsWith('image/')) return;
+          var url = URL.createObjectURL(file);
+          var a = document.createElement('a');
+          a.href = url;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          var img = document.createElement('img');
+          img.src = url;
+          img.className = 'cf-thumb';
+          a.appendChild(img);
+          target.appendChild(a);
         });
       });
     });
   }
+
   hookFilePreviews();
-  form.addEventListener('change', evaluate, true);
-  form.addEventListener('input', function(e){
-    if (!e.target) return;
-    if (e.target.type==='radio' || e.target.type==='checkbox' || e.target.tagName==='SELECT' || e.target.tagName==='TEXTAREA' || e.target.tagName==='INPUT') {
-      evaluate();
-    }
-  }, true);
+  hookBmiCalculators();
+  hookGpSearches();
   evaluate();
-  syncRequiredBanner();
+  form.addEventListener('change', evaluate, true);
+  form.addEventListener('input', syncRequiredBanner, true);
+  form.addEventListener('submit', function(){
+    document.getElementById('__go_next').value = '0';
+  });
 })();
 </script>
+
     </form>
-        @endif
+@endif
