@@ -26,13 +26,177 @@
     }
 @endphp
 
+@php
+    $consultationNotesTemplate = <<<'TEXT'
+Use a structured approach for example SOAP or encounter based
+
+S Subjective presenting complaint history medicines allergies
+O Objective observations exam findings investigations
+A Assessment working diagnosis differentials risk stratification
+P Plan treatment prescriptions referrals safety netting follow up
+
+Important safety information
+
+Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.
+
+Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.
+
+Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
+
+Medication Review:
+- New medication: (weight management)??
+- Dose: once weekly injection, same day each week
+- Storage: keep pen in fridge
+
+Clinical Consultation:
+- Weight management consultation
+- First time using or current repeat patient?
+- video call done new patient?
+
+Patient Education:
+- Injection technique: once weekly subcutaneous injection, same day each week
+- Fluid intake: 2-3 litres daily to prevent constipation/diarrhoea
+- Side effects discussed: initial nausea and headache (usually resolves), constipation or diarrhoea
+- Rare side effect counselling: pancreatitis symptoms (severe abdominal pain radiating to back, high temperature, vomiting) - seek medical advice immediately
+- Dosing schedule: start with current strength, reorder at end of week three via website, next dose. (either go down up or stay same in strengths)
+- Can remain on current strength if effective weight loss achieved
+-Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.
+
+Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.
+
+Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
+
+Plan:
+- Order dispatched today, delivery expected tomorrow
+- Reorder via website at end of week three for next dose.
+- Continue current strength if effective weight loss achieved
+TEXT;
+
+    $consultationNotesHelp = $consultationNotesTemplate;
+
+    $consultationNotesValue = old('consultation_notes');
+
+    $extractConsultationNotesValue = function ($raw) {
+        if (is_string($raw) && trim($raw) !== '') {
+            return trim($raw);
+        }
+
+        if (is_array($raw) && !empty($raw)) {
+            $last = end($raw);
+
+            if (is_string($last) && trim($last) !== '') {
+                return trim($last);
+            }
+
+            if (is_array($last)) {
+                foreach (['note', 'text', 'value', 'content'] as $key) {
+                    $v = $last[$key] ?? null;
+                    if (is_string($v) && trim($v) !== '') {
+                        return trim($v);
+                    }
+                }
+            }
+
+            foreach (array_reverse($raw) as $item) {
+                if (is_string($item) && trim($item) !== '') {
+                    return trim($item);
+                }
+                if (is_array($item)) {
+                    foreach (['note', 'text', 'value', 'content'] as $key) {
+                        $v = $item[$key] ?? null;
+                        if (is_string($v) && trim($v) !== '') {
+                            return trim($v);
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    };
+
+    if ($consultationNotesValue === null || trim((string) $consultationNotesValue) === '') {
+        $consultationNotesValue = null;
+
+        if (!empty($oldData) && is_array($oldData)) {
+            foreach ([
+                'consultation_notes',
+                'consultation-notes',
+                'pharmacist_advice_notes',
+                'pharmacist-advice-notes',
+                'pharmacist_advice.consultation_notes',
+                'pharmacist_advice.consultation-notes',
+            ] as $k) {
+                if (array_key_exists($k, $oldData)) {
+                    $v = $extractConsultationNotesValue($oldData[$k]);
+                    if ($v !== null && trim($v) !== '') {
+                        $consultationNotesValue = $v;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (($consultationNotesValue === null || trim((string) $consultationNotesValue) === '') && isset($session)) {
+            try {
+                $sessionMeta = is_array($session->meta ?? null)
+                    ? $session->meta
+                    : (json_decode($session->meta ?? '[]', true) ?: []);
+
+                foreach ([
+                    'consultation_notes',
+                    'consultation-notes',
+                    'pharmacist_advice_notes',
+                    'pharmacist-advice-notes',
+                    'pharmacist_advice.consultation_notes',
+                    'pharmacist_advice.consultation-notes',
+                ] as $k) {
+                    $v = data_get($sessionMeta, $k);
+                    $v = $extractConsultationNotesValue($v);
+                    if ($v !== null && trim($v) !== '') {
+                        $consultationNotesValue = $v;
+                        break;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // ignore
+            }
+        }
+
+        if (($consultationNotesValue === null || trim((string) $consultationNotesValue) === '') && isset($order)) {
+            try {
+                $orderMeta = is_array($order->meta ?? null)
+                    ? $order->meta
+                    : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                foreach ([
+                    'consultation_notes',
+                    'consultation-notes',
+                    'pharmacist_advice_notes',
+                    'pharmacist-advice-notes',
+                    'pharmacist_advice.consultation_notes',
+                    'pharmacist_advice.consultation-notes',
+                ] as $k) {
+                    $v = data_get($orderMeta, $k);
+                    $v = $extractConsultationNotesValue($v);
+                    if ($v !== null && trim($v) !== '') {
+                        $consultationNotesValue = $v;
+                        break;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // ignore
+            }
+        }
+
+        if ($consultationNotesValue === null || trim((string) $consultationNotesValue) === '') {
+            $consultationNotesValue = $consultationNotesTemplate;
+        }
+    }
+@endphp
+
 <div class="mb-4 flex flex-col gap-2">
     {{-- Consultation completion banner --}}
-    <div class="inline-flex items-center gap-2 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-        <span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>
-        <span>Consultation completion step</span>
-    </div>
-
     {{-- Royal Mail banner when shipping meta indicates Click and Drop --}}
     @if (!empty($shippingMeta) && ($shippingMeta['carrier'] ?? null) === 'royal_mail_click_and_drop')
         <div class="inline-flex flex-wrap items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900">
@@ -149,6 +313,23 @@
     </ul>
 </div>
 
+@if ($isReorder ?? false)
+<div class="cf-section-card">
+    <div class="mb-4">
+        <h3 class="cf-title">Consultation notes</h3>
+    </div>
+
+    <div class="cf-field-card">
+        <textarea
+            id="consultation_notes"
+            name="consultation_notes"
+            rows="18"
+            class="block w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm"
+        >{{ $consultationNotesValue }}</textarea>
+    </div>
+</div>
+@endif
+
 <form
     id="consult-complete-form"
     method="post"
@@ -157,4 +338,78 @@
 >
     @csrf
     <input type="hidden" name="confirm_complete" value="1">
+    <input type="hidden" name="consultation_notes" id="consultation_notes_hidden" value="">
 </form>
+<script>
+(function(){
+  var visible = document.getElementById('consultation_notes');
+  var hidden = document.getElementById('consultation_notes_hidden');
+  var form = document.getElementById('consult-complete-form');
+
+  console.log('[consultations.complete] loaded', {
+    hasVisibleNotes: !!visible,
+    hasHiddenNotes: !!hidden,
+    hasCompleteForm: !!form,
+    action: form ? form.getAttribute('action') : null,
+    sessionId: @json($session->id ?? $session->getKey()),
+  });
+
+  if (!visible || !hidden || !form) {
+    console.warn('[consultations.complete] missing expected elements', {
+      hasVisibleNotes: !!visible,
+      hasHiddenNotes: !!hidden,
+      hasCompleteForm: !!form,
+    });
+    return;
+  }
+
+  function syncNotes(){
+    hidden.value = visible.value || '';
+    console.log('[consultations.complete] notes synced', {
+      length: hidden.value.length,
+      preview: hidden.value.slice(0, 80),
+    });
+  }
+
+  visible.addEventListener('input', syncNotes);
+  visible.addEventListener('change', syncNotes);
+  form.addEventListener('submit', function(){
+    syncNotes();
+    console.log('[consultations.complete] complete form submit', {
+      action: form.getAttribute('action'),
+      confirmComplete: form.querySelector('[name="confirm_complete"]')?.value || null,
+      consultationNotesLength: hidden.value.length,
+    });
+  });
+
+  window.addEventListener('save-all-tabs:start', function(event){
+    console.log('[consultations.complete] save-all-tabs:start', event.detail || null);
+  });
+
+  window.addEventListener('save-all-tabs:tab-start', function(event){
+    console.log('[consultations.complete] save-all-tabs:tab-start', event.detail || null);
+  });
+
+  window.addEventListener('save-all-tabs:tab-loaded', function(event){
+    console.log('[consultations.complete] save-all-tabs:tab-loaded', event.detail || null);
+  });
+
+  window.addEventListener('save-all-tabs:tab-submit', function(event){
+    console.log('[consultations.complete] save-all-tabs:tab-submit', event.detail || null);
+  });
+
+  window.addEventListener('save-all-tabs:tab-done', function(event){
+    console.log('[consultations.complete] save-all-tabs:tab-done', event.detail || null);
+  });
+
+  window.addEventListener('save-all-tabs:done', function(event){
+    console.log('[consultations.complete] save-all-tabs:done', event.detail || null);
+  });
+
+  window.addEventListener('save-all-tabs:error', function(event){
+    console.error('[consultations.complete] save-all-tabs:error', event.detail || null);
+  });
+
+  syncNotes();
+})();
+</script>

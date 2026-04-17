@@ -1,35 +1,4 @@
-<x-filament-panels::page x-data="{ 
-    isSubmitting:false,
-    submitCurrent(goNext){
-      const area = document.getElementById('consultation-section');
-      const form = area ? area.querySelector('form') : document.querySelector('form');
-      if(!form) return;
-      let next = form.querySelector('[name=__go_next]');
-      if(!next){ next = document.createElement('input'); next.type='hidden'; next.name='__go_next'; form.appendChild(next); }
-      next.value = goNext ? '1' : '0';
-      if (goNext) { try { sessionStorage.setItem('consult_next','1'); } catch(e){} }
-      this.isSubmitting = true;
-      if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
-    },
-    goComplete(){
-      const area = document.getElementById('consultation-section');
-      const form = area ? area.querySelector('form') : document.querySelector('form');
-      if(!form) return;
-      let next = form.querySelector('[name=__go_next]');
-      if(!next){ next = document.createElement('input'); next.type='hidden'; next.name='__go_next'; form.appendChild(next); }
-      next.value = '0';
-      try { sessionStorage.setItem('consult_complete','1'); } catch(e){}
-      this.isSubmitting = true;
-      if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
-    },
-    confirmComplete(){
-      // Submit only the explicit complete form
-      const form = document.getElementById('consult-complete-form');
-      if (!form) return;
-      this.isSubmitting = true;
-      form.submit();
-    }
-  }">
+<x-filament-panels::page x-data="consultationRunner()" x-cloak>
   @php
       // Base tab order
       $tabs = [
@@ -84,6 +53,9 @@
               $currentTab = array_key_first($tabs);
           }
       }
+      $consultationBaseUrl = url('/admin/consultations/' . ($session->id ?? $session->getKey()));
+      $consultationCompleteUrl = $consultationBaseUrl . '/complete';
+      $tabOrderForJs = array_keys($tabs);
   @endphp
   <style>
     /* Remove any white borders or rings from Filament sections on this page */
@@ -179,8 +151,14 @@
   </x-filament::section>
 
   <div class="max-w-5xl mx-auto mt-14 mb-10 w-full">
+    <div x-show="saveAllTabsMessage" x-transition.opacity.duration.250ms class="mb-4 px-2 md:px-3">
+      <div class="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-300 shadow-sm">
+        <span x-text="saveAllTabsMessage"></span>
+      </div>
+    </div>
     <div class="flex flex-wrap items-center justify-start -m-2 md:-m-3">
       @if ($isCompletePage)
+        
         <div class="p-2 md:p-3">
           <x-filament::button type="button"
             x-on:click="confirmComplete()"
@@ -189,6 +167,16 @@
             Confirm and complete
           </x-filament::button>
         </div>
+        @if ($isReorder)
+        <div class="p-2 md:p-3">
+          <x-filament::button type="button"
+            x-on:click="saveAllTabs()"
+            x-bind:disabled="isSubmitting"
+            color="primary" size="md" class="px-8 py-3 text-lg">
+            Save all tabs
+          </x-filament::button>
+        </div>
+        @endif
         <div class="p-2 md:p-3">
           <x-filament::button
             :tag="'a'"
@@ -250,12 +238,12 @@
     try {
       if (sessionStorage.getItem('consult_next') === '1') {
         sessionStorage.removeItem('consult_next');
-        const order = @json(array_keys($tabs));
+        const order = @json($tabOrderForJs);
         const current = @json($currentTab);
         const idx = order.indexOf(current);
         if (idx > -1 && idx < order.length - 1) {
           const nextSlug = order[idx + 1];
-          const base = @json(url('/admin/consultations/' . ($session->id ?? $session->getKey())));
+          const base = @json($consultationBaseUrl);
           window.location.replace(base + '/' + nextSlug);
         }
       }
@@ -263,7 +251,7 @@
     try {
       if (sessionStorage.getItem('consult_complete') === '1') {
         sessionStorage.removeItem('consult_complete');
-        const completeUrl = @json(url('/admin/consultations/' . ($session->id ?? $session->getKey()) . '/complete'));
+        const completeUrl = @json($consultationCompleteUrl);
         window.location.replace(completeUrl);
       }
     } catch (e) {}
@@ -271,3 +259,223 @@
   });
 </script>
 </x-filament-panels::page>
+<script>
+  function consultationRunner() {
+    return {
+      isSubmitting: false,
+      saveAllTabsMessage: '',
+      submitCurrent(goNext) {
+        const area = document.getElementById('consultation-section');
+        const form = area ? area.querySelector('form') : document.querySelector('form');
+        if (!form) return;
+        let next = form.querySelector('[name=__go_next]');
+        if (!next) {
+          next = document.createElement('input');
+          next.type = 'hidden';
+          next.name = '__go_next';
+          form.appendChild(next);
+        }
+        next.value = goNext ? '1' : '0';
+        if (goNext) {
+          try { sessionStorage.setItem('consult_next', '1'); } catch (e) {}
+        }
+        this.isSubmitting = true;
+        if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+      },
+      goComplete() {
+        const area = document.getElementById('consultation-section');
+        const form = area ? area.querySelector('form') : document.querySelector('form');
+        if (!form) return;
+        let next = form.querySelector('[name=__go_next]');
+        if (!next) {
+          next = document.createElement('input');
+          next.type = 'hidden';
+          next.name = '__go_next';
+          form.appendChild(next);
+        }
+        next.value = '0';
+        try { sessionStorage.setItem('consult_complete', '1'); } catch (e) {}
+        this.isSubmitting = true;
+        if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+      },
+      confirmComplete() {
+        const form = document.getElementById('consult-complete-form');
+        if (!form) return;
+        this.isSubmitting = true;
+        form.submit();
+      },
+      async saveAllTabs() {
+        if (this.isSubmitting) return;
+        this.isSubmitting = true;
+        this.saveAllTabsMessage = '';
+
+        try {
+          const parts = window.location.pathname.split('/').filter(Boolean);
+          const sessionId = parts.length >= 3 ? parts[2] : null;
+          if (!sessionId) {
+            console.error('[saveAllTabs] could not resolve session id from URL', window.location.pathname);
+            return;
+          }
+
+          const base = `${window.location.origin}/admin/consultations/${sessionId}`;
+          const notesEl = document.querySelector('#consultation_notes, textarea[name="consultation_notes"], textarea[name="consultation-notes"]');
+          const notesHiddenEl = document.querySelector('#consultation_notes_hidden, input[name="consultation_notes"], input[name="consultation-notes"]');
+          const notesValue = notesEl
+            ? (notesEl.value || '')
+            : (notesHiddenEl ? (notesHiddenEl.value || '') : '');
+
+          if (notesHiddenEl && notesEl) {
+            notesHiddenEl.value = notesValue;
+          }
+
+          const urls = [];
+
+          if (document.querySelector('a[href*="/reorder"]')) {
+            urls.push(`${base}/reorder?tab=reorder`);
+          }
+
+          urls.push(`${base}/pharmacist-advice?tab=pharmacist_advice`);
+          urls.push(`${base}/pharmacist-declaration?tab=pharmacist_declaration`);
+          urls.push(`${base}/record-of-supply?tab=record_of_supply`);
+
+          const runSave = (url) => new Promise((resolve) => {
+            const iframe = document.createElement('iframe');
+            iframe.style.position = 'absolute';
+            iframe.style.width = '1px';
+            iframe.style.height = '1px';
+            iframe.style.opacity = '0';
+            iframe.style.pointerEvents = 'none';
+            iframe.style.left = '-9999px';
+            iframe.setAttribute('aria-hidden', 'true');
+            document.body.appendChild(iframe);
+
+            let finished = false;
+            const cleanup = () => {
+              if (finished) return;
+              finished = true;
+              setTimeout(() => {
+                try { iframe.remove(); } catch (e) {}
+                resolve();
+              }, 200);
+            };
+
+            const failSafe = setTimeout(() => {
+              console.warn('[saveAllTabs] timeout waiting for', url);
+              cleanup();
+            }, 12000);
+
+            iframe.onload = () => {
+              try {
+                const doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+                const form = doc && (
+                  doc.querySelector('#consultation-section form') ||
+                  doc.querySelector("form[id^='cf_']") ||
+                  doc.querySelector("form[action*='consultations/forms/save']") ||
+                  doc.querySelector('form')
+                );
+
+                console.log('[saveAllTabs] loaded', { url, hasDoc: !!doc, hasForm: !!form });
+
+                if (!doc || !form) {
+                  clearTimeout(failSafe);
+                  cleanup();
+                  return;
+                }
+
+                let next = form.querySelector("[name='__go_next']");
+                if (!next) {
+                  next = doc.createElement('input');
+                  next.type = 'hidden';
+                  next.name = '__go_next';
+                  form.appendChild(next);
+                }
+                next.value = '0';
+
+                let mark = form.querySelector("[name='__mark_complete']");
+                if (!mark) {
+                  mark = doc.createElement('input');
+                  mark.type = 'hidden';
+                  mark.name = '__mark_complete';
+                  form.appendChild(mark);
+                }
+                mark.value = '0';
+
+                iframe.onload = () => {
+                  clearTimeout(failSafe);
+                  console.log('[saveAllTabs] submitted', { url });
+                  cleanup();
+                };
+
+                if (form.requestSubmit) {
+                  form.requestSubmit();
+                } else {
+                  form.submit();
+                }
+              } catch (e) {
+                clearTimeout(failSafe);
+                console.error('[saveAllTabs] error for', url, e);
+                cleanup();
+              }
+            };
+
+            iframe.src = url;
+          });
+
+          for (const url of urls) {
+            await runSave(url);
+          }
+
+          let notesSaved = false;
+
+          try {
+            const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+              || document.querySelector('input[name="_token"]')?.value
+              || '';
+
+            console.log('[saveAllTabs] consultation notes length', notesValue ? notesValue.length : 0);
+
+            const response = await fetch(`${base}/save-all-tabs`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-CSRF-TOKEN': token,
+                'X-Requested-With': 'XMLHttpRequest',
+              },
+              credentials: 'same-origin',
+              body: JSON.stringify({
+                consultation_notes: notesValue,
+              }),
+            });
+
+            let payload = null;
+            try {
+              payload = await response.json();
+            } catch (e) {
+              payload = null;
+            }
+
+            notesSaved = !!(response.ok && payload && payload.consultation_notes_saved);
+            console.log('[saveAllTabs] save-all-tabs response', { status: response.status, payload, notesSaved });
+          } catch (e) {
+            console.error('[saveAllTabs] consultation notes save failed', e);
+          }
+
+          this.saveAllTabsMessage = notesSaved
+            ? 'All tabs and consultation notes are saved.'
+            : 'Tabs are saved, but consultation notes were not saved.';
+          setTimeout(() => {
+            if (
+              this.saveAllTabsMessage === 'All tabs and consultation notes are saved.' ||
+              this.saveAllTabsMessage === 'Tabs are saved, but consultation notes were not saved.'
+            ) {
+              this.saveAllTabsMessage = '';
+            }
+          }, 4000);
+        } finally {
+          this.isSubmitting = false;
+        }
+      }
+    };
+  }
+</script>

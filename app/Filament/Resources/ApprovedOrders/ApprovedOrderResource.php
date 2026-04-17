@@ -1892,6 +1892,63 @@ class ApprovedOrderResource extends Resource
                             return redirect()->route('consultations.runner.start', $params);
                         }),
 
+                    Action::make('completeConsultation')
+                        ->label('Complete Consultation')
+                        ->color('gray')
+                        ->icon('heroicon-o-check-badge')
+                        ->visible(function (ApprovedOrder $record): bool {
+                            $meta = is_array($record->meta)
+                                ? $record->meta
+                                : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                            $raw  = strtolower(trim((string) (data_get($meta, 'type') ?? '')));
+                            $mode = strtolower(trim((string) (data_get($meta, 'mode') ?? data_get($meta, 'flow') ?? '')));
+                            $path = strtolower(trim((string) (data_get($meta, 'path') ?? data_get($meta, 'source_url') ?? data_get($meta, 'referer') ?? '')));
+                            $svc  = strtolower(trim((string) (data_get($meta, 'service') ?? data_get($meta, 'serviceName') ?? data_get($meta, 'title') ?? '')));
+                            $ref  = strtoupper(trim((string) ($record->reference ?? '')));
+
+                            return in_array($raw, ['reorder','repeat','re-order','repeat-order'], true)
+                                || in_array($mode, ['reorder','repeat'], true)
+                                || str_contains($path, '/reorder')
+                                || preg_match('/^PTC[A-Z]*R[0-9]{6}$/', $ref)
+                                || str_contains($svc, 'reorder')
+                                || str_contains($svc, 'repeat')
+                                || str_contains($svc, 're-order');
+                        })
+                        ->action(function (ApprovedOrder $record) {
+                            $meta = is_array($record->meta)
+                                ? $record->meta
+                                : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                            $desiredType = 'reorder';
+
+                            data_set($meta, 'consultation.mode', $desiredType);
+                            data_set($meta, 'consultation.type', $desiredType);
+
+                            $record->meta = $meta;
+                            $record->save();
+
+                            $starter = app(\App\Services\Consultations\StartConsultation::class);
+
+                            try {
+                                $session = $starter($record, ['desired_type' => $desiredType]);
+                            } catch (\ArgumentCountError $e) {
+                                $session = $starter($record);
+                            }
+
+                            try {
+                                $attrs = method_exists($session, 'getAttributes') ? $session->getAttributes() : [];
+                                if (array_key_exists('form_type', $attrs)) {
+                                    $session->form_type = $desiredType;
+                                    $session->save();
+                                }
+                            } catch (\Throwable $e) {
+                                // non-fatal
+                            }
+
+                            return redirect()->to(url("/admin/consultations/{$session->id}/complete"));
+                        }),
+
                     Action::make('editProduct')
                         ->label('Edit product')
                         ->color('warning')

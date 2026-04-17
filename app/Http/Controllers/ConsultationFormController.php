@@ -207,6 +207,11 @@ class ConsultationFormController extends Controller
             'step'          => $stepSlug,
             'mark_complete' => $markComplete,
             'ship_now'      => $request->boolean('__ship_now'),
+            'go_next'       => $goNext,
+            'form_id'       => $form->id ?? null,
+            'form_type'     => $form->form_type ?? null,
+            'method'        => $request->method(),
+            'url'           => $request->fullUrl(),
         ]);
         $userId       = auth()->id();
 
@@ -240,7 +245,21 @@ class ConsultationFormController extends Controller
 
         // Ensure the consultation session exists before using it
         $session = ConsultationSession::query()->findOrFail($sessionId);
-
+        try {
+    \Log::info('consultation.save.hit', [
+        'session_id'      => $session->id,
+        'order_id'        => $session->order_id ?? null,
+        'service_slug'    => $session->service_slug ?? null,
+        'treatment_slug'  => $session->treatment_slug ?? null,
+        'step_slug'       => $stepSlug,
+        'request_keys'    => array_keys($request->except(['_token'])),
+        'has_answers'     => is_array($request->input('answers')),
+        'answers_keys'    => is_array($request->input('answers')) ? array_keys($request->input('answers')) : [],
+        'has_files'       => !empty($request->allFiles()),
+    ]);
+} catch (\Throwable $e) {
+    \Log::warning('consultation.save.hit_log_failed', ['message' => $e->getMessage()]);
+}
         // Derive non-null identifiers for DB scope
         $derivedFormType = $form->form_type;
         if (!$derivedFormType) {
@@ -798,12 +817,16 @@ class ConsultationFormController extends Controller
 
         // Helpful debug for tracking saves
         \Log::info('consultation.save.persist', [
-            'session_id' => $session->id,
-            'form_id'    => $form->id,
-            'step'       => $stepSlug,
-            'saved_keys' => array_keys($persistData),
-            'count'      => count($persistData),
-        ]);
+    'session_id'    => $session->id,
+    'form_id'       => $form->id,
+    'form_type'     => $derivedFormType,
+    'step'          => $stepSlug,
+    'saved_keys'    => array_keys($persistData),
+    'count'         => count($persistData),
+    'go_next'       => $goNext,
+    'mark_complete' => $markComplete,
+    'redirect_to'   => $target ?? null,
+]);
 
         $model = ConsultationFormResponse::firstOrNew($scope);
 
@@ -975,10 +998,33 @@ class ConsultationFormController extends Controller
         try {
             $adminNotesRaw = $request->input('admin_notes');
             $consultNotesRaw = $request->input('consultation_notes');
+            if ($consultNotesRaw === null || $consultNotesRaw === '') {
+                $consultNotesRaw = $request->input('consultation-notes');
+            }
+            if (($consultNotesRaw === null || $consultNotesRaw === '') && is_array($persistData ?? null)) {
+                foreach (['consultation_notes', 'consultation-notes', 'other-clinical-notes', 'other_clinical_notes'] as $noteKey) {
+                    if (array_key_exists($noteKey, $persistData)) {
+                        $consultNotesRaw = $persistData[$noteKey];
+                        break;
+                    }
+                }
+            }
 
             $adminNotesStr = is_string($adminNotesRaw) ? trim($adminNotesRaw) : '';
             $consultNotesStr = $this->coerceConsultationNoteText($consultNotesRaw);
-            
+
+            \Log::info('consultation.save.notes_detected', [
+                'session_id'    => $session->id,
+                'form_type'     => $derivedFormType,
+                'step_slug'     => $stepSlug,
+                'raw_type'      => gettype($consultNotesRaw),
+                'notes_found'   => $consultNotesStr !== '',
+                'notes_length'  => strlen($consultNotesStr),
+                'request_has_snake' => $request->has('consultation_notes'),
+                'request_has_dash'  => $request->has('consultation-notes'),
+                'persist_keys'      => is_array($persistData ?? null) ? array_keys($persistData) : [],
+            ]);
+
             if ($consultNotesStr !== '') {
                 $refForNote = null;
                 try {
@@ -1302,6 +1348,565 @@ class ConsultationFormController extends Controller
             'sessionLike' => $session,
         ]);
     }
+
+    /**
+     * Merge previously saved tab responses into session/order meta and return back with a success message.
+     */
+    protected function mergeLatestSavedTabsIntoMeta(ConsultationSession $session): array
+    {
+        $sessionMeta = is_array($session->meta)
+            ? $session->meta
+            : (json_decode($session->meta ?? '[]', true) ?: []);
+
+        $normalisePayload = function ($raw): array {
+            if (is_array($raw)) {
+                $payload = $raw;
+            } elseif (is_string($raw) && trim($raw) !== '') {
+                $decoded = json_decode($raw, true);
+                $payload = (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) ? $decoded : [];
+            } else {
+                $payload = [];
+            }
+
+            if (! is_array($payload)) {
+                return [];
+            }
+
+            array_walk_recursive($payload, function (&$value, $key) {
+                if (! is_string($value)) {
+                    return;
+                }
+
+                if ($key === 'signature' && str_starts_with($value, 'data:image/')) {
+                    $value = '[signature omitted]';
+                    return;
+                }
+
+                if (str_starts_with($value, 'data:image/')) {
+                    $value = '[embedded image omitted]';
+                    return;
+                }
+
+                if (strlen($value) > 5000) {
+                    $value = \Illuminate\Support\Str::limit($value, 1000, '');
+                }
+            });
+
+            return $payload;
+        };
+
+        $findLatestRow = function (array $aliases, array $nameHints = []) use ($session) {
+            $row = ConsultationFormResponse::query()
+                ->where('consultation_session_id', $session->id)
+                ->whereIn('form_type', $aliases)
+                ->latest('updated_at')
+                ->first();
+
+            if ($row) {
+                return $row;
+            }
+
+            $clinicFormIds = ClinicForm::query()
+                ->where(function ($q) use ($aliases, $nameHints) {
+                    if (! empty($aliases)) {
+                        $q->whereIn('form_type', $aliases);
+                    }
+
+                    if (! empty($nameHints)) {
+                        foreach ($nameHints as $hint) {
+                            $q->orWhere('name', 'like', '%' . $hint . '%');
+                        }
+                    }
+                })
+                ->pluck('id')
+                ->all();
+
+            if (empty($clinicFormIds)) {
+                return null;
+            }
+
+            return ConsultationFormResponse::query()
+                ->where('consultation_session_id', $session->id)
+                ->whereIn('clinic_form_id', $clinicFormIds)
+                ->latest('updated_at')
+                ->first();
+        };
+
+        $formsToCopy = [
+            'reorder' => [
+                'aliases'   => ['reorder'],
+                'nameHints' => ['reorder'],
+                'top'       => 'reorder',
+            ],
+            'pharmacist_advice' => [
+                'aliases'   => ['pharmacist_advice', 'pharmacist-advice', 'advice'],
+                'nameHints' => ['pharmacist advice', 'advice'],
+                'top'       => 'pharmacist_advice',
+            ],
+            'pharmacist_declaration' => [
+                'aliases'   => ['pharmacist_declaration', 'pharmacist-declaration', 'declaration'],
+                'nameHints' => ['pharmacist declaration', 'declaration'],
+                'top'       => 'pharmacist_declaration',
+            ],
+            'record_of_supply' => [
+                'aliases'   => ['record_of_supply', 'record-of-supply', 'clinical_notes'],
+                'nameHints' => ['record of supply', 'clinical notes'],
+                'top'       => 'record_of_supply',
+            ],
+        ];
+
+        $merged = [];
+        foreach ($formsToCopy as $canonical => $cfg) {
+            \Log::info('consultation.save_all_tabs.check', [
+                'session_id' => $session->id,
+                'canonical'  => $canonical,
+                'aliases'    => $cfg['aliases'],
+                'name_hints' => $cfg['nameHints'],
+            ]);
+
+            $row = $findLatestRow($cfg['aliases'], $cfg['nameHints']);
+
+            \Log::info('consultation.save_all_tabs.row', [
+                'session_id'     => $session->id,
+                'canonical'      => $canonical,
+                'row_id'         => $row->id ?? null,
+                'row_form_type'  => $row->form_type ?? null,
+                'clinic_form_id' => $row->clinic_form_id ?? null,
+            ]);
+            if (! $row) {
+                continue;
+            }
+
+            $payload = $normalisePayload($row->data ?? null);
+            \Log::info('consultation.save_all_tabs.payload_sanitised', [
+                'session_id'    => $session->id,
+                'canonical'     => $canonical,
+                'payload_keys'  => array_keys($payload),
+                'payload_count' => count($payload),
+                'has_signature' => array_key_exists('signature', $payload),
+            ]);
+            \Log::info('consultation.save_all_tabs.payload', [
+    'session_id'    => $session->id,
+    'canonical'     => $canonical,
+    'payload_keys'  => array_keys($payload),
+    'payload_count' => count($payload),
+]);
+            if (empty($payload)) {
+                continue;
+            }
+
+            $clinicForm = null;
+            try {
+                $clinicForm = $row->clinic_form_id ? ClinicForm::find($row->clinic_form_id) : null;
+            } catch (\Throwable $e) {
+                $clinicForm = null;
+            }
+
+            $schema = is_array($clinicForm?->schema)
+                ? $clinicForm->schema
+                : (json_decode($clinicForm?->schema ?? '[]', true) ?: []);
+
+            $slug = $clinicForm ? $this->slugForForm($clinicForm) : null;
+            $canonicalUnderscore = str_replace('-', '_', (string) ($slug ?: $cfg['top']));
+            $canonicalSlug = str_replace('_', '-', $canonicalUnderscore);
+
+            $allKeys = array_values(array_unique(array_filter(array_merge(
+                $cfg['aliases'],
+                [$canonicalUnderscore, $canonicalSlug]
+            ))));
+
+            foreach ($allKeys as $alias) {
+                data_set($sessionMeta, "forms.$alias.answers", $payload);
+                data_set($sessionMeta, "forms.$alias.updated_at", now()->toIso8601String());
+                if (! empty($schema)) {
+                    data_set($sessionMeta, "forms.$alias.schema", $schema);
+                }
+                data_set($sessionMeta, "formsQA.$alias", $payload);
+                data_set($sessionMeta, "forms_qa.$alias", $payload);
+            }
+
+            data_set($sessionMeta, $cfg['top'], $payload);
+            $merged[] = $canonical;
+        }
+
+        $session->meta = $sessionMeta;
+        $session->save();
+
+        try {
+            $order = $session->order ?? null;
+            if ($order) {
+                $orderMeta = is_array($order->meta)
+                    ? $order->meta
+                    : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                foreach ($formsToCopy as $canonical => $cfg) {
+                    if (! in_array($canonical, $merged, true)) {
+                        continue;
+                    }
+
+                    $row = $findLatestRow($cfg['aliases'], $cfg['nameHints']);
+                    if (! $row) {
+                        continue;
+                    }
+
+                    $payload = $normalisePayload($row->data ?? null);
+                    \Log::info('consultation.save_all_tabs.order_payload_sanitised', [
+                        'session_id'    => $session->id,
+                        'canonical'     => $canonical,
+                        'payload_keys'  => array_keys($payload),
+                        'payload_count' => count($payload),
+                        'has_signature' => array_key_exists('signature', $payload),
+                    ]);
+                    if (empty($payload)) {
+                        continue;
+                    }
+
+                    $clinicForm = null;
+                    try {
+                        $clinicForm = $row->clinic_form_id ? ClinicForm::find($row->clinic_form_id) : null;
+                    } catch (\Throwable $e) {
+                        $clinicForm = null;
+                    }
+
+                    $schema = is_array($clinicForm?->schema)
+                        ? $clinicForm->schema
+                        : (json_decode($clinicForm?->schema ?? '[]', true) ?: []);
+
+                    $slug = $clinicForm ? $this->slugForForm($clinicForm) : null;
+                    $canonicalUnderscore = str_replace('-', '_', (string) ($slug ?: $cfg['top']));
+                    $canonicalSlug = str_replace('_', '-', $canonicalUnderscore);
+
+                    $allKeys = array_values(array_unique(array_filter(array_merge(
+                        $cfg['aliases'],
+                        [$canonicalUnderscore, $canonicalSlug]
+                    ))));
+
+                    foreach ($allKeys as $alias) {
+                        data_set($orderMeta, "forms.$alias.answers", $payload);
+                        data_set($orderMeta, "forms.$alias.updated_at", now()->toIso8601String());
+                        if (! empty($schema)) {
+                            data_set($orderMeta, "forms.$alias.schema", $schema);
+                        }
+                        data_set($orderMeta, "formsQA.$alias", $payload);
+                        data_set($orderMeta, "forms_qa.$alias", $payload);
+                    }
+
+                    data_set($orderMeta, $cfg['top'], $payload);
+                }
+
+                $order->meta = $orderMeta;
+                $order->save();
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('consultation.save_all_tabs.order_meta_merge_failed', [
+                'session' => $session->id,
+                'error'   => $e->getMessage(),
+            ]);
+        }
+
+        return $merged;
+    }
+
+    /**
+     * Controller action to merge all saved tabs into session/order meta.
+     */
+    public function saveAllTabs(Request $request, ConsultationSession $session)
+{
+    \Log::info('consultation.save_all_tabs.hit', [
+        'session_id' => $session->id,
+        'url'        => $request->fullUrl(),
+        'method'     => $request->method(),
+    ]);
+
+    $merged = $this->mergeLatestSavedTabsIntoMeta($session);
+
+    $consultationNotesRaw = $request->input('consultation_notes');
+    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+        $consultationNotesRaw = $request->input('answers.consultation_notes');
+    }
+    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+        $consultationNotesRaw = $request->input('answers.consultation-notes');
+    }
+    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+        $consultationNotesRaw = $request->input('pharmacist_advice.consultation_notes');
+    }
+    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+        $consultationNotesRaw = $request->input('consultation-notes');
+    }
+    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+        $consultationNotesRaw = $request->input('other-clinical-notes');
+    }
+    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+        $consultationNotesRaw = $request->input('other_clinical_notes');
+    }
+
+    $consultationNotes = $this->coerceConsultationNoteText($consultationNotesRaw);
+
+    if ($consultationNotes === '') {
+        try {
+            $candidateRows = ConsultationFormResponse::query()
+                ->where('consultation_session_id', $session->id)
+                ->whereIn('form_type', ['pharmacist_advice', 'pharmacist-advice', 'advice', 'clinical_notes', 'record_of_supply', 'record-of-supply'])
+                ->orderByDesc('updated_at')
+                ->get();
+
+            foreach ($candidateRows as $candidateRow) {
+                $candidateData = is_array($candidateRow->data)
+                    ? $candidateRow->data
+                    : (json_decode($candidateRow->data ?? '[]', true) ?: []);
+
+                if (!is_array($candidateData)) {
+                    continue;
+                }
+
+                foreach (['consultation_notes', 'consultation-notes', 'other-clinical-notes', 'other_clinical_notes'] as $noteKey) {
+                    if (array_key_exists($noteKey, $candidateData)) {
+                        $consultationNotes = $this->coerceConsultationNoteText($candidateData[$noteKey]);
+                        if ($consultationNotes !== '') {
+                            break 2;
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('consultation.save_all_tabs.lookup_notes_failed', [
+                'session' => $session->id,
+                'error'   => $e->getMessage(),
+            ]);
+        }
+    }
+
+    \Log::info('consultation.save_all_tabs.notes_input', [
+        'session_id'          => $session->id,
+        'raw_type'            => gettype($consultationNotesRaw),
+        'notes_found'         => $consultationNotes !== '',
+        'notes_length'        => strlen($consultationNotes),
+        'request_has_direct'  => $request->has('consultation_notes'),
+        'request_has_answers' => $request->has('answers.consultation_notes'),
+    ]);
+
+    $consultationNotesLatest = $consultationNotes !== ''
+        ? \Illuminate\Support\Str::limit($consultationNotes, 4000, '')
+        : '';
+
+    if ($consultationNotes !== '') {
+        // Write consultation notes to the latest pharmacist advice ConsultationFormResponse row
+        try {
+            $adviceRow = ConsultationFormResponse::query()
+                ->where('consultation_session_id', $session->id)
+                ->whereIn('form_type', ['pharmacist_advice', 'pharmacist-advice', 'advice'])
+                ->latest('updated_at')
+                ->first();
+
+            if ($adviceRow) {
+                $adviceData = is_array($adviceRow->data)
+                    ? $adviceRow->data
+                    : (json_decode($adviceRow->data ?? '[]', true) ?: []);
+
+                if (!is_array($adviceData)) {
+                    $adviceData = [];
+                }
+
+                $adviceData['consultation_notes'] = $consultationNotes;
+                $adviceData['consultation-notes'] = $consultationNotes;
+
+                $adviceRow->data = $adviceData;
+                $adviceRow->save();
+
+                \Log::info('consultation.save_all_tabs.advice_row_updated', [
+                    'session_id' => $session->id,
+                    'row_id'     => $adviceRow->id,
+                    'form_type'  => $adviceRow->form_type,
+                    'keys'       => array_keys($adviceData),
+                ]);
+            } else {
+                \Log::warning('consultation.save_all_tabs.advice_row_missing', [
+                    'session_id' => $session->id,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('consultation.save_all_tabs.advice_row_update_failed', [
+                'session' => $session->id,
+                'error'   => $e->getMessage(),
+            ]);
+        }
+        try {
+            $sessionMeta = is_array($session->meta)
+                ? $session->meta
+                : (json_decode($session->meta ?? '[]', true) ?: []);
+
+            data_set($sessionMeta, 'consultation_notes', $consultationNotes);
+            data_set($sessionMeta, 'consultation-notes', $consultationNotesLatest);
+            data_set($sessionMeta, 'consultation_notes_latest', $consultationNotesLatest);
+            data_set($sessionMeta, 'pharmacist_advice.consultation_notes', $consultationNotesLatest);
+            data_set($sessionMeta, 'pharmacist_advice.consultation-notes', $consultationNotesLatest);
+            data_set($sessionMeta, 'pharmacist_advice_notes', $consultationNotesLatest);
+            data_set($sessionMeta, 'pharmacist-advice-notes', $consultationNotesLatest);
+
+            $session->meta = $sessionMeta;
+            $session->save();
+        } catch (\Throwable $e) {
+            \Log::warning('consultation.save_all_tabs.session_notes_failed', [
+                'session' => $session->id,
+                'error'   => $e->getMessage(),
+            ]);
+        }
+
+        try {
+            $order = $session->order ?? null;
+            if ($order) {
+                $orderMeta = is_array($order->meta)
+                    ? $order->meta
+                    : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                $existingNotes = $orderMeta['consultation_notes'] ?? $orderMeta['consultant_notes'] ?? [];
+
+                if (is_string($existingNotes)) {
+                    $decodedExistingNotes = json_decode($existingNotes, true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($decodedExistingNotes)) {
+                        $existingNotes = $decodedExistingNotes;
+                    } elseif (trim($existingNotes) !== '') {
+                        $existingNotes = [
+                            [
+                                'note' => trim($existingNotes),
+                                'at'   => null,
+                            ],
+                        ];
+                    } else {
+                        $existingNotes = [];
+                    }
+                }
+
+                if (! is_array($existingNotes)) {
+                    $existingNotes = [];
+                }
+
+                $alreadyExists = false;
+                foreach ($existingNotes as $item) {
+                    $text = is_array($item)
+                        ? trim((string) ($item['note'] ?? $item['text'] ?? ''))
+                        : trim((string) $item);
+                    if ($text === $consultationNotes) {
+                        $alreadyExists = true;
+                        break;
+                    }
+                }
+
+                if (! $alreadyExists) {
+                    $existingNotes[] = [
+                        'note' => $consultationNotes,
+                        'at'   => now('UTC')->toIso8601String(),
+                    ];
+                }
+
+                $normalisedNotes = [];
+                $seenNotes = [];
+                foreach ($existingNotes as $item) {
+                    $noteText = is_array($item)
+                        ? trim((string) ($item['note'] ?? $item['text'] ?? ''))
+                        : trim((string) $item);
+                    $noteAt = is_array($item)
+                        ? ($item['at'] ?? $item['created_at'] ?? $item['ts'] ?? null)
+                        : null;
+
+                    if ($noteText === '') {
+                        continue;
+                    }
+
+                    $dedupeKey = strtolower(preg_replace('/\s+/', ' ', $noteText));
+                    if (isset($seenNotes[$dedupeKey])) {
+                        continue;
+                    }
+
+                    $seenNotes[$dedupeKey] = true;
+                    $normalisedNotes[] = [
+                        'note' => $noteText,
+                        'at'   => $noteAt ?: null,
+                    ];
+                }
+
+                $existingNotes = $normalisedNotes;
+
+                $orderMeta['consultation_notes'] = $existingNotes;
+                $orderMeta['consultant_notes'] = $existingNotes;
+                $orderMeta['consultation_notes_latest'] = $consultationNotesLatest;
+                $orderMeta['consultation-notes'] = $consultationNotesLatest;
+                $orderMeta['pharmacist_advice_notes'] = $consultationNotesLatest;
+                $orderMeta['pharmacist-advice-notes'] = $consultationNotesLatest;
+
+                // Explicit mirrors for Completed Order details page
+                data_set($orderMeta, 'consultation_notes', $existingNotes);
+                data_set($orderMeta, 'consultant_notes', $existingNotes);
+
+                \Log::info('consultation.save_all_tabs.order_notes_written', [
+                    'session_id'   => $session->id,
+                    'order_id'     => $order->id,
+                    'notes_count'  => is_array($existingNotes) ? count($existingNotes) : 0,
+                    'latest_length'=> strlen($consultationNotesLatest),
+                    'meta_has_consultation_notes' => array_key_exists('consultation_notes', $orderMeta),
+                    'meta_has_consultant_notes'   => array_key_exists('consultant_notes', $orderMeta),
+                ]);
+
+                $order->meta = $orderMeta;
+                $order->save();
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('consultation.save_all_tabs.order_notes_failed', [
+                'session' => $session->id,
+                'error'   => $e->getMessage(),
+            ]);
+        }
+
+        try {
+            $userForNote = null;
+            if (isset($session->user_id) && $session->user_id) {
+                $userForNote = User::query()->find($session->user_id);
+            }
+            if (! $userForNote && ($session->order ?? null) && isset($session->order->user_id) && $session->order->user_id) {
+                $userForNote = User::query()->find($session->order->user_id);
+            }
+
+            $reference = (string) (($session->order->reference ?? null) ?: ($session->order_reference ?? $session->reference ?? ''));
+            $this->appendUserConsultationNote($userForNote, $consultationNotes, $reference !== '' ? $reference : null);
+        } catch (\Throwable $e) {
+            \Log::warning('consultation.save_all_tabs.user_notes_failed', [
+                'session' => $session->id,
+                'error'   => $e->getMessage(),
+            ]);
+        }
+    }
+
+    \Log::info('consultation.save_all_tabs.result', [
+        'session_id'                => $session->id,
+        'merged'                    => $merged,
+        'consultation_notes'        => $consultationNotes !== '',
+        'consultation_notes_length' => strlen($consultationNotes),
+        'latest_length'             => strlen($consultationNotesLatest),
+    ]);
+
+    if ($request->expectsJson() || $request->wantsJson()) {
+        return response()->json([
+            'ok' => true,
+            'merged' => $merged,
+            'consultation_notes_saved' => $consultationNotes !== '',
+            'consultation_notes_length' => strlen($consultationNotes),
+        ]);
+    }
+
+    if (empty($merged) && $consultationNotes === '') {
+        return back()->with('warning', 'No previously saved tab responses were found to merge.');
+    }
+
+    $parts = [];
+    if (! empty($merged)) {
+        $parts[] = 'Saved tabs merged: ' . implode(', ', $merged);
+    }
+    if ($consultationNotes !== '') {
+        $parts[] = 'Consultation notes saved.';
+    }
+
+    return back()->with('success', implode(' ', $parts));
+}
 
     /**
      * Handle the final Confirm and complete action.

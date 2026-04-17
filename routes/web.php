@@ -175,6 +175,10 @@ Route::middleware(['web', \Filament\Http\Middleware\Authenticate::class . ':admi
             ->name('consultations.complete.store')
             ->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
 
+        Route::post('{session}/save-all-tabs', [ConsultationFormController::class, 'saveAllTabs'])
+            ->name('consultations.save_all_tabs')
+            ->withoutMiddleware(\App\Http\Middleware\VerifyCsrfToken::class);
+
         Route::post('{session}/start', function (\App\Models\ConsultationSession $session) {
             return redirect()->to("/admin/consultations/{$session->id}");
         })->name('consultations.start');
