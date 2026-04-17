@@ -28,12 +28,6 @@
 
 @php
     $consultationNotesTemplate = <<<'TEXT'
-Use a structured approach for example SOAP or encounter based
-
-S Subjective presenting complaint history medicines allergies
-O Objective observations exam findings investigations
-A Assessment working diagnosis differentials risk stratification
-P Plan treatment prescriptions referrals safety netting follow up
 
 Important safety information
 
