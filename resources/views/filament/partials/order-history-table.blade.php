@@ -4,7 +4,12 @@
     $hasWeight = isset($r['weight']) && trim((string)$r['weight']) !== '' && trim((string)$r['weight']) !== '—';
     return $hasWeight || $slug === 'weight-management' || str_contains($slug, 'weight management') || str_contains($slug, 'weight-management');
 }))
-@php($colspan = $showWeight ? 6 : 5)
+@php($showBmi = collect($rows)->contains(function ($r) {
+    $slug = strtolower((string)($r['service_slug'] ?? $r['service'] ?? $r['service_name'] ?? ''));
+    $hasBmi = isset($r['bmi']) && trim((string)$r['bmi']) !== '' && trim((string)$r['bmi']) !== '—';
+    return $hasBmi || $slug === 'weight-management' || str_contains($slug, 'weight management') || str_contains($slug, 'weight-management');
+}))
+@php($colspan = 5 + ($showWeight ? 1 : 0) + ($showBmi ? 1 : 0))
 <style>
 /* Scoped styles for Order History, no Tailwind dependency */
 .oh-wrap{margin-top:.25rem;overflow-x:auto}
@@ -19,6 +24,7 @@
 .oh-created{white-space:nowrap}
 .oh-items{white-space:normal}
 .oh-weight{white-space:nowrap}
+.oh-bmi{white-space:nowrap}
 .oh-total{white-space:nowrap}
 .oh-actions{white-space:nowrap}
 .oh-btn{display:inline-flex;align-items:center;justify-content:center;padding:.25rem .6rem;border-radius:.4rem;background:#dc2626;color:#fff;text-decoration:none;font-weight:600;font-size:12px;border:1px solid #b91c1c}
@@ -38,6 +44,9 @@
         @if($showWeight)
           <th>Weight</th>
         @endif
+        @if($showBmi)
+          <th>BMI</th>
+        @endif
         <th>Total</th>
         <th>Actions</th>
       </tr>
@@ -50,6 +59,9 @@
           <td class="oh-items">{!! $row['items'] !!}</td>
           @if($showWeight)
             <td class="oh-weight">{{ $row['weight'] ?? '—' }}</td>
+          @endif
+          @if($showBmi)
+            <td class="oh-bmi">{{ $row['bmi'] ?? '—' }}</td>
           @endif
           <td class="oh-total">{{ $row['total'] }}</td>
           <td class="oh-actions">

@@ -324,6 +324,126 @@ TEXT;
 </div>
 @endif
 
+@php
+    $completeOldData = !empty($oldData) && is_array($oldData) ? $oldData : [];
+    $completeSessionMeta = isset($session)
+        ? (is_array($session->meta ?? null) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []))
+        : [];
+    $completeOrderMeta = isset($order)
+        ? (is_array($order->meta ?? null) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []))
+        : [];
+
+    $completeNormaliseValue = function ($value) {
+        if (is_array($value)) {
+            $value = implode(', ', array_filter(array_map(function ($v) {
+                if (is_scalar($v) || $v === null) {
+                    return trim((string) $v);
+                }
+                return null;
+            }, $value)));
+        }
+
+        if (is_string($value)) {
+            $value = trim($value);
+            return $value !== '' ? $value : null;
+        }
+
+        if (is_numeric($value)) {
+            return (string) $value;
+        }
+
+        return null;
+    };
+
+    $completeAnswerValueFromSource = function (array $source, string $key) use ($completeNormaliseValue) {
+        $paths = [
+            'answers.' . $key,
+            $key,
+            'assessment.answers.' . $key,
+            'raf_answers.' . $key,
+            'meta.answers.' . $key,
+        ];
+
+        foreach ($paths as $path) {
+            $normalised = $completeNormaliseValue(data_get($source, $path));
+            if ($normalised !== null) {
+                return $normalised;
+            }
+        }
+
+        foreach ([
+            data_get($source, 'formsQA.raf.qa'),
+            data_get($source, 'formsQA.risk_assessment.qa'),
+            data_get($source, 'formsQA.risk-assessment.qa'),
+        ] as $qaRows) {
+            if (!is_array($qaRows)) {
+                continue;
+            }
+
+            foreach ($qaRows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+
+                if ((string) ($row['key'] ?? '') !== $key) {
+                    continue;
+                }
+
+                $normalised = $completeNormaliseValue(
+                    $row['answer'] ?? $row['value'] ?? $row['raw'] ?? $row['response'] ?? null
+                );
+
+                if ($normalised !== null) {
+                    return $normalised;
+                }
+            }
+        }
+
+        return null;
+    };
+
+    $completeInformation =
+        $completeAnswerValueFromSource($completeOldData, 'information')
+        ?? $completeAnswerValueFromSource($completeSessionMeta, 'information')
+        ?? $completeAnswerValueFromSource($completeOrderMeta, 'information');
+
+    $completeInformationDetails =
+        $completeAnswerValueFromSource($completeOldData, 'information-details')
+        ?? $completeAnswerValueFromSource($completeSessionMeta, 'information-details')
+        ?? $completeAnswerValueFromSource($completeOrderMeta, 'information-details');
+@endphp
+
+<div class="cf-section-card">
+    <div class="mb-4">
+        <h3 class="cf-title">Additional information</h3>
+       
+    </div>
+
+    @if (($completeInformation !== null && $completeInformation !== '') || ($completeInformationDetails !== null && $completeInformationDetails !== ''))
+        <div class="cf-grid">
+            @if ($completeInformation !== null && $completeInformation !== '')
+                <div class="cf-field-card">
+                    <div class="cf-label">Information</div>
+                    <div class="text-sm">{{ $completeInformation }}</div>
+                </div>
+            @endif
+
+            @if ($completeInformationDetails !== null && $completeInformationDetails !== '')
+                <div class="cf-field-card">
+                    <div class="cf-label">Information Details</div>
+                    <div class="text-sm">{{ $completeInformationDetails }}</div>
+                </div>
+            @endif
+        </div>
+    @else
+        <div class="cf-field-card">
+            <div class="text-sm text-gray-500">
+                No saved additional information was found for this consultation.
+            </div>
+        </div>
+    @endif
+</div>
+
 <form
     id="consult-complete-form"
     method="post"

@@ -1352,6 +1352,79 @@ class ApprovedOrderResource extends Resource
                                             return '—';
                                         };
 
+                                        $bmiFromOrder = function ($o) {
+                                            $m = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
+
+                                            $direct = [
+                                                data_get($m, 'bmi'),
+                                                data_get($m, 'BMI'),
+                                                data_get($m, 'body_mass_index'),
+                                                data_get($m, 'body-mass-index'),
+                                                data_get($m, 'current_bmi'),
+                                                data_get($m, 'patient_bmi'),
+                                                data_get($m, 'raf.bmi'),
+                                                data_get($m, 'riskAssessment.bmi'),
+                                            ];
+
+                                            foreach ($direct as $v) {
+                                                if ($v === null) continue;
+                                                $s = trim((string) $v);
+                                                if ($s !== '') return e($s);
+                                            }
+
+                                            $qa = data_get($m, 'formsQA.raf.qa');
+                                            if (is_array($qa)) {
+                                                foreach ($qa as $row) {
+                                                    $k = strtolower(trim((string) ($row['key'] ?? '')));
+                                                    $q = strtolower(trim((string) ($row['question'] ?? '')));
+                                                    $looksBmi =
+                                                        $k === 'bmi'
+                                                        || str_contains($k, 'body_mass_index')
+                                                        || str_contains($k, 'body-mass-index')
+                                                        || preg_match('/\bbmi\b/', $q)
+                                                        || str_contains($q, 'body mass index');
+
+                                                    if (! $looksBmi) continue;
+
+                                                    $a = $row['answer'] ?? $row['raw'] ?? null;
+                                                    if ($a === null) continue;
+
+                                                    $out = is_array($a)
+                                                        ? trim(implode(', ', array_filter(array_map('strval', $a))))
+                                                        : trim((string) $a);
+
+                                                    if ($out !== '') return e($out);
+                                                }
+                                            }
+
+                                            $ra = data_get($m, 'riskAssessment') ?? data_get($m, 'raf');
+                                            if (is_array($ra)) {
+                                                foreach ($ra as $it) {
+                                                    if (!is_array($it)) continue;
+                                                    $key = strtolower(trim((string) ($it['key'] ?? $it['label'] ?? $it['question'] ?? '')));
+                                                    $looksBmi =
+                                                        $key === 'bmi'
+                                                        || str_contains($key, 'body_mass_index')
+                                                        || str_contains($key, 'body-mass-index')
+                                                        || preg_match('/\bbmi\b/', $key)
+                                                        || str_contains($key, 'body mass index');
+
+                                                    if (! $looksBmi) continue;
+
+                                                    $val = $it['value'] ?? $it['answer'] ?? $it['raw'] ?? $it['response'] ?? null;
+                                                    if ($val === null) continue;
+
+                                                    $out = is_array($val)
+                                                        ? trim(implode(', ', array_filter(array_map('strval', $val))))
+                                                        : trim((string) $val);
+
+                                                    if ($out !== '') return e($out);
+                                                }
+                                            }
+
+                                            return '—';
+                                        };
+
                                         $rows = [];
                                         foreach ($orders as $o) {
                                             $rows[] = [
@@ -1359,6 +1432,7 @@ class ApprovedOrderResource extends Resource
                                                 'created' => $fmtDate($o->created_at) ?? '',
                                                 'items'   => $itemsSummary($o), // already escaped with <br>
                                                 'weight'  => $weightFromOrder($o),
+                                                'bmi'     => $bmiFromOrder($o),
                                                 'total'   => $money($o),
                                                 'url'     => "/admin/orders/completed-orders/{$o->id}/details",
                                             ];
