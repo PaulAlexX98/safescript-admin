@@ -182,6 +182,7 @@ class ClickAndDrop
                     'email' => $email,
                     'emailAddress' => $email,
                     'phone' => $phone,
+                    'phoneNumber' => $phone,
                     'telephoneNumber' => $phone,
                 ],
                 'packages' => [[

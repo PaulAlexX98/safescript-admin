@@ -1918,6 +1918,36 @@ class ConsultationFormController extends Controller
             'confirm_complete' => 'accepted',
         ]);
 
+        $order = $session->order ?? null;
+
+        if ($order) {
+            $orderMetaForDuplicateCheck = is_array($order->meta)
+                ? $order->meta
+                : (json_decode($order->meta ?? '[]', true) ?: []);
+
+            $existingClickAndDropIdentifier = data_get($orderMetaForDuplicateCheck, 'clickanddrop.created_order_identifier')
+                ?? data_get($orderMetaForDuplicateCheck, 'clickanddrop.order_identifier')
+                ?? data_get($orderMetaForDuplicateCheck, 'clickanddrop.created_order.orderIdentifier')
+                ?? data_get($orderMetaForDuplicateCheck, 'clickanddrop.createdOrders.0.orderIdentifier')
+                ?? data_get($orderMetaForDuplicateCheck, 'shipping.response.createdOrders.0.orderIdentifier')
+                ?? data_get($orderMetaForDuplicateCheck, 'royal_mail.orderIdentifier')
+                ?? data_get($orderMetaForDuplicateCheck, 'royal_mail.order_identifier');
+
+            if (strtolower((string) $order->status) === 'completed' && $existingClickAndDropIdentifier) {
+                \Log::info('clickanddrop.complete.skipped_duplicate', [
+                    'session' => $session->id,
+                    'order' => $order->id,
+                    'reference' => $order->reference,
+                    'clickanddrop_order_identifier' => $existingClickAndDropIdentifier,
+                ]);
+
+                return redirect()
+                    ->to(url('/admin/orders/completed-orders/' . $order->id . '/details'))
+                    ->with('status', 'This order has already been completed and sent to Royal Mail.');
+            }
+        }
+
+
         // First mark session and order as completed
         DB::transaction(function () use ($session) {
             if (empty($session->status) || $session->status !== 'completed') {
@@ -2385,6 +2415,32 @@ class ConsultationFormController extends Controller
                 $response = $out['response'] ?? [];
                 $tracking = data_get($response, 'createdOrders.0.trackingNumber')
                     ?? data_get($response, 'createdOrders.0.trackingNumbers.0');
+
+                $clickAndDropCreatedOrder = data_get($response, 'createdOrders.0')
+                    ?? data_get($response, 'data.createdOrders.0');
+
+                $clickAndDropCreatedOrderIdentifier = data_get($clickAndDropCreatedOrder, 'orderIdentifier');
+
+                if ($clickAndDropCreatedOrderIdentifier) {
+                    $orderMetaAfterClickAndDrop = is_array($order->meta)
+                        ? $order->meta
+                        : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                    data_set($orderMetaAfterClickAndDrop, 'clickanddrop.created_order_identifier', $clickAndDropCreatedOrderIdentifier);
+                    data_set($orderMetaAfterClickAndDrop, 'clickanddrop.order_reference', $order->reference);
+                    data_set($orderMetaAfterClickAndDrop, 'clickanddrop.created_at', now()->toIso8601String());
+                    data_set($orderMetaAfterClickAndDrop, 'clickanddrop.created_order', $clickAndDropCreatedOrder);
+
+                    $order->meta = $orderMetaAfterClickAndDrop;
+                    $order->save();
+
+                    \Log::info('clickanddrop.meta_saved', [
+                        'session' => $session->id,
+                        'order' => $order->id,
+                        'reference' => $order->reference,
+                        'clickanddrop_order_identifier' => $clickAndDropCreatedOrderIdentifier,
+                    ]);
+                }
 
                 \Log::info('clickanddrop.complete.ok', [
                     'session'   => $session->id,
