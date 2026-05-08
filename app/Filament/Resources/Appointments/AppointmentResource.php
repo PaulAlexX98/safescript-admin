@@ -26,6 +26,8 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema as SchemaFacade;
 use App\Models\Order;
 use App\Models\PendingOrder;
 use Illuminate\Support\Arr;
@@ -44,6 +46,870 @@ class AppointmentResource extends Resource
 
     // Title used on View/Edit pages
     protected static ?string $recordTitleAttribute = 'display_title';
+
+    /**
+     * Helper: Return a list of service options for appointment form selects.
+     */
+    protected static function appointmentServiceOptions(?string $search = null): array
+    {
+        if (! SchemaFacade::hasTable('services')) {
+            return [];
+        }
+
+        $query = DB::table('services');
+
+        if (filled($search)) {
+            $query->where('name', 'like', '%' . trim((string) $search) . '%');
+        }
+
+        return $query
+            ->orderBy('name')
+            ->limit(25)
+            ->get()
+            ->mapWithKeys(function ($service) {
+                $name = trim((string) ($service->name ?? ''));
+                return $name !== '' ? [(string) $service->id => $name] : [];
+            })
+            ->all();
+    }
+
+    /**
+     * Helper: Return the label of a service by ID.
+     */
+    protected static function appointmentServiceLabel(mixed $serviceId): ?string
+    {
+        if (! $serviceId || ! SchemaFacade::hasTable('services')) {
+            return null;
+        }
+
+        try {
+            $name = DB::table('services')->where('id', $serviceId)->value('name');
+            $name = is_string($name) ? trim($name) : '';
+            return $name !== '' ? $name : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Helper: Return item options for a given service for appointment form selects.
+     */
+    protected static function appointmentItemOptionsForService(mixed $serviceId, ?string $search = null): array
+    {
+        if (empty($serviceId)) {
+            return [];
+        }
+
+        $search = trim((string) ($search ?? ''));
+        $options = [];
+
+        if (SchemaFacade::hasTable('products')) {
+            $nameColumn = SchemaFacade::hasColumn('products', 'name')
+                ? 'name'
+                : (SchemaFacade::hasColumn('products', 'title') ? 'title' : null);
+
+            if ($nameColumn) {
+                try {
+                    if (SchemaFacade::hasTable('service_product')) {
+                        $query = DB::table('products')
+                            ->join('service_product', 'products.id', '=', 'service_product.product_id')
+                            ->where('service_product.service_id', $serviceId);
+
+                        if ($search !== '') {
+                            $query->where("products.{$nameColumn}", 'like', '%' . $search . '%');
+                        }
+
+                        $options = $query
+                            ->orderBy("products.{$nameColumn}")
+                            ->limit(100)
+                            ->get(["products.{$nameColumn} as product_name"])
+                            ->mapWithKeys(fn ($row) => [(string) $row->product_name => (string) $row->product_name])
+                            ->all();
+                    } elseif (SchemaFacade::hasTable('product_service')) {
+                        $query = DB::table('products')
+                            ->join('product_service', 'products.id', '=', 'product_service.product_id')
+                            ->where('product_service.service_id', $serviceId);
+
+                        if ($search !== '') {
+                            $query->where("products.{$nameColumn}", 'like', '%' . $search . '%');
+                        }
+
+                        $options = $query
+                            ->orderBy("products.{$nameColumn}")
+                            ->limit(100)
+                            ->get(["products.{$nameColumn} as product_name"])
+                            ->mapWithKeys(fn ($row) => [(string) $row->product_name => (string) $row->product_name])
+                            ->all();
+                    }
+                } catch (\Throwable $e) {
+                    $options = [];
+                }
+            }
+        }
+
+        if (empty($options) && SchemaFacade::hasTable('service_medicines')) {
+            $nameColumn = SchemaFacade::hasColumn('service_medicines', 'name')
+                ? 'name'
+                : (SchemaFacade::hasColumn('service_medicines', 'title') ? 'title' : null);
+
+            if ($nameColumn) {
+                try {
+                    $query = DB::table('service_medicines')
+                        ->where('service_id', $serviceId);
+
+                    if ($search !== '') {
+                        $query->where($nameColumn, 'like', '%' . $search . '%');
+                    }
+
+                    $options = $query
+                        ->orderBy($nameColumn)
+                        ->limit(100)
+                        ->get(["{$nameColumn} as medicine_name"])
+                        ->mapWithKeys(fn ($row) => [(string) $row->medicine_name => (string) $row->medicine_name])
+                        ->all();
+                } catch (\Throwable $e) {
+                    $options = [];
+                }
+            }
+        }
+
+        return array_filter($options, fn ($label) => trim((string) $label) !== '');
+    }
+
+    // ---- Appointment slot/schedule helpers ----
+
+    /**
+     * Helper: Decode a JSON array or return array as-is.
+     */
+    protected static function appointmentDecodeArray(mixed $value): array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+
+        if (is_string($value) && trim($value) !== '') {
+            $decoded = json_decode($value, true);
+            return is_array($decoded) ? $decoded : [];
+        }
+
+        return [];
+    }
+
+    /**
+     * Helper: Get the service slug for slot lookup, optionally using fallback slug/name.
+     */
+    protected static function appointmentServiceSlugForSlotLookup(mixed $serviceId = null, ?string $fallbackSlug = null, ?string $fallbackName = null): ?string
+    {
+        $fallbackSlug = is_string($fallbackSlug) ? trim($fallbackSlug) : '';
+        if ($fallbackSlug !== '') {
+            return Str::slug($fallbackSlug);
+        }
+
+        if ($serviceId && SchemaFacade::hasTable('services')) {
+            try {
+                $service = DB::table('services')->where('id', $serviceId)->first();
+                if ($service) {
+                    $slug = trim((string) ($service->slug ?? ''));
+                    if ($slug !== '') {
+                        return Str::slug($slug);
+                    }
+
+                    $name = trim((string) ($service->name ?? ''));
+                    if ($name !== '') {
+                        return Str::slug($name);
+                    }
+                }
+            } catch (\Throwable $e) {
+                // fall back below
+            }
+        }
+
+        $fallbackName = is_string($fallbackName) ? trim($fallbackName) : '';
+        return $fallbackName !== '' ? Str::slug($fallbackName) : null;
+    }
+
+    /**
+     * Helper: Get the schedule row for a given service slug.
+     */
+    protected static function appointmentScheduleForService(?string $serviceSlug): ?object
+    {
+        if (! SchemaFacade::hasTable('schedules')) {
+            return null;
+        }
+
+        $serviceSlug = $serviceSlug ? Str::slug($serviceSlug) : null;
+        $serviceSlugVariants = [];
+
+        if ($serviceSlug) {
+            $serviceSlugVariants = array_values(array_unique(array_filter([
+                $serviceSlug,
+                str_replace('-', '_', $serviceSlug),
+                str_replace('-', ' ', $serviceSlug),
+                Str::lower($serviceSlug),
+            ])));
+        }
+
+        try {
+            $query = DB::table('schedules');
+
+            if (SchemaFacade::hasColumn('schedules', 'is_active')) {
+                $query->where(function ($q) {
+                    $q->where('is_active', 1)->orWhereNull('is_active');
+                });
+            }
+
+            if ($serviceSlug && SchemaFacade::hasColumn('schedules', 'service_slug')) {
+                $matched = (clone $query)
+                    ->where(function ($q) use ($serviceSlugVariants) {
+                        foreach ($serviceSlugVariants as $variant) {
+                            $q->orWhere('service_slug', $variant);
+                        }
+                    })
+                    ->orderByDesc('id')
+                    ->first();
+
+                if ($matched) {
+                    return $matched;
+                }
+            }
+
+            if ($serviceSlug && SchemaFacade::hasColumn('schedules', 'service')) {
+                $matched = (clone $query)
+                    ->where(function ($q) use ($serviceSlugVariants) {
+                        foreach ($serviceSlugVariants as $variant) {
+                            $q->orWhere('service', $variant);
+                        }
+                    })
+                    ->orderByDesc('id')
+                    ->first();
+
+                if ($matched) {
+                    return $matched;
+                }
+            }
+
+            if ($serviceSlug && SchemaFacade::hasColumn('schedules', 'name')) {
+                $matched = (clone $query)
+                    ->where(function ($q) use ($serviceSlug, $serviceSlugVariants) {
+                        $q->where('name', 'like', '%' . str_replace('-', '%', $serviceSlug) . '%');
+
+                        foreach ($serviceSlugVariants as $variant) {
+                            $q->orWhere('name', 'like', '%' . str_replace(['-', '_'], '%', $variant) . '%');
+                        }
+                    })
+                    ->orderByDesc('id')
+                    ->first();
+
+                if ($matched) {
+                    return $matched;
+                }
+            }
+
+            return $query
+                ->when(SchemaFacade::hasColumn('schedules', 'service_slug'), function ($q) {
+                    $q->where(function ($qq) {
+                        $qq->whereNull('service_slug')
+                            ->orWhere('service_slug', '')
+                            ->orWhere('service_slug', 'global');
+                    });
+                })
+                ->orderByRaw("CASE WHEN service_slug = 'global' THEN 0 ELSE 1 END")
+                ->orderByDesc('id')
+                ->first();
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    protected static function appointmentScheduleTimezone(?object $schedule): string
+    {
+        $tz = is_string($schedule->timezone ?? null) ? trim($schedule->timezone) : '';
+        return $tz !== '' ? $tz : 'Europe/London';
+    }
+
+    protected static function appointmentScheduleSlotMinutes(?object $schedule): int
+    {
+        $minutes = (int) ($schedule->slot_minutes ?? 20);
+        return $minutes > 0 ? $minutes : 20;
+    }
+
+    protected static function appointmentScheduleCapacity(?object $schedule): int
+    {
+        $capacity = (int) ($schedule->capacity ?? 1);
+        return $capacity > 0 ? $capacity : 1;
+    }
+
+    protected static function appointmentDayKey(string $date, string $timezone): string
+    {
+        try {
+            return Str::lower(Carbon::parse($date, $timezone)->format('D'));
+        } catch (\Throwable $e) {
+            return '';
+        }
+    }
+
+    /**
+     * Helper: Extract a schedule JSON array from the first non-empty of the given columns.
+     */
+    protected static function appointmentScheduleJsonFromColumns(?object $schedule, array $columns): array
+    {
+        if (! $schedule) {
+            return [];
+        }
+
+        foreach ($columns as $column) {
+            if (isset($schedule->{$column})) {
+                $decoded = static::appointmentDecodeArray($schedule->{$column});
+                if (! empty($decoded)) {
+                    return $decoded;
+                }
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Helper: Normalize schedule day value to a 3-letter key (sun, mon, ...).
+     */
+    protected static function appointmentNormaliseScheduleDay(mixed $day): string
+    {
+        if (is_int($day) || ctype_digit((string) $day)) {
+            $n = (int) $day;
+            $map = [
+                0 => 'sun',
+                1 => 'mon',
+                2 => 'tue',
+                3 => 'wed',
+                4 => 'thu',
+                5 => 'fri',
+                6 => 'sat',
+                7 => 'sun',
+            ];
+
+            return $map[$n] ?? '';
+        }
+
+        $day = Str::lower(trim((string) $day));
+        if ($day === '') {
+            return '';
+        }
+
+        $aliases = [
+            'monday' => 'mon',
+            'tuesday' => 'tue',
+            'wednesday' => 'wed',
+            'thursday' => 'thu',
+            'friday' => 'fri',
+            'saturday' => 'sat',
+            'sunday' => 'sun',
+        ];
+
+        return $aliases[$day] ?? substr($day, 0, 3);
+    }
+
+    /**
+     * Helper: Flatten schedule rows from normal JSON, Filament UUID-keyed repeaters,
+     * and Livewire synthesised nested arrays.
+     */
+    protected static function appointmentFlattenScheduleRows(array $rows): array
+    {
+        $flat = [];
+
+        $scheduleKeys = [
+            'day',
+            'dow',
+            'weekday',
+            'day_of_week',
+            'dayOfWeek',
+            'date',
+            'on',
+            'override_date',
+            'overrideDate',
+            'start',
+            'from',
+            'start_time',
+            'startTime',
+            'end',
+            'to',
+            'end_time',
+            'endTime',
+            'open',
+            'enabled',
+            'closed',
+        ];
+
+        $walk = function (mixed $value) use (&$walk, &$flat, $scheduleKeys): void {
+            if (! is_array($value)) {
+                return;
+            }
+
+            $hasScheduleShape = array_intersect(array_keys($value), $scheduleKeys);
+            if (! empty($hasScheduleShape)) {
+                $flat[] = $value;
+                return;
+            }
+
+            foreach ($value as $nested) {
+                if (is_array($nested)) {
+                    $walk($nested);
+                }
+            }
+        };
+
+        $walk($rows);
+
+        return $flat;
+    }
+
+    /**
+     * Helper: Truthy check for "open" fields in schedules.
+     */
+    protected static function appointmentTruthOpen(mixed $value): bool
+    {
+        if ($value === null) {
+            return true;
+        }
+
+        if ($value === false || $value === 0 || $value === '0') {
+            return false;
+        }
+
+        if ($value === true || $value === 1 || $value === '1') {
+            return true;
+        }
+
+        $value = Str::lower(trim((string) $value));
+
+        return $value !== '' && ! in_array($value, ['0', 'false', 'closed', 'no', 'off'], true);
+    }
+
+    /**
+     * Helper: Return the first non-empty string value from $row using $keys.
+     */
+    protected static function appointmentFirstScheduleValue(array $row, array $keys): string
+    {
+        foreach ($keys as $key) {
+            $value = data_get($row, $key);
+            if ($value !== null && trim((string) $value) !== '') {
+                return trim((string) $value);
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Helper: Get [windows, blackouts] for a given schedule and date.
+     */
+    protected static function appointmentScheduleWindowsForDate(?object $schedule, string $date): array
+    {
+        if (! $schedule || trim($date) === '') {
+            return [];
+        }
+
+        $timezone = static::appointmentScheduleTimezone($schedule);
+        $dayKey = static::appointmentDayKey($date, $timezone);
+        if ($dayKey === '') {
+            return [[], []];
+        }
+
+        $windows = [];
+        $blackouts = [];
+
+        $week = static::appointmentScheduleJsonFromColumns($schedule, [
+            'week',
+            'weekly_hours',
+            'weeklyHours',
+            'working_hours',
+            'workingHours',
+            'opening_hours',
+            'openingHours',
+            'hours',
+            'days',
+            'availability',
+            'rules',
+        ]);
+
+        foreach (static::appointmentFlattenScheduleRows($week) as $key => $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $rowDayRaw = $row['day']
+                ?? $row['dow']
+                ?? $row['weekday']
+                ?? $row['day_of_week']
+                ?? $row['dayOfWeek']
+                ?? $key;
+
+            $rowDay = static::appointmentNormaliseScheduleDay($rowDayRaw);
+            if ($rowDay !== $dayKey) {
+                continue;
+            }
+
+            $openFlag = $row['open'] ?? $row['enabled'] ?? $row['is_open'] ?? $row['isOpen'] ?? $row['closed'] ?? true;
+            if (array_key_exists('closed', $row)) {
+                $openFlag = ! $row['closed'];
+            }
+
+            if (! static::appointmentTruthOpen($openFlag)) {
+                return [[], []];
+            }
+
+            $start = static::appointmentFirstScheduleValue($row, ['start', 'from', 'start_time', 'startTime', 'open_time', 'openTime', 'opens', 'opening']);
+            $end = static::appointmentFirstScheduleValue($row, ['end', 'to', 'end_time', 'endTime', 'close_time', 'closeTime', 'closes', 'closing']);
+
+            if ($start !== '' && $end !== '') {
+                $windows[] = [$start, $end];
+            }
+
+            $breakStart = static::appointmentFirstScheduleValue($row, ['break_start', 'breakStart', 'lunch_start', 'lunchStart']);
+            $breakEnd = static::appointmentFirstScheduleValue($row, ['break_end', 'breakEnd', 'lunch_end', 'lunchEnd']);
+            if ($breakStart !== '' && $breakEnd !== '') {
+                $blackouts[] = [$breakStart, $breakEnd];
+            }
+
+            foreach ((array) ($row['breaks'] ?? []) as $break) {
+                if (! is_array($break)) {
+                    continue;
+                }
+
+                $bs = static::appointmentFirstScheduleValue($break, ['start', 'from', 'start_time', 'startTime']);
+                $be = static::appointmentFirstScheduleValue($break, ['end', 'to', 'end_time', 'endTime']);
+                if ($bs !== '' && $be !== '') {
+                    $blackouts[] = [$bs, $be];
+                }
+            }
+        }
+
+        $overrides = static::appointmentScheduleJsonFromColumns($schedule, [
+            'overrides',
+            'date_overrides',
+            'dateOverrides',
+            'special_days',
+            'specialDays',
+            'exceptions',
+        ]);
+
+        foreach (static::appointmentFlattenScheduleRows($overrides) as $override) {
+            if (! is_array($override)) {
+                continue;
+            }
+
+            $overrideDate = static::appointmentFirstScheduleValue($override, ['date', 'on', 'day', 'override_date', 'overrideDate']);
+            if ($overrideDate !== $date) {
+                continue;
+            }
+
+            $openFlag = $override['open'] ?? $override['is_open'] ?? $override['isOpen'] ?? $override['closed'] ?? true;
+            if (array_key_exists('closed', $override)) {
+                $openFlag = ! $override['closed'];
+            }
+
+            if (! static::appointmentTruthOpen($openFlag)) {
+                return [[], []];
+            }
+
+            $start = static::appointmentFirstScheduleValue($override, ['start', 'from', 'start_time', 'startTime', 'open_time', 'openTime']);
+            $end = static::appointmentFirstScheduleValue($override, ['end', 'to', 'end_time', 'endTime', 'close_time', 'closeTime']);
+            if ($start !== '' && $end !== '') {
+                $windows = [[$start, $end]];
+            }
+
+            foreach ((array) ($override['blackouts'] ?? []) as $blackout) {
+                if (! is_array($blackout)) {
+                    continue;
+                }
+                $bs = static::appointmentFirstScheduleValue($blackout, ['start', 'from', 'start_time', 'startTime']);
+                $be = static::appointmentFirstScheduleValue($blackout, ['end', 'to', 'end_time', 'endTime']);
+                if ($bs !== '' && $be !== '') {
+                    $blackouts[] = [$bs, $be];
+                }
+            }
+        }
+
+        $scheduleBlackouts = static::appointmentScheduleJsonFromColumns($schedule, [
+            'blackouts',
+            'blocked_times',
+            'blockedTimes',
+            'breaks',
+        ]);
+
+        foreach (static::appointmentFlattenScheduleRows($scheduleBlackouts) as $blackout) {
+            if (! is_array($blackout)) {
+                continue;
+            }
+
+            $blackoutDate = static::appointmentFirstScheduleValue($blackout, ['date', 'on', 'day']);
+            if ($blackoutDate !== '' && $blackoutDate !== $date) {
+                continue;
+            }
+
+            $bs = static::appointmentFirstScheduleValue($blackout, ['start', 'from', 'start_time', 'startTime']);
+            $be = static::appointmentFirstScheduleValue($blackout, ['end', 'to', 'end_time', 'endTime']);
+            if ($bs !== '' && $be !== '') {
+                $blackouts[] = [$bs, $be];
+            }
+        }
+
+        return [$windows, $blackouts];
+    }
+
+    /**
+     * Helper: Check if a slot overlaps any blackout.
+     */
+    protected static function appointmentTimeOverlapsBlackout(Carbon $slotStart, Carbon $slotEnd, string $date, string $timezone, array $blackouts): bool
+    {
+        foreach ($blackouts as $blackout) {
+            [$start, $end] = $blackout;
+            try {
+                $blackoutStart = Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $start, $timezone);
+                $blackoutEnd = Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $end, $timezone);
+                if ($slotStart->lt($blackoutEnd) && $slotEnd->gt($blackoutStart)) {
+                    return true;
+                }
+            } catch (\Throwable $e) {
+                continue;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Helper: Count appointments already booked for a slot, excluding a given appointment ID.
+     * Kept as a compatibility wrapper. The main slot builder loads booked counts once per date.
+     */
+    protected static function appointmentBookedCountForSlot(Carbon $slotStartLocal, ?int $ignoreAppointmentId = null): int
+    {
+        $timezone = 'Europe/London';
+        $counts = static::appointmentBookedCountsForDate(
+            $slotStartLocal->copy()->tz($timezone)->toDateString(),
+            $timezone,
+            $ignoreAppointmentId
+        );
+
+        $key = $slotStartLocal->copy()->utc()->format('Y-m-d H:i:s');
+
+        return (int) ($counts[$key] ?? 0);
+    }
+
+    /**
+     * Helper: Fetch booked appointment counts for a whole local date in one query.
+     * Returns multiple keys per booking so the create form can hide taken times even if
+     * older rows stored start_at as local time rather than UTC, or use appointment_at/start_date/start_time.
+     */
+    protected static function appointmentBookedCountsForDate(string $date, string $timezone, ?int $ignoreAppointmentId = null): array
+    {
+        try {
+            $dayStartLocal = Carbon::parse($date, $timezone)->startOfDay();
+            $dayEndLocal = Carbon::parse($date, $timezone)->endOfDay();
+            $dayStartUtc = $dayStartLocal->copy()->utc()->format('Y-m-d H:i:s');
+            $dayEndUtc = $dayEndLocal->copy()->utc()->format('Y-m-d H:i:s');
+
+            $query = Appointment::query()
+                ->when($ignoreAppointmentId, fn ($q) => $q->whereKeyNot($ignoreAppointmentId))
+                ->when(SchemaFacade::hasColumn('appointments', 'status'), function ($q) {
+                    $q->where(function ($qq) {
+                        $qq->whereNull('status')
+                            ->orWhere('status', '')
+                            ->orWhereNotIn('status', ['completed', 'complete', 'done', 'cancelled', 'canceled', 'rejected']);
+                    });
+                });
+
+            $query->where(function ($q) use ($date, $dayStartUtc, $dayEndUtc) {
+                if (SchemaFacade::hasColumn('appointments', 'start_at')) {
+                    $q->orWhereBetween('start_at', [$dayStartUtc, $dayEndUtc])
+                        ->orWhereDate('start_at', $date);
+                }
+
+                if (SchemaFacade::hasColumn('appointments', 'appointment_at')) {
+                    $q->orWhereBetween('appointment_at', [$dayStartUtc, $dayEndUtc])
+                        ->orWhereDate('appointment_at', $date);
+                }
+
+                if (SchemaFacade::hasColumn('appointments', 'start_date')) {
+                    $q->orWhereDate('start_date', $date);
+                }
+            });
+
+            $rows = $query->get();
+            $counts = [];
+
+            $addBookedTime = function (Carbon $local) use (&$counts, $date): void {
+                if ($local->toDateString() !== $date) {
+                    return;
+                }
+
+                $time = $local->format('H:i');
+                $utcKey = $local->copy()->utc()->format('Y-m-d H:i:s');
+                $localKey = $local->copy()->format('Y-m-d H:i:s');
+
+                $counts[$utcKey] = (int) ($counts[$utcKey] ?? 0) + 1;
+                $counts[$localKey] = (int) ($counts[$localKey] ?? 0) + 1;
+                $counts[$time] = (int) ($counts[$time] ?? 0) + 1;
+            };
+
+            foreach ($rows as $row) {
+                $candidateStart = null;
+
+                foreach (['start_at', 'appointment_at'] as $column) {
+                    if (SchemaFacade::hasColumn('appointments', $column) && ! empty($row->{$column})) {
+                        $candidateStart = $row->{$column};
+                        break;
+                    }
+                }
+
+                if ($candidateStart) {
+                    try {
+                        $addBookedTime(Carbon::parse($candidateStart, 'UTC')->tz($timezone));
+                        continue;
+                    } catch (\Throwable $e) {
+                        // Try interpreting the stored value as local below.
+                    }
+
+                    try {
+                        $addBookedTime(Carbon::parse($candidateStart, $timezone));
+                        continue;
+                    } catch (\Throwable $e) {
+                        // Fall through to explicit date/time columns.
+                    }
+                }
+
+                if (
+                    SchemaFacade::hasColumn('appointments', 'start_date')
+                    && SchemaFacade::hasColumn('appointments', 'start_time')
+                ) {
+                    $rowDate = ! empty($row->start_date)
+                        ? Carbon::parse($row->start_date)->toDateString()
+                        : null;
+
+                    $rowTime = is_string($row->start_time ?? null)
+                        ? substr(trim($row->start_time), 0, 5)
+                        : null;
+
+                    if ($rowDate === $date && $rowTime) {
+                        $addBookedTime(Carbon::parse($date . ' ' . $rowTime, $timezone));
+                    }
+                }
+            }
+
+            return $counts;
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * Helper: Generate available time slot options for a service and date.
+     */
+    protected static function appointmentAvailableTimeOptions(?string $serviceSlug, ?string $date, ?int $ignoreAppointmentId = null): array
+    {
+        $date = is_string($date) ? trim($date) : '';
+        if ($date === '') {
+            return [];
+        }
+
+        $schedule = static::appointmentScheduleForService($serviceSlug);
+        if (! $schedule) {
+            return [];
+        }
+
+        $timezone = static::appointmentScheduleTimezone($schedule);
+        $slotMinutes = static::appointmentScheduleSlotMinutes($schedule);
+        $capacity = static::appointmentScheduleCapacity($schedule);
+        [$windows, $blackouts] = static::appointmentScheduleWindowsForDate($schedule, $date);
+
+        if (empty($windows)) {
+            return [];
+        }
+
+        $bookedCounts = static::appointmentBookedCountsForDate($date, $timezone, $ignoreAppointmentId);
+
+        $options = [];
+        foreach ($windows as $window) {
+            [$start, $end] = $window;
+            try {
+                $cursor = Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $start, $timezone);
+                $windowEnd = Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $end, $timezone);
+            } catch (\Throwable $e) {
+                continue;
+            }
+
+            while ($cursor->copy()->addMinutes($slotMinutes)->lte($windowEnd)) {
+                $slotStart = $cursor->copy();
+                $slotEnd = $cursor->copy()->addMinutes($slotMinutes);
+
+                if (! static::appointmentTimeOverlapsBlackout($slotStart, $slotEnd, $date, $timezone, $blackouts)) {
+                    $time = $slotStart->format('H:i');
+                    $slotUtcKey = $slotStart->copy()->utc()->format('Y-m-d H:i:s');
+                    $slotLocalKey = $slotStart->copy()->format('Y-m-d H:i:s');
+                    $booked = max(
+                        (int) ($bookedCounts[$slotUtcKey] ?? 0),
+                        (int) ($bookedCounts[$slotLocalKey] ?? 0),
+                        (int) ($bookedCounts[$time] ?? 0)
+                    );
+
+                    if ($booked < $capacity) {
+                        $options[$time] = $time;
+                    }
+                }
+
+                $cursor->addMinutes($slotMinutes);
+            }
+        }
+
+        return $options;
+    }
+
+    /**
+ * Final server-side guard used by create/edit/reschedule.
+ * Prevents duplicate saves even if the dropdown options were loaded before another booking was created.
+ */
+public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc, ?string $serviceSlug = null, ?int $ignoreAppointmentId = null): bool
+{
+    $startAtUtc = is_string($startAtUtc) ? trim($startAtUtc) : '';
+
+    if ($startAtUtc === '') {
+        return false;
+    }
+
+    $schedule = static::appointmentScheduleForService($serviceSlug);
+
+    if (! $schedule) {
+        return false;
+    }
+
+    $timezone = static::appointmentScheduleTimezone($schedule);
+
+    try {
+        $local = Carbon::parse($startAtUtc, 'UTC')->tz($timezone);
+    } catch (\Throwable $e) {
+        return false;
+    }
+
+    $date = $local->toDateString();
+    $time = $local->format('H:i');
+
+    $availableOptions = static::appointmentAvailableTimeOptions($serviceSlug, $date, $ignoreAppointmentId);
+
+    if (! array_key_exists($time, $availableOptions)) {
+        return false;
+    }
+
+    $counts = static::appointmentBookedCountsForDate($date, $timezone, $ignoreAppointmentId);
+    $utcKey = $local->copy()->utc()->format('Y-m-d H:i:s');
+    $localKey = $local->copy()->format('Y-m-d H:i:s');
+    $capacity = static::appointmentScheduleCapacity($schedule);
+    $booked = max(
+        (int) ($counts[$utcKey] ?? 0),
+        (int) ($counts[$localKey] ?? 0),
+        (int) ($counts[$time] ?? 0)
+    );
+
+    return $booked < $capacity;
+}
 
     public static function form(\Filament\Schemas\Schema $schema): \Filament\Schemas\Schema
     {
@@ -73,10 +939,51 @@ class AppointmentResource extends Resource
                         return '—';
                     })
                     ->columnSpan(3),
-                \Filament\Forms\Components\TextInput::make('service_name')
+                \Filament\Forms\Components\Select::make('service_id')
+                    ->label('Service')
+                    ->searchable()
+                    ->preload()
+                    ->options(fn () => static::appointmentServiceOptions())
+                    ->getSearchResultsUsing(fn (string $search): array => static::appointmentServiceOptions($search))
+                    ->getOptionLabelUsing(fn ($value): ?string => static::appointmentServiceLabel($value))
+                    ->live()
+                    ->dehydrated(fn () => SchemaFacade::hasColumn('appointments', 'service_id'))
+                    ->afterStateUpdated(function ($state, \Filament\Schemas\Components\Utilities\Set $set) {
+                        $serviceName = null;
+                        $serviceSlug = null;
+
+                        if ($state && SchemaFacade::hasTable('services')) {
+                            try {
+                                $service = DB::table('services')->where('id', $state)->first();
+                                if ($service) {
+                                    $serviceName = trim((string) ($service->name ?? '')) ?: null;
+                                    $serviceSlug = trim((string) ($service->slug ?? '')) ?: ($serviceName ? Str::slug($serviceName) : null);
+                                }
+                            } catch (\Throwable $e) {
+                                $serviceName = null;
+                                $serviceSlug = null;
+                            }
+                        }
+
+                        $set('service', $serviceName);
+                        $set('service_slug', $serviceSlug);
+                        $set('service_name', null);
+                        $set('start_date', null);
+                        $set('start_time', null);
+                        $set('start_at', null);
+                        $set('end_at', null);
+                    })
+                    ->required()
+                    ->columnSpan(4),
+
+                \Filament\Forms\Components\Select::make('service_name')
                     ->label('Item')
-                    ->maxLength(191)
-                    ->columnSpan(9),
+                    ->searchable()
+                    ->preload()
+                    ->options(fn (\Filament\Schemas\Components\Utilities\Get $get): array => static::appointmentItemOptionsForService($get('service_id')))
+                    ->getSearchResultsUsing(fn (string $search, \Filament\Schemas\Components\Utilities\Get $get): array => static::appointmentItemOptionsForService($get('service_id'), $search))
+                    ->placeholder('Select a service first')
+                    ->columnSpan(5),
 
                 \Filament\Forms\Components\Hidden::make('start_at')
                     ->required(),
@@ -86,6 +993,7 @@ class AppointmentResource extends Resource
                 \Filament\Forms\Components\DatePicker::make('start_date')
                     ->label('Date')
                     ->native(false)
+                    ->minDate(now('Europe/London')->toDateString())
                     ->required()
                     ->live()
                     ->dehydrated(false)
@@ -100,50 +1008,29 @@ class AppointmentResource extends Resource
                         }
                     })
                     ->afterStateUpdated(function ($state, \Filament\Schemas\Components\Utilities\Get $get, \Filament\Schemas\Components\Utilities\Set $set) {
-                        $date = $get('start_date');
-                        $time = $get('start_time');
-                        if (! $date || ! $time) {
-                            $set('start_at', null);
-                            $set('end_at', null);
-                            return;
-                        }
-                        try {
-                            $dt = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, 'Europe/London');
-                            $set('start_at', $dt->copy()->utc()->format('Y-m-d H:i:s'));
-                            $set('end_at', $dt->copy()->utc()->addMinutes(20)->format('Y-m-d H:i:s'));
-                        } catch (\Throwable $e) {
-                            $set('start_at', null);
-                            $set('end_at', null);
-                        }
+                        $set('start_time', null);
+                        $set('start_at', null);
+                        $set('end_at', null);
                     })
                     ->columnSpan(6),
 
                 \Filament\Forms\Components\Select::make('start_time')
                     ->label('Time')
                     ->native(false)
-                    ->options(function () {
-                        $opts = [];
+                    ->options(function (\Filament\Schemas\Components\Utilities\Get $get, $record = null): array {
+                        $serviceSlug = static::appointmentServiceSlugForSlotLookup(
+                            $get('service_id'),
+                            $get('service_slug'),
+                            $get('service') ?: static::appointmentServiceLabel($get('service_id'))
+                        );
 
-                        // 08:00 to 18:00 inclusive in 15-minute steps
-                        for ($h = 8; $h <= 18; $h++) {
-                            $hh = str_pad((string) $h, 2, '0', STR_PAD_LEFT);
-
-                            // only allow 18:00 (no 18:15 etc)
-                            if ($h === 18) {
-                                $t = $hh . ':00';
-                                $opts[$t] = $t;
-                                continue;
-                            }
-
-                            for ($m = 0; $m < 60; $m += 15) {
-                                $mm = str_pad((string) $m, 2, '0', STR_PAD_LEFT);
-                                $t = $hh . ':' . $mm;
-                                $opts[$t] = $t;
-                            }
-                        }
-
-                        return $opts;
+                        return static::appointmentAvailableTimeOptions(
+                            $serviceSlug,
+                            $get('start_date'),
+                            $record?->getKey()
+                        );
                     })
+                    ->placeholder('Check times for this service/date')
                     ->searchable()
                     ->required()
                     ->live()
@@ -155,22 +1042,7 @@ class AppointmentResource extends Resource
                         try {
                             $dt = \Carbon\Carbon::parse($record->start_at, 'UTC')->tz('Europe/London');
                             $t = $dt->format('H:i');
-
-                            [$hh, $mm] = array_pad(explode(':', $t, 2), 2, null);
-                            $h = is_numeric($hh) ? (int) $hh : -1;
-                            $m = is_numeric($mm) ? (int) $mm : -1;
-
-                            $ok = false;
-
-                            if ($h >= 8 && $h <= 17 && $m >= 0 && $m < 60 && ($m % 15 === 0)) {
-                                $ok = true;
-                            }
-
-                            if ($h === 18 && $m === 0) {
-                                $ok = true;
-                            }
-
-                            $set('start_time', $ok ? $t : null);
+                            $set('start_time', $t);
                         } catch (\Throwable $e) {
                         }
                     })
@@ -182,10 +1054,20 @@ class AppointmentResource extends Resource
                             $set('end_at', null);
                             return;
                         }
+
+                        $serviceSlug = static::appointmentServiceSlugForSlotLookup(
+                            $get('service_id'),
+                            $get('service_slug'),
+                            $get('service')
+                        );
+                        $schedule = static::appointmentScheduleForService($serviceSlug);
+                        $timezone = static::appointmentScheduleTimezone($schedule);
+                        $slotMinutes = static::appointmentScheduleSlotMinutes($schedule);
+
                         try {
-                            $dt = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, 'Europe/London');
+                            $dt = Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, $timezone);
                             $set('start_at', $dt->copy()->utc()->format('Y-m-d H:i:s'));
-                            $set('end_at', $dt->copy()->utc()->addMinutes(20)->format('Y-m-d H:i:s'));
+                            $set('end_at', $dt->copy()->utc()->addMinutes($slotMinutes)->format('Y-m-d H:i:s'));
                         } catch (\Throwable $e) {
                             $set('start_at', null);
                             $set('end_at', null);
@@ -218,16 +1100,11 @@ class AppointmentResource extends Resource
                     ->required()
                     ->columnSpan(12),
 
-                \Filament\Forms\Components\TextInput::make('service')
-                    ->label('Service')
-                    ->maxLength(191)
-                    ->columnSpan(6),
+                \Filament\Forms\Components\Hidden::make('service')
+                    ->dehydrated(true),
 
-                \Filament\Forms\Components\TextInput::make('service_slug')
-                    ->label('Service key')
-                    ->hidden()
-                    ->dehydrated(false)
-                    ->columnSpan(6),
+                \Filament\Forms\Components\Hidden::make('service_slug')
+                    ->dehydrated(fn () => SchemaFacade::hasColumn('appointments', 'service_slug')),
             ]);
     }
 
@@ -1428,9 +2305,13 @@ class AppointmentResource extends Resource
         // 1) Direct link first
         try {
             if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'order_id') && !empty($record->order_id)) {
-                $o = \App\Models\Order::find($record->order_id);
+                $o = \App\Models\Order::query()
+                    ->with('user')
+                    ->find($record->order_id);
+
+                static::$relatedOrderCache[$cacheKey] = $o;
+
                 if ($o) {
-                    static::$relatedOrderCache[$cacheKey] = $o;
                     return $o;
                 }
             }
@@ -1451,9 +2332,13 @@ class AppointmentResource extends Resource
 
             if ($ref !== '') {
                 $o = \App\Models\Order::query()
+                    ->with('user')
                     ->where('reference', $ref)
                     ->orderByDesc('id')
                     ->first();
+
+                static::$relatedOrderCache[$cacheKey] = $o;
+
                 if ($o) {
                     return $o;
                 }
@@ -1503,6 +2388,7 @@ class AppointmentResource extends Resource
                         ->first();
 
                     if ($ord) {
+                        static::$relatedOrderCache[$cacheKey] = $ord;
                         return $ord;
                     }
                 }

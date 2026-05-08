@@ -307,6 +307,36 @@ class ConsultationRunner extends Page
         });
 
         // 4) Trigger Royal Mail Click & Drop shipping now that completion has been saved
+        $orderMetaForWalkInCheck = is_array($this->order?->meta ?? null)
+            ? $this->order->meta
+            : (json_decode($this->order?->meta ?? '[]', true) ?: []);
+
+        $isWalkInOrder = data_get($orderMetaForWalkInCheck, 'source') === 'walk_in'
+            || data_get($orderMetaForWalkInCheck, 'appointment_type') === 'walk_in'
+            || data_get($orderMetaForWalkInCheck, 'is_walk_in') === true
+            || strtolower((string) data_get($orderMetaForWalkInCheck, 'payment_status')) === 'paid at pharmacy'
+            || strtolower((string) data_get($orderMetaForWalkInCheck, 'payment_status_label')) === 'paid at pharmacy'
+            || strtolower((string) ($this->order?->payment_status ?? '')) === 'paid at pharmacy';
+
+        if ($isWalkInOrder) {
+            \Log::info('clickanddrop.livewire.skipped_walk_in', [
+                'session' => $this->session->id ?? null,
+                'order_id' => $this->order?->id,
+                'reference' => $this->order?->reference,
+                'payment_status' => $this->order?->payment_status,
+                'meta_source' => data_get($orderMetaForWalkInCheck, 'source'),
+                'meta_appointment_type' => data_get($orderMetaForWalkInCheck, 'appointment_type'),
+                'meta_is_walk_in' => data_get($orderMetaForWalkInCheck, 'is_walk_in'),
+                'meta_payment_status' => data_get($orderMetaForWalkInCheck, 'payment_status'),
+                'meta_payment_status_label' => data_get($orderMetaForWalkInCheck, 'payment_status_label'),
+            ]);
+
+            Notification::make()
+                ->success()
+                ->title('Consultation completed')
+                ->body('Walk-in order was not sent to Royal Mail Click & Drop.')
+                ->send();
+        } else
         try {
             \Log::info('clickanddrop.livewire.start', [
                 'session' => $this->session->id,

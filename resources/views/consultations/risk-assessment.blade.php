@@ -1628,13 +1628,15 @@
         wantsReq = false;
       }
       if (visible) {
-        el.disabled = false;
-        if (wantsReq) el.setAttribute('required','required'); else el.removeAttribute('required');
-      } else {
-        el.disabled = true;
-        el.removeAttribute('required');
-        clearFieldError(el.closest('.cf-field-card'));
-      }
+  el.disabled = false;
+  // Keep schema-required fields visual-only on this admin progress-save form.
+  // Native required blocks requestSubmit() before Laravel can save partial answers.
+  el.removeAttribute('required');
+} else {
+  el.disabled = true;
+  el.removeAttribute('required');
+  clearFieldError(el.closest('.cf-field-card'));
+}
     });
   }
   function evaluate(){
@@ -2146,25 +2148,23 @@ function hookBmiCalculators(){
       evaluate();
     }
   }, true);
-  form.addEventListener('submit', function(e){
-    var goingNext = form.querySelector('#__go_next');
-    var wantsNext = goingNext && goingNext.value === '1';
-    if (!wantsNext) return;
-    var invalids = validateForm(true);
-    if (invalids.length) {
-      e.preventDefault();
-      var firstInvalid = invalids[0] && invalids[0].card;
-      if (errorSummary) {
-        errorSummary.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      } else if (firstInvalid) {
-        firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-      var focusTarget = firstInvalid && firstInvalid.querySelector('input:not([disabled]), select:not([disabled]), textarea:not([disabled])');
-      if (focusTarget) focusTarget.focus();
-    }
-  }, true);
-  evaluate();
-  syncRequiredBanner();
+form.addEventListener('submit', function(e){
+  form.setAttribute('novalidate', 'novalidate');
+  form.querySelectorAll('[required]').forEach(function(el){
+    el.removeAttribute('required');
+  });
+  clearAllFieldErrors();
+  if (errorSummary) errorSummary.classList.remove('is-visible');
+  if (errorSummaryList) errorSummaryList.innerHTML = '';
+  if (requiredBanner) requiredBanner.classList.add('is-hidden');
+}, true);
+  form.setAttribute('novalidate', 'novalidate');
+form.querySelectorAll('[required]').forEach(function(el){
+  el.removeAttribute('required');
+});
+
+evaluate();
+syncRequiredBanner();
 })();
 </script>
     </form>

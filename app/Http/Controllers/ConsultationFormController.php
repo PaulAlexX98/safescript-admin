@@ -315,10 +315,42 @@ class ConsultationFormController extends Controller
         $__fileFieldNames = [];
         $__fileFieldExisting = [];
         $rawSchema = is_array($form->schema) ? $form->schema : (json_decode($form->schema ?? '[]', true) ?: []);
-        $rules = [];
-        foreach ($rawSchema as $idx => $fld) {
-            $type = strtolower($fld['type'] ?? 'text_input');
-            $cfg  = (array)($fld['data'] ?? []);
+
+$flattenSchemaFields = function (array $schema): array {
+    $out = [];
+
+    foreach ($schema as $sectionIdx => $node) {
+        if (! is_array($node)) {
+            continue;
+        }
+
+        if (isset($node['fields']) && is_array($node['fields'])) {
+            foreach ($node['fields'] as $fieldIdx => $field) {
+                if (! is_array($field)) {
+                    continue;
+                }
+
+                $out[] = $field + ['__schema_index' => $sectionIdx . '_' . $fieldIdx];
+            }
+            continue;
+        }
+
+        if (($node['type'] ?? null) === 'section') {
+            continue;
+        }
+
+        $out[] = $node + ['__schema_index' => $sectionIdx];
+    }
+
+    return $out;
+};
+
+$flatSchemaFields = $flattenSchemaFields($rawSchema);
+
+$rules = [];
+foreach ($flatSchemaFields as $idx => $fld) {
+    $type = strtolower($fld['type'] ?? 'text_input');
+    $cfg  = (array)($fld['data'] ?? $fld);
 
             // Skip non-input blocks
             if ($type === 'text_block') {
@@ -454,28 +486,21 @@ class ConsultationFormController extends Controller
             }
         }
 
-        // Run validation for required fields
-        if (!empty($rules)) {
-            try {
-                $request->validate($rules);
-            } catch (ValidationException $e) {
-                $first = collect($e->errors())->flatten()->first() ?? 'Please complete the required fields.';
-                Notification::make()->title('Missing required information')->body($first)->danger()->send();
-                return back()->withErrors($e->errors())->withInput();
-            }
-        }
+        // Do not block saving partial admin consultation forms because schema-required fields are incomplete.
+        // Required markers remain visual only here; this endpoint must save progress regardless of unanswered questions.
 
         // 4) Build a schema-driven payload with stable keys and normalised types
         //    This ensures fields are saved under explicit schema keys and that
         //    unchecked checkboxes/toggles are persisted as 0, and multi-selects
         //    round-trip as arrays.
-        $rawSchema = is_array($form->schema) ? $form->schema : (json_decode($form->schema ?? '[]', true) ?: []);
+       $rawSchema = is_array($form->schema) ? $form->schema : (json_decode($form->schema ?? '[]', true) ?: []);
+$flatSchemaFields = isset($flattenSchemaFields) ? $flattenSchemaFields($rawSchema) : $rawSchema;
 
-        // Build a field map of candidate post names -> single stable store key
-        $fields = [];
-        foreach ($rawSchema as $idx => $fld) {
-            $type = strtolower($fld['type'] ?? 'text_input');
-            $cfg  = (array)($fld['data'] ?? []);
+// Build a field map of candidate post names -> single stable store key
+$fields = [];
+foreach ($flatSchemaFields as $idx => $fld) {
+    $type = strtolower($fld['type'] ?? 'text_input');
+    $cfg  = (array)($fld['data'] ?? $fld);
 
             // Skip non-input content blocks
             if ($type === 'text_block') {
@@ -798,9 +823,9 @@ class ConsultationFormController extends Controller
             return true; // unknown condition -> keep
         };
 
-        foreach ($rawSchema as $idx => $fld) {
-            $type = $fld['type'] ?? 'text_input';
-            $cfg  = (array)($fld['data'] ?? []);
+       foreach ($flatSchemaFields as $idx => $fld) {
+        $type = $fld['type'] ?? 'text_input';
+        $cfg  = (array)($fld['data'] ?? $fld);
             $cond = (array)($cfg['showIf'] ?? []);
             if (empty($cond)) continue;
 

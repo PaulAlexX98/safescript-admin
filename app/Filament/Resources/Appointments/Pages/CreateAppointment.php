@@ -10,10 +10,183 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class CreateAppointment extends CreateRecord
 {
     protected static string $resource = AppointmentResource::class;
+
+    protected function appointmentHasColumn(string $column): bool
+    {
+        try {
+            return Schema::hasColumn('appointments', $column);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    protected function firstAppointmentColumn(array $columns): ?string
+    {
+        foreach ($columns as $column) {
+            if ($this->appointmentHasColumn($column)) {
+                return $column;
+            }
+        }
+
+        return null;
+    }
+
+    protected function normaliseItemLabel(mixed $value): string
+    {
+        if (is_array($value)) {
+            $value = Arr::get($value, 'name')
+                ?? Arr::get($value, 'label')
+                ?? Arr::get($value, 'title')
+                ?? Arr::get($value, 'product_name')
+                ?? Arr::get($value, 'medicine_name')
+                ?? Arr::get($value, 'item')
+                ?? Arr::get($value, 'value')
+                ?? '';
+        }
+
+        return is_scalar($value) ? trim((string) $value) : '';
+    }
+
+    protected function getProductNameById(mixed $productId): string
+    {
+        if (empty($productId) || ! Schema::hasTable('products')) {
+            return '';
+        }
+
+        $nameColumn = Schema::hasColumn('products', 'name')
+            ? 'name'
+            : (Schema::hasColumn('products', 'title') ? 'title' : null);
+
+        if (! $nameColumn) {
+            return '';
+        }
+
+        try {
+            return trim((string) (DB::table('products')->where('id', $productId)->value($nameColumn) ?? ''));
+        } catch (\Throwable $e) {
+            return '';
+        }
+    }
+
+    protected function getServiceMedicineNameById(mixed $medicineId): string
+    {
+        if (empty($medicineId) || ! Schema::hasTable('service_medicines')) {
+            return '';
+        }
+
+        $nameColumn = Schema::hasColumn('service_medicines', 'name')
+            ? 'name'
+            : (Schema::hasColumn('service_medicines', 'title') ? 'title' : null);
+
+        if (! $nameColumn) {
+            return '';
+        }
+
+        try {
+            return trim((string) (DB::table('service_medicines')->where('id', $medicineId)->value($nameColumn) ?? ''));
+        } catch (\Throwable $e) {
+            return '';
+        }
+    }
+
+    protected function getVariationLabelAndPrice(mixed $variationId): array
+    {
+        if (empty($variationId) || ! Schema::hasTable('product_variations')) {
+            return ['', null];
+        }
+
+        $labelColumn = null;
+        foreach (['title', 'label', 'name', 'variation', 'strength'] as $column) {
+            if (Schema::hasColumn('product_variations', $column)) {
+                $labelColumn = $column;
+                break;
+            }
+        }
+
+        try {
+            $row = DB::table('product_variations')->where('id', $variationId)->first();
+        } catch (\Throwable $e) {
+            $row = null;
+        }
+
+        if (! $row) {
+            return ['', null];
+        }
+
+        $label = $labelColumn ? trim((string) ($row->{$labelColumn} ?? '')) : '';
+        $price = null;
+
+        if (isset($row->price) && is_numeric($row->price)) {
+            $price = (float) $row->price;
+        } elseif (isset($row->price_minor) && is_numeric($row->price_minor)) {
+            $price = ((float) $row->price_minor) / 100;
+        }
+
+        return [$label, $price];
+    }
+
+    protected function firstOrderItemFromMeta(?Order $order): array
+    {
+        if (! $order) {
+            return ['', '', null];
+        }
+
+        $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+
+        foreach (['items', 'lines', 'products', 'cart'] as $path) {
+            $items = Arr::get($meta, $path);
+            if (! is_array($items) || empty($items)) {
+                continue;
+            }
+
+            $first = array_values($items)[0] ?? null;
+            if (! is_array($first)) {
+                continue;
+            }
+
+            $name = $this->normaliseItemLabel($first);
+            if ($name === '') {
+                $name = $this->normaliseItemLabel(Arr::get($first, 'product'));
+            }
+
+            $variation = $this->normaliseItemLabel(
+                Arr::get($first, 'variation')
+                ?? Arr::get($first, 'variant')
+                ?? Arr::get($first, 'option')
+                ?? Arr::get($first, 'strength')
+                ?? Arr::get($first, 'dose')
+                ?? Arr::get($first, 'variations')
+            );
+
+            $unitPrice = Arr::get($first, 'unit_price')
+                ?? Arr::get($first, 'unitPrice')
+                ?? Arr::get($first, 'price')
+                ?? null;
+
+            if ($unitPrice === null && is_numeric(Arr::get($first, 'unitMinor'))) {
+                $unitPrice = ((float) Arr::get($first, 'unitMinor')) / 100;
+            }
+
+            return [$name, $variation, is_numeric($unitPrice) ? (float) $unitPrice : null];
+        }
+
+        $selectedProduct = Arr::get($meta, 'selectedProduct');
+        if (is_array($selectedProduct)) {
+            return [
+                $this->normaliseItemLabel($selectedProduct),
+                $this->normaliseItemLabel(Arr::get($selectedProduct, 'variation') ?? Arr::get($selectedProduct, 'strength')),
+                is_numeric(Arr::get($selectedProduct, 'price')) ? (float) Arr::get($selectedProduct, 'price') : null,
+            ];
+        }
+
+        return ['', '', null];
+    }
 
     protected function mutateFormDataBeforeCreate(array $data): array
     {
@@ -44,8 +217,138 @@ class CreateAppointment extends CreateRecord
             $data['order_reference'] = $ref;
         }
 
-        
-        return $data;
+        // Mirror the Walk-In form behaviour: service_id is the source of truth, while
+        // service_name/service_slug are filled for the appointment list, emails and meta displays.
+        try {
+            $serviceId = $data['service_id'] ?? null;
+            if ($serviceId && Schema::hasTable('services')) {
+                $service = DB::table('services')->where('id', $serviceId)->first();
+
+                if ($service) {
+                    $serviceName = trim((string) ($service->name ?? ''));
+                    $serviceSlug = trim((string) ($service->slug ?? ''));
+                    if ($serviceSlug === '' && $serviceName !== '') {
+                        $serviceSlug = Str::slug($serviceName);
+                    }
+
+                    foreach (['service_name', 'service'] as $column) {
+                        if ($serviceName !== '' && $this->appointmentHasColumn($column) && empty($data[$column])) {
+                            $data[$column] = $serviceName;
+                        }
+                    }
+
+                    if ($serviceSlug !== '' && $this->appointmentHasColumn('service_slug') && empty($data['service_slug'])) {
+                        $data['service_slug'] = $serviceSlug;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // Do not block appointment creation because service mirroring failed.
+        }
+
+        $order = null;
+        try {
+            if (! empty($data['order_id'])) {
+                $order = Order::find($data['order_id']);
+            }
+
+            if (! $order && $ref !== '') {
+                $order = Order::query()->where('reference', $ref)->orderByDesc('id')->first();
+            }
+        } catch (\Throwable $e) {
+            $order = null;
+        }
+
+        [$orderItemName, $orderItemVariation, $orderUnitPrice] = $this->firstOrderItemFromMeta($order);
+
+        $itemName = $this->normaliseItemLabel(
+            $data['item']
+            ?? $data['item_name']
+            ?? $data['order_item']
+            ?? $data['product_name']
+            ?? $data['medicine_name']
+            ?? $data['name']
+            ?? ''
+        );
+
+        if ($itemName === '') {
+            $itemName = $this->getProductNameById($data['product_id'] ?? null);
+        }
+
+        if ($itemName === '') {
+            $itemName = $this->getServiceMedicineNameById($data['service_medicine_id'] ?? null);
+        }
+
+        if ($itemName === '') {
+            $itemName = $orderItemName;
+        }
+
+        [$variationFromId, $priceFromVariation] = $this->getVariationLabelAndPrice(
+            $data['variation_id'] ?? $data['product_variation_id'] ?? null
+        );
+
+        $variation = $this->normaliseItemLabel(
+            $data['variation']
+            ?? $data['variant']
+            ?? $data['strength']
+            ?? $data['dose']
+            ?? ''
+        );
+
+        if ($variation === '') {
+            $variation = $variationFromId ?: $orderItemVariation;
+        }
+
+        $unitPrice = $data['unit_price'] ?? $data['price'] ?? $priceFromVariation ?? $orderUnitPrice ?? null;
+
+        if ($itemName !== '') {
+            foreach (['order_item', 'item', 'item_name', 'product_name', 'medicine_name'] as $column) {
+                if ($this->appointmentHasColumn($column) && empty($data[$column])) {
+                    $data[$column] = $itemName;
+                }
+            }
+        }
+
+        if ($variation !== '') {
+            foreach (['variation', 'variant', 'strength', 'dose'] as $column) {
+                if ($this->appointmentHasColumn($column) && empty($data[$column])) {
+                    $data[$column] = $variation;
+                }
+            }
+        }
+
+        if ($unitPrice !== null && is_numeric($unitPrice)) {
+    foreach (['unit_price', 'price'] as $column) {
+        if ($this->appointmentHasColumn($column) && empty($data[$column])) {
+            $data[$column] = (float) $unitPrice;
+        }
+    }
+}
+
+// Final server-side capacity guard.
+// The dropdown hides taken slots, but this prevents duplicate saves if two staff members
+// load the same slot before one of them saves.
+$serviceSlugForCapacity = $data['service_slug'] ?? null;
+
+if ((! is_string($serviceSlugForCapacity) || trim($serviceSlugForCapacity) === '') && ! empty($data['service'])) {
+    $serviceSlugForCapacity = Str::slug((string) $data['service']);
+}
+
+if (! AppointmentResource::appointmentSlotHasCapacityForStartAt(
+    $data['start_at'] ?? null,
+    is_string($serviceSlugForCapacity) ? trim($serviceSlugForCapacity) : null,
+    null
+)) {
+    Notification::make()
+        ->danger()
+        ->title('This appointment slot is no longer available')
+        ->body('Please select another time. The selected time may have already been booked by another staff member.')
+        ->send();
+
+    $this->halt();
+}
+
+return $data;
     }
 
     protected function afterCreate(): void
