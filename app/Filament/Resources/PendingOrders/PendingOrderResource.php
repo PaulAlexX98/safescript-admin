@@ -354,22 +354,22 @@ class PendingOrderResource extends Resource
             // ignore
         }
 
-        // Hide pending rows when the matching real order has already been completed.
-        // This prevents completed orders from reappearing in Pending Approval if a stale
-        // pending_orders row still exists for the same reference.
+        // If this resource is backed directly by the orders table, exclude completed rows directly.
+        // Do not use a self-referencing NOT EXISTS query because it can hide every pending row.
         try {
             $table = $q->getModel()->getTable();
 
-            if (DBSchema::hasTable('orders') && DBSchema::hasColumn($table, 'reference')) {
-                $q->whereNotExists(function ($sub) use ($table) {
-                    $sub->selectRaw('1')
-                        ->from('orders')
-                        ->whereColumn('orders.reference', $table . '.reference')
-                        ->where(function ($completed) {
-                            $completed->where('orders.status', 'completed')
-                                ->orWhereNotNull('orders.completed_at');
-                        });
-                });
+            if ($table === 'orders') {
+                if (DBSchema::hasColumn($table, 'completed_at')) {
+                    $q->whereNull('completed_at');
+                }
+
+                if (DBSchema::hasColumn($table, 'status')) {
+                    $q->where(function (Builder $statusQuery) {
+                        $statusQuery->whereNull('status')
+                            ->orWhere('status', '!=', 'completed');
+                    });
+                }
             }
         } catch (\Throwable $e) {
             // ignore
