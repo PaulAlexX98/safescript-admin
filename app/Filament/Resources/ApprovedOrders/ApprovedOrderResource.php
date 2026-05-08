@@ -2469,9 +2469,10 @@ class ApprovedOrderResource extends Resource
         return parent::getEloquentQuery()
             ->with(['user'])
             ->whereRaw("LOWER(booking_status) IN ('approved','booked')")
+            ->whereNull('completed_at')
             ->where(function (Builder $q) {
                 $q->whereNull('status')
-                  ->orWhere('status', '!=', 'completed');
+                ->orWhere('status', '!=', 'completed');
             });
     }
 

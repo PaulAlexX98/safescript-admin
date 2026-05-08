@@ -354,6 +354,27 @@ class PendingOrderResource extends Resource
             // ignore
         }
 
+        // Hide pending rows when the matching real order has already been completed.
+        // This prevents completed orders from reappearing in Pending Approval if a stale
+        // pending_orders row still exists for the same reference.
+        try {
+            $table = $q->getModel()->getTable();
+
+            if (DBSchema::hasTable('orders') && DBSchema::hasColumn($table, 'reference')) {
+                $q->whereNotExists(function ($sub) use ($table) {
+                    $sub->selectRaw('1')
+                        ->from('orders')
+                        ->whereColumn('orders.reference', $table . '.reference')
+                        ->where(function ($completed) {
+                            $completed->where('orders.status', 'completed')
+                                ->orWhereNotNull('orders.completed_at');
+                        });
+                });
+            }
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
         // Hide NHS Pharmacy First bookings from Pending Approval.
         // NHS refs are PNHSxxxxxx and we also mark meta.type/service_slug.
         $q = $q->where(function (Builder $w) {
