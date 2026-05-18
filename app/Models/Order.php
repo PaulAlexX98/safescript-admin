@@ -140,6 +140,167 @@ class Order extends Model
 
             $order->meta = $meta;
         });
+
+        // Keep the appointments table in sync for paid/pending orders that already carry an appointment time in meta.
+        // This is deliberately guarded so unpaid, completed, cancelled, rejected, or appointment-less orders are ignored.
+        static::saved(function (self $order) {
+            static::syncAppointmentFromMeta($order);
+        });
+    }
+
+    public static function syncAppointmentFromMeta(self $order): void
+    {
+        try {
+            if (! $order->id || ! $order->reference) {
+                return;
+            }
+
+            if (! \Schema::hasTable('appointments')) {
+                return;
+            }
+
+            $orderStatus = strtolower(trim((string) ($order->status ?? '')));
+            $bookingStatus = strtolower(trim((string) ($order->booking_status ?? '')));
+            $paymentStatus = strtolower(trim((string) ($order->payment_status ?? '')));
+
+            $terminalStatuses = ['completed', 'complete', 'done', 'cancelled', 'canceled', 'rejected'];
+
+            if (in_array($orderStatus, $terminalStatuses, true)) {
+                return;
+            }
+
+            if (in_array($bookingStatus, $terminalStatuses, true)) {
+                return;
+            }
+
+            if ($paymentStatus === 'unpaid') {
+                return;
+            }
+
+            $meta = is_array($order->meta)
+                ? $order->meta
+                : (json_decode($order->meta ?? '[]', true) ?: []);
+
+            if (! is_array($meta)) {
+                return;
+            }
+
+            $appointmentAt = data_get($meta, 'appointment_at')
+                ?? data_get($meta, 'appointment_start_at')
+                ?? data_get($meta, 'appointment_start')
+                ?? data_get($meta, 'appointment_datetime')
+                ?? data_get($meta, 'appointmentDateTime');
+
+            if (! $appointmentAt) {
+                return;
+            }
+
+            $start = \Illuminate\Support\Carbon::parse($appointmentAt)->setTimezone('UTC');
+
+            $email = $order->email
+                ?? data_get($meta, 'email')
+                ?? data_get($meta, 'patient.email')
+                ?? data_get($meta, 'customer.email');
+
+            $firstName = $order->first_name
+                ?? data_get($meta, 'firstName')
+                ?? data_get($meta, 'first_name')
+                ?? data_get($meta, 'patient.first_name')
+                ?? data_get($meta, 'customer.first_name');
+
+            $lastName = $order->last_name
+                ?? data_get($meta, 'lastName')
+                ?? data_get($meta, 'last_name')
+                ?? data_get($meta, 'patient.last_name')
+                ?? data_get($meta, 'customer.last_name');
+
+            $service = data_get($meta, 'service')
+                ?? data_get($meta, 'service_name')
+                ?? data_get($meta, 'service.name')
+                ?? 'Weight Management';
+
+            $serviceSlug = data_get($meta, 'service_slug')
+                ?? data_get($meta, 'service.slug')
+                ?? \Illuminate\Support\Str::slug((string) $service);
+
+            $existing = \App\Models\Appointment::query()
+                ->where(function ($query) use ($order) {
+                    $query->where('order_id', $order->id)
+                        ->orWhere('order_reference', $order->reference);
+                })
+                ->where(function ($query) {
+                    $query->whereNull('status')
+                        ->orWhere('status', '')
+                        ->orWhereIn('status', ['pending', 'booked', 'approved', 'waiting']);
+                })
+                ->orderByDesc('id')
+                ->first();
+
+            $appointment = $existing ?: new \App\Models\Appointment();
+
+            if (\Schema::hasColumn('appointments', 'order_id')) {
+                $appointment->order_id = $order->id;
+            }
+
+            if (\Schema::hasColumn('appointments', 'order_reference')) {
+                $appointment->order_reference = $order->reference;
+            }
+
+            $appointment->start_at = $start->format('Y-m-d H:i:s');
+
+            if (\Schema::hasColumn('appointments', 'end_at')) {
+                $appointment->end_at = $start->copy()->addMinutes(20)->format('Y-m-d H:i:s');
+            }
+
+            if (\Schema::hasColumn('appointments', 'status')) {
+                $appointment->status = $appointment->status ?: 'pending';
+            }
+
+            if (\Schema::hasColumn('appointments', 'email') && $email) {
+                $appointment->email = $email;
+            }
+
+            if (\Schema::hasColumn('appointments', 'first_name') && $firstName) {
+                $appointment->first_name = $firstName;
+            }
+
+            if (\Schema::hasColumn('appointments', 'last_name') && $lastName) {
+                $appointment->last_name = $lastName;
+            }
+
+            if (\Schema::hasColumn('appointments', 'service') && $service) {
+                $appointment->service = $service;
+            }
+
+            if (\Schema::hasColumn('appointments', 'service_slug') && $serviceSlug) {
+                $appointment->service_slug = $serviceSlug;
+            }
+
+            $appointment->save();
+
+            // Keep only one active appointment attached to this order.
+            \App\Models\Appointment::query()
+                ->whereKeyNot($appointment->getKey())
+                ->where(function ($query) use ($order) {
+                    $query->where('order_id', $order->id)
+                        ->orWhere('order_reference', $order->reference);
+                })
+                ->where(function ($query) {
+                    $query->whereNull('status')
+                        ->orWhere('status', '')
+                        ->orWhereIn('status', ['pending', 'booked', 'approved', 'waiting']);
+                })
+                ->update([
+                    'status' => 'cancelled',
+                    'updated_at' => now(),
+                ]);
+        } catch (\Throwable $e) {
+            \Log::warning('order.sync_appointment_from_meta_failed', [
+                'order_id' => $order->id ?? null,
+                'reference' => $order->reference ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

@@ -508,14 +508,31 @@ class PendingOrderResource extends Resource
                     ->copyMessage('Reference copied')
                     ->toggleable(),
 
-
                 TextColumn::make('paid_at')
                     ->label('Paid At')
-                    ->dateTime('d M Y, H:i')
+                    ->formatStateUsing(function ($state, $record) {
+                        $meta = is_array($record->meta)
+                            ? $record->meta
+                            : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                        $paidAt = data_get($meta, 'paid_at') ?: $state;
+
+                        if (! $paidAt) {
+                            return '—';
+                        }
+
+                        try {
+                            return Carbon::parse($paidAt)
+                                ->setTimezone('Europe/London')
+                                ->format('d M Y, H:i');
+                        } catch (Throwable $e) {
+                            return (string) $paidAt;
+                        }
+                    })
                     ->sortable()
                     ->toggleable(),
 
-                
+            
                 TextColumn::make('service_name')
                     ->label('Order Service')
                     ->getStateUsing(function ($record) {
@@ -1018,7 +1035,31 @@ class PendingOrderResource extends Resource
                                             }),
                                         TextEntry::make('created_at')
                                             ->label('Created')
-                                            ->dateTime('d-m-Y H:i'),
+                                            ->formatStateUsing(function ($state, $record) {
+                                                $createdAt = null;
+
+                                                try {
+                                                    $createdAt = method_exists($record, 'getRawOriginal')
+                                                        ? $record->getRawOriginal('created_at')
+                                                        : null;
+                                                } catch (Throwable $e) {
+                                                    $createdAt = null;
+                                                }
+
+                                                $createdAt = $createdAt ?: $state;
+
+                                                if (! $createdAt) {
+                                                    return '—';
+                                                }
+
+                                                try {
+                                                    return Carbon::parse($createdAt, 'UTC')
+                                                        ->timezone('Europe/London')
+                                                        ->format('d-m-Y H:i');
+                                                } catch (Throwable $e) {
+                                                    return (string) $createdAt;
+                                                }
+                                            }),
                                         TextEntry::make('patient_address_block')
                                             ->label('Home address')
                                             ->columnSpan(1)
@@ -3059,12 +3100,376 @@ class PendingOrderResource extends Resource
                                 $action->getLivewire()->dispatch('refreshTable');
                                 $action->success();
                             }),
+                        Action::make('createAppointment')
+                            ->label('Create Appointment')
+                            ->button()
+                            ->color('success')
+                            ->icon('heroicon-o-calendar')
+                            ->modalHeading('Create appointment')
+                            ->modalSubmitActionLabel('Create appointment')
+                            ->form([
+                                \Filament\Forms\Components\DatePicker::make('appointment_date')
+                                    ->label('Appointment date')
+                                    ->native(false)
+                                    ->required()
+                                    ->live()
+                                    ->default(null)
+                                    ->afterStateUpdated(function ($state, \Filament\Schemas\Components\Utilities\Set $set): void {
+                                        $set('appointment_time', null);
+                                    }),
+
+                                \Filament\Forms\Components\Select::make('appointment_time')
+                                    ->label('Appointment time')
+                                    ->native(false)
+                                    ->searchable()
+                                    ->required()
+                                    ->options(function (\Filament\Schemas\Components\Utilities\Get $get): array {
+                                        $date = is_string($get('appointment_date')) ? trim($get('appointment_date')) : '';
+
+                                        if ($date === '') {
+                                            return [];
+                                        }
+
+                                        try {
+                                            $dayStartUtc = Carbon::parse($date, 'Europe/London')->startOfDay()->utc()->format('Y-m-d H:i:s');
+                                            $dayEndUtc = Carbon::parse($date, 'Europe/London')->endOfDay()->utc()->format('Y-m-d H:i:s');
+                                        } catch (Throwable $e) {
+                                            return [];
+                                        }
+
+                                        $bookedTimes = [];
+
+                                        try {
+                                            $appointments = Appointment::query()
+                                                ->whereBetween('start_at', [$dayStartUtc, $dayEndUtc])
+                                                ->where(function (Builder $query): void {
+                                                    $query->whereNull('status')
+                                                        ->orWhere('status', '')
+                                                        ->orWhereIn('status', ['pending', 'booked', 'approved', 'waiting']);
+                                                })
+                                                ->get(['start_at']);
+
+                                            foreach ($appointments as $appointment) {
+                                                if (! $appointment->start_at) {
+                                                    continue;
+                                                }
+
+                                                try {
+                                                    $bookedTimes[] = Carbon::parse($appointment->getRawOriginal('start_at') ?: $appointment->start_at, 'UTC')
+                                                        ->timezone('Europe/London')
+                                                        ->format('H:i');
+                                                } catch (Throwable $e) {
+                                                    //
+                                                }
+                                            }
+                                        } catch (Throwable $e) {
+                                            $bookedTimes = [];
+                                        }
+
+                                        $bookedTimes = array_values(array_unique($bookedTimes));
+                                        $options = [];
+
+                                        try {
+                                            $cursor = Carbon::createFromFormat('Y-m-d H:i', $date . ' 09:00', 'Europe/London');
+                                            $end = Carbon::createFromFormat('Y-m-d H:i', $date . ' 18:00', 'Europe/London');
+
+                                            while ($cursor->lte($end)) {
+                                                $time = $cursor->format('H:i');
+
+                                                if (! in_array($time, $bookedTimes, true)) {
+                                                    $options[$time] = $time;
+                                                }
+
+                                                $cursor->addMinutes(15);
+                                            }
+                                        } catch (Throwable $e) {
+                                            return [];
+                                        }
+
+                                        return $options;
+                                    })
+                                    ->placeholder('Select a date first'),
+                            ])
+                            ->action(function ($record, array $data): void {
+                                try {
+                                    $meta = is_array($record->meta)
+                                        ? $record->meta
+                                        : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                    $reference = trim((string) ($record->reference ?? ''));
+
+                                    if ($reference === '') {
+                                        Notification::make()
+                                            ->danger()
+                                            ->title('Could not create appointment')
+                                            ->body('This order does not have a reference.')
+                                            ->send();
+
+                                        return;
+                                    }
+
+                                    $order = Order::query()
+                                        ->where('reference', $reference)
+                                        ->orderByDesc('id')
+                                        ->first();
+
+                                    $existing = Appointment::query()
+                                        ->where(function (Builder $query) use ($reference, $order): void {
+                                            $query->where('order_reference', $reference);
+
+                                            if ($order) {
+                                                $query->orWhere('order_id', $order->id);
+                                            }
+                                        })
+                                        ->where(function (Builder $query): void {
+                                            $query->whereNull('status')
+                                                ->orWhere('status', '')
+                                                ->orWhereIn('status', ['pending', 'booked', 'approved', 'waiting']);
+                                        })
+                                        ->orderByDesc('id')
+                                        ->first();
+
+                                    if ($existing) {
+                                        Notification::make()
+                                            ->warning()
+                                            ->title('Appointment already exists')
+                                            ->body('An active appointment is already linked to this order.')
+                                            ->send();
+
+                                        return;
+                                    }
+
+                                    $appointmentDate = is_string($data['appointment_date'] ?? null) ? trim((string) $data['appointment_date']) : '';
+                                    $appointmentTime = is_string($data['appointment_time'] ?? null) ? trim((string) $data['appointment_time']) : '';
+
+                                    if ($appointmentDate === '' || $appointmentTime === '') {
+                                        Notification::make()
+                                            ->danger()
+                                            ->title('Appointment date and time are required')
+                                            ->send();
+
+                                        return;
+                                    }
+
+                                    $start = Carbon::createFromFormat('Y-m-d H:i', $appointmentDate . ' ' . $appointmentTime, 'Europe/London')
+                                        ->setTimezone('UTC');
+                                    $end = $start->copy()->addMinutes(20);
+
+                                    $email = $record->email
+                                        ?? $order?->email
+                                        ?? data_get($meta, 'email')
+                                        ?? data_get($meta, 'patient.email')
+                                        ?? data_get($meta, 'customer.email');
+
+                                    $firstName = $record->first_name
+                                        ?? $order?->first_name
+                                        ?? data_get($meta, 'firstName')
+                                        ?? data_get($meta, 'first_name')
+                                        ?? data_get($meta, 'patient.first_name')
+                                        ?? data_get($meta, 'customer.first_name');
+
+                                    $lastName = $record->last_name
+                                        ?? $order?->last_name
+                                        ?? data_get($meta, 'lastName')
+                                        ?? data_get($meta, 'last_name')
+                                        ?? data_get($meta, 'patient.last_name')
+                                        ?? data_get($meta, 'customer.last_name');
+
+                                    $service = data_get($meta, 'service')
+                                        ?? data_get($meta, 'service_name')
+                                        ?? data_get($meta, 'service.name')
+                                        ?? 'Weight Management';
+
+                                    $serviceSlug = data_get($meta, 'service_slug')
+                                        ?? data_get($meta, 'service.slug')
+                                        ?? Str::slug((string) $service);
+
+                                    $appointment = new Appointment();
+
+                                    if (DBSchema::hasColumn('appointments', 'order_id') && $order) {
+                                        $appointment->order_id = $order->id;
+                                    }
+
+                                    if (DBSchema::hasColumn('appointments', 'order_reference')) {
+                                        $appointment->order_reference = $reference;
+                                    }
+
+                                    if (DBSchema::hasColumn('appointments', 'start_at')) {
+                                        $appointment->start_at = $start->format('Y-m-d H:i:s');
+                                    }
+
+                                    if (DBSchema::hasColumn('appointments', 'end_at')) {
+                                        $appointment->end_at = $end->format('Y-m-d H:i:s');
+                                    }
+
+                                    if (DBSchema::hasColumn('appointments', 'status')) {
+                                        $appointment->status = 'pending';
+                                    }
+
+                                    if (DBSchema::hasColumn('appointments', 'email') && $email) {
+                                        $appointment->email = $email;
+                                    }
+
+                                    if (DBSchema::hasColumn('appointments', 'first_name') && $firstName) {
+                                        $appointment->first_name = $firstName;
+                                    }
+
+                                    if (DBSchema::hasColumn('appointments', 'last_name') && $lastName) {
+                                        $appointment->last_name = $lastName;
+                                    }
+
+                                    if (DBSchema::hasColumn('appointments', 'service') && $service) {
+                                        $appointment->service = $service;
+                                    }
+
+                                    if (DBSchema::hasColumn('appointments', 'service_slug') && $serviceSlug) {
+                                        $appointment->service_slug = $serviceSlug;
+                                    }
+
+                                    $appointment->save();
+
+                                    $joinUrl = null;
+                                    $startUrl = null;
+
+                                    if (class_exists(\App\Services\ZoomMeetingService::class)) {
+                                        try {
+                                            $zoom = app(\App\Services\ZoomMeetingService::class);
+
+                                            if (method_exists($zoom, 'createForAppointmentOnly')) {
+                                                $zoomInfo = $zoom->createForAppointmentOnly($appointment);
+                                            } else {
+                                                $zoomInfo = $zoom->createForAppointment($appointment, $order);
+                                            }
+
+                                            if (is_array($zoomInfo)) {
+                                                $joinUrl = ! empty($zoomInfo['join_url']) ? (string) $zoomInfo['join_url'] : null;
+                                                $startUrl = ! empty($zoomInfo['start_url']) ? (string) $zoomInfo['start_url'] : null;
+
+                                                if ($startUrl) {
+                                                    foreach (['zoom_start_url', 'zoom_host_url', 'host_zoom_url', 'zoom_url'] as $col) {
+                                                        if (DBSchema::hasColumn('appointments', $col)) {
+                                                            $appointment->{$col} = $startUrl;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+
+                                                if ($joinUrl) {
+                                                    foreach (['zoom_join_url', 'zoom_patient_url', 'join_zoom_url'] as $col) {
+                                                        if (DBSchema::hasColumn('appointments', $col)) {
+                                                            $appointment->{$col} = $joinUrl;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+
+                                                if (DBSchema::hasColumn('appointments', 'meta')) {
+                                                    $appointmentMeta = is_array($appointment->meta)
+                                                        ? $appointment->meta
+                                                        : (json_decode($appointment->meta ?? '[]', true) ?: []);
+
+                                                    $appointmentMeta['zoom'] = array_replace($appointmentMeta['zoom'] ?? [], [
+                                                        'meeting_id' => $zoomInfo['id'] ?? $zoomInfo['meeting_id'] ?? null,
+                                                        'join_url' => $joinUrl,
+                                                        'start_url' => $startUrl,
+                                                        'saved_at' => now()->toIso8601String(),
+                                                    ]);
+
+                                                    $appointment->meta = $appointmentMeta;
+                                                }
+
+                                                if ($joinUrl || $startUrl) {
+                                                    $appointment->save();
+                                                }
+                                            }
+                                        } catch (Throwable $zoomError) {
+                                            \Log::warning('pending_order.create_appointment.zoom_failed', [
+                                                'pending_order_id' => $record->id ?? null,
+                                                'reference' => $reference,
+                                                'appointment_id' => $appointment->id ?? null,
+                                                'error' => $zoomError->getMessage(),
+                                            ]);
+                                        }
+                                    }
+
+                                    $london = $start->copy()->timezone('Europe/London');
+
+                                    foreach ([
+                                        'appointment_at',
+                                        'appointment_start_at',
+                                        'appointment_start',
+                                        'appointment_datetime',
+                                        'appointmentDateTime',
+                                    ] as $key) {
+                                        $meta[$key] = $london->toIso8601String();
+                                    }
+
+                                    $meta['booking_date'] = $london->format('Y-m-d');
+                                    $meta['booking_time'] = $london->format('H:i');
+                                    $meta['consultation_date'] = $london->format('Y-m-d');
+                                    $meta['consultation_time'] = $london->format('H:i');
+
+                                    if ($joinUrl || $startUrl) {
+                                        $meta['zoom'] = array_replace($meta['zoom'] ?? [], [
+                                            'join_url' => $joinUrl,
+                                            'start_url' => $startUrl,
+                                            'saved_at' => now()->toIso8601String(),
+                                        ]);
+                                    }
+
+                                    $record->meta = $meta;
+                                    $record->save();
+
+                                    if ($order) {
+                                        $orderMeta = is_array($order->meta)
+                                            ? $order->meta
+                                            : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                                        foreach ([
+                                            'appointment_at',
+                                            'appointment_start_at',
+                                            'appointment_start',
+                                            'appointment_datetime',
+                                            'appointmentDateTime',
+                                            'booking_date',
+                                            'booking_time',
+                                            'consultation_date',
+                                            'consultation_time',
+                                        ] as $key) {
+                                            $orderMeta[$key] = $meta[$key];
+                                        }
+
+                                        if ($joinUrl || $startUrl) {
+                                            $orderMeta['zoom'] = array_replace($orderMeta['zoom'] ?? [], [
+                                                'join_url' => $joinUrl,
+                                                'start_url' => $startUrl,
+                                                'saved_at' => now()->toIso8601String(),
+                                            ]);
+                                        }
+
+                                        $order->meta = $orderMeta;
+                                        $order->save();
+                                    }
+
+                                    Notification::make()
+                                        ->success()
+                                        ->title('Appointment created')
+                                        ->body('The appointment has been linked to ' . $reference . (($joinUrl || $startUrl) ? ' and a Zoom link has been created.' : '.'))
+                                        ->send();
+                                } catch (Throwable $e) {
+                                    Notification::make()
+                                        ->danger()
+                                        ->title('Could not create appointment')
+                                        ->body(substr($e->getMessage(), 0, 200))
+                                        ->send();
+                                }
+                            }),
+
                         Action::make('addSixMonthReview')
                             ->label('Add 6-month review')
                             ->button()
                             ->color('warning')
                             ->icon('heroicon-o-calendar-days')
-                            ->visible(fn ($record) => filled(static::sixMonthReviewBannerForPending($record)))
                             ->modalHeading('Add 6-month review')
                             ->modalSubmitActionLabel('Save review')
                             ->form([
@@ -3120,88 +3525,87 @@ class PendingOrderResource extends Resource
                             }),
 
                             Action::make('clearSixMonthReviews')
-    ->label('Clear 6-month review')
-    ->button()
-    ->color('gray')
-    ->icon('heroicon-o-trash')
-    ->requiresConfirmation()
-    ->modalHeading('Clear 6-month review history')
-    ->modalDescription('This will clear all saved 6-month review notes for this patient from pending and completed order meta.')
-    ->modalSubmitActionLabel('Clear review history')
-    ->visible(fn ($record) => static::sixMonthReviewHistoryForPending($record) !== '—')
-    ->action(function ($record) {
-        if (! $record) {
-            return;
-        }
+                                ->label('Clear 6-month review')
+                                ->button()
+                                ->color('gray')
+                                ->icon('heroicon-o-trash')
+                                ->requiresConfirmation()
+                                ->modalHeading('Clear 6-month review history')
+                                ->modalDescription('This will clear all saved 6-month review notes for this patient from pending and completed order meta.')
+                                ->modalSubmitActionLabel('Clear review history')
+                                ->action(function ($record) {
+                                    if (! $record) {
+                                        return;
+                                    }
 
-        $userId = (int) ($record->user_id ?? optional($record->user)->id ?? 0);
+                                    $userId = (int) ($record->user_id ?? optional($record->user)->id ?? 0);
 
-        if ($userId < 1) {
-            Notification::make()
-                ->danger()
-                ->title('Could not find patient')
-                ->send();
+                                    if ($userId < 1) {
+                                        Notification::make()
+                                            ->danger()
+                                            ->title('Could not find patient')
+                                            ->send();
 
-            return;
-        }
+                                        return;
+                                    }
 
-        $clearFromRecord = function ($sourceRecord): bool {
-            if (! $sourceRecord) {
-                return false;
-            }
+                                    $clearFromRecord = function ($sourceRecord): bool {
+                                        if (! $sourceRecord) {
+                                            return false;
+                                        }
 
-            $meta = is_array($sourceRecord->meta)
-                ? $sourceRecord->meta
-                : (json_decode($sourceRecord->meta ?? '[]', true) ?: []);
+                                        $meta = is_array($sourceRecord->meta)
+                                            ? $sourceRecord->meta
+                                            : (json_decode($sourceRecord->meta ?? '[]', true) ?: []);
 
-            if (! is_array(data_get($meta, 'six_month_reviews'))) {
-                return false;
-            }
+                                        if (! is_array(data_get($meta, 'six_month_reviews'))) {
+                                            return false;
+                                        }
 
-            data_forget($meta, 'six_month_reviews');
+                                        data_forget($meta, 'six_month_reviews');
 
-            $sourceRecord->meta = $meta;
-            $sourceRecord->save();
+                                        $sourceRecord->meta = $meta;
+                                        $sourceRecord->save();
 
-            return true;
-        };
+                                        return true;
+                                    };
 
-        $cleared = 0;
+                                    $cleared = 0;
 
-        try {
-            PendingOrder::query()
-                ->where('user_id', $userId)
-                ->whereNotNull('meta')
-                ->get()
-                ->each(function ($pending) use (&$cleared, $clearFromRecord) {
-                    if ($clearFromRecord($pending)) {
-                        $cleared++;
-                    }
-                });
-        } catch (Throwable $e) {
-            //
-        }
+                                    try {
+                                        PendingOrder::query()
+                                            ->where('user_id', $userId)
+                                            ->whereNotNull('meta')
+                                            ->get()
+                                            ->each(function ($pending) use (&$cleared, $clearFromRecord) {
+                                                if ($clearFromRecord($pending)) {
+                                                    $cleared++;
+                                                }
+                                            });
+                                    } catch (Throwable $e) {
+                                        //
+                                    }
 
-        try {
-            Order::query()
-                ->where('user_id', $userId)
-                ->whereNotNull('meta')
-                ->get()
-                ->each(function ($order) use (&$cleared, $clearFromRecord) {
-                    if ($clearFromRecord($order)) {
-                        $cleared++;
-                    }
-                });
-        } catch (Throwable $e) {
-            //
-        }
+                                    try {
+                                        Order::query()
+                                            ->where('user_id', $userId)
+                                            ->whereNotNull('meta')
+                                            ->get()
+                                            ->each(function ($order) use (&$cleared, $clearFromRecord) {
+                                                if ($clearFromRecord($order)) {
+                                                    $cleared++;
+                                                }
+                                            });
+                                    } catch (Throwable $e) {
+                                        //
+                                    }
 
-        Notification::make()
-            ->success()
-            ->title('6-month review cleared')
-            ->body($cleared > 0 ? 'Review history was removed for this patient.' : 'No review history was found.')
-            ->send();
-    }),
+                                    Notification::make()
+                                        ->success()
+                                        ->title('6-month review cleared')
+                                        ->body($cleared > 0 ? 'Review history was removed for this patient.' : 'No review history was found.')
+                                        ->send();
+                                }),
                     
                             ]),
             ])

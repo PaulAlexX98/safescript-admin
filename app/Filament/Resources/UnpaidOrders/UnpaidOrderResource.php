@@ -344,7 +344,31 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                 
                 TextColumn::make('created_at')
                     ->label('Order Created')
-                    ->dateTime('d M Y, H:i')
+                    ->formatStateUsing(function ($state, $record) {
+                        $createdAt = null;
+
+                        try {
+                            $createdAt = method_exists($record, 'getRawOriginal')
+                                ? $record->getRawOriginal('created_at')
+                                : null;
+                        } catch (Throwable $e) {
+                            $createdAt = null;
+                        }
+
+                        $createdAt = $createdAt ?: $state;
+
+                        if (! $createdAt) {
+                            return '—';
+                        }
+
+                        try {
+                            return Carbon::parse($createdAt, 'UTC')
+                                ->timezone('Europe/London')
+                                ->format('d M Y, H:i');
+                        } catch (Throwable $e) {
+                            return (string) $createdAt;
+                        }
+                    })
                     ->sortable()
                     ->toggleable(),
 
@@ -844,7 +868,31 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                                             }),
                                         TextEntry::make('created_at')
                                             ->label('Created')
-                                            ->dateTime('d-m-Y H:i'),
+                                            ->formatStateUsing(function ($state, $record) {
+                                                $createdAt = null;
+
+                                                try {
+                                                    $createdAt = method_exists($record, 'getRawOriginal')
+                                                        ? $record->getRawOriginal('created_at')
+                                                        : null;
+                                                } catch (Throwable $e) {
+                                                    $createdAt = null;
+                                                }
+
+                                                $createdAt = $createdAt ?: $state;
+
+                                                if (! $createdAt) {
+                                                    return '—';
+                                                }
+
+                                                try {
+                                                    return Carbon::parse($createdAt, 'UTC')
+                                                        ->timezone('Europe/London')
+                                                        ->format('d-m-Y H:i');
+                                                } catch (Throwable $e) {
+                                                    return (string) $createdAt;
+                                                }
+                                            }),
                                         TextEntry::make('patient_address_block')
                                             ->label('Home address')
                                             ->columnSpan(1)

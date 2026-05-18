@@ -8,6 +8,8 @@ use Throwable;
 use Carbon\Carbon;
 use App\Filament\Resources\Orders\CompletedOrderResource;
 use App\Models\ConsultationFormResponse;
+use App\Models\Order;
+use App\Models\PendingOrder;
 use Filament\Actions;
 use Illuminate\Support\Facades\Route;
 use Filament\Infolists\Components\TextEntry;
@@ -70,6 +72,162 @@ class CompletedOrderDetails extends ViewRecord
     public function getTitle(): string
     {
         return 'Order ' . ($this->record->reference ?? $this->record->getKey());
+    }
+
+
+    protected static function sixMonthReviewRowsForRecord($record): \Illuminate\Support\Collection
+    {
+        $userId = (int) ($record->user_id ?? optional($record->user)->id ?? 0);
+
+        if ($userId < 1) {
+            return collect();
+        }
+
+        $rows = collect();
+
+        $collectFromRecord = function ($sourceRecord, string $sourceLabel) use (&$rows): void {
+            if (! $sourceRecord) {
+                return;
+            }
+
+            $meta = is_array($sourceRecord->meta)
+                ? $sourceRecord->meta
+                : (json_decode($sourceRecord->meta ?? '[]', true) ?: []);
+
+            $reviews = data_get($meta, 'six_month_reviews', []);
+
+            if (! is_array($reviews)) {
+                return;
+            }
+
+            foreach ($reviews as $index => $review) {
+                if (! is_array($review)) {
+                    continue;
+                }
+
+                $text = trim((string) ($review['text'] ?? $review['review'] ?? $review['note'] ?? ''));
+
+                if ($text === '') {
+                    continue;
+                }
+
+                $date = $review['date'] ?? $review['created_at'] ?? $sourceRecord->created_at ?? null;
+
+                try {
+                    $dateText = $date ? Carbon::parse($date)->timezone('Europe/London')->format('d-m-Y H:i') : '—';
+                    $sort = $date ? Carbon::parse($date)->timestamp : 0;
+                } catch (Throwable $e) {
+                    $dateText = (string) $date;
+                    $sort = 0;
+                }
+
+                $reference = (string) ($sourceRecord->reference ?? '');
+                $sourceId = method_exists($sourceRecord, 'getKey') ? $sourceRecord->getKey() : null;
+                $sourceType = $sourceRecord instanceof PendingOrder ? 'pending' : 'order';
+                $id = implode('|', [$sourceType, $sourceId, $index]);
+
+                $rows->push([
+                    'id' => $id,
+                    'source_type' => $sourceType,
+                    'source_id' => $sourceId,
+                    'index' => $index,
+                    'sort' => $sort,
+                    'date' => $dateText,
+                    'text' => $text,
+                    'reference' => $reference,
+                    'source' => $sourceLabel,
+                ]);
+            }
+        };
+
+        try {
+            PendingOrder::query()
+                ->where('user_id', $userId)
+                ->whereNotNull('meta')
+                ->latest('id')
+                ->limit(50)
+                ->get()
+                ->each(fn ($pending) => $collectFromRecord($pending, 'Pending'));
+        } catch (Throwable $e) {
+            // Ignore lookup failures.
+        }
+
+        try {
+            Order::query()
+                ->where('user_id', $userId)
+                ->whereNotNull('meta')
+                ->latest('id')
+                ->limit(50)
+                ->get()
+                ->each(fn ($order) => $collectFromRecord($order, 'Order'));
+        } catch (Throwable $e) {
+            // Ignore lookup failures.
+        }
+
+        return $rows
+            ->sortByDesc('sort')
+            ->unique(fn ($row) => implode('|', [$row['date'], $row['text'], $row['reference']]))
+            ->values();
+    }
+
+    protected static function sixMonthReviewHistoryForCompleted($record): string
+    {
+        $rows = static::sixMonthReviewRowsForRecord($record);
+
+        if ($rows->isEmpty()) {
+            return '—';
+        }
+
+        return $rows->map(function ($row) {
+            return '[' . $row['date'] . ']' . "\n" . $row['text'];
+        })->implode("\n\n");
+    }
+
+    protected static function deleteSixMonthReviewForCompleted($record, string $entryId): bool
+    {
+        [$sourceType, $sourceId, $index] = array_pad(explode('|', $entryId, 3), 3, null);
+
+        if (! $sourceType || ! $sourceId || $index === null) {
+            return false;
+        }
+
+        $target = null;
+
+        if ($sourceType === 'pending') {
+            $target = PendingOrder::query()->find($sourceId);
+        }
+
+        if ($sourceType === 'order') {
+            $target = Order::query()->find($sourceId);
+        }
+
+        if (! $target) {
+            return false;
+        }
+
+        $meta = is_array($target->meta)
+            ? $target->meta
+            : (json_decode($target->meta ?? '[]', true) ?: []);
+
+        $reviews = data_get($meta, 'six_month_reviews', []);
+
+        if (! is_array($reviews) || ! array_key_exists((int) $index, $reviews)) {
+            return false;
+        }
+
+        unset($reviews[(int) $index]);
+        $reviews = array_values($reviews);
+
+        if (empty($reviews)) {
+            data_forget($meta, 'six_month_reviews');
+        } else {
+            data_set($meta, 'six_month_reviews', $reviews);
+        }
+
+        $target->meta = $meta;
+        $target->save();
+
+        return true;
     }
 
     protected function getHeaderActions(): array
@@ -180,6 +338,222 @@ class CompletedOrderDetails extends ViewRecord
                         ->success()
                         ->send();
                 }),
+
+            Action::make('print_address_label')
+                ->label('Print address label')
+                ->icon('heroicon-o-user')
+                ->color('gray')
+                ->action(function () {
+                    $o = $this->record;
+                    $m = is_array($o->meta) ? $o->meta : (json_decode($o->meta ?? '[]', true) ?: []);
+
+                    $user = $o->user ?? null;
+
+                    $first = data_get($m, 'firstName')
+                        ?? data_get($m, 'first_name')
+                        ?? data_get($m, 'patient.first_name')
+                        ?? data_get($m, 'customer.first_name')
+                        ?? ($user->first_name ?? '');
+
+                    $last = data_get($m, 'lastName')
+                        ?? data_get($m, 'last_name')
+                        ?? data_get($m, 'patient.last_name')
+                        ?? data_get($m, 'customer.last_name')
+                        ?? ($user->last_name ?? '');
+
+                    $patient = trim(trim((string) $first) . ' ' . trim((string) $last));
+                    if ($patient === '') {
+                        $patient = 'Patient';
+                    }
+
+                    $line1 = trim($patient);
+
+                    $address1 = data_get($m, 'shippingAddress.address1')
+                        ?? data_get($m, 'shipping.address1')
+                        ?? data_get($m, 'shipping.line1')
+                        ?? data_get($m, 'address1')
+                        ?? data_get($m, 'patient.address1')
+                        ?? ($user->shipping_address1 ?? null)
+                        ?? ($user->address1 ?? null);
+
+                    $address2 = data_get($m, 'shippingAddress.address2')
+                        ?? data_get($m, 'shipping.address2')
+                        ?? data_get($m, 'shipping.line2')
+                        ?? data_get($m, 'address2')
+                        ?? data_get($m, 'patient.address2')
+                        ?? ($user->shipping_address2 ?? null)
+                        ?? ($user->address2 ?? null);
+
+                    $city = data_get($m, 'shippingAddress.city')
+                        ?? data_get($m, 'shipping.city')
+                        ?? data_get($m, 'city')
+                        ?? data_get($m, 'patient.city')
+                        ?? ($user->shipping_city ?? null)
+                        ?? ($user->city ?? null);
+
+                    $postcode = data_get($m, 'shippingAddress.postcode')
+                        ?? data_get($m, 'shipping.postcode')
+                        ?? data_get($m, 'postcode')
+                        ?? data_get($m, 'patient.postcode')
+                        ?? ($user->shipping_postcode ?? null)
+                        ?? ($user->postcode ?? null);
+
+                    $addressLines = array_values(array_filter([
+                        $address1 ? trim((string) $address1) : null,
+                        $address2 ? trim((string) $address2) : null,
+                        trim(trim((string) $city) . ' ' . trim((string) $postcode)) ?: null,
+                    ], fn ($value) => is_string($value) && trim($value) !== ''));
+
+                    $line1 = mb_strtoupper(trim((string) $line1));
+
+                    $addressText = mb_strtoupper(
+                        'Address: ' . (! empty($addressLines) ? implode(' ', $addressLines) : 'Address not available')
+                    );
+
+                    // Same label size and font family as ZplLabelBuilder::forOrder.
+                    // Only prints name and address. No warning, no QR, no pharmacy details.
+                    $zpl = "^XA
+                    ^CI28
+                    ^PW609
+                    ^LL288
+                    ^LH0,0
+
+                    ^CF0,22
+                    ^FO32,24^FB560,2,0,C,10^FD{$line1}^FS
+
+                    ^CF0,20
+                    ^FO32,80^FB560,3,0,C,20^FD{$addressText}^FS
+
+                    ^XZ";
+
+                    logger()->info('print_patient_label dispatch', [
+                        'order_id'  => $o->id,
+                        'reference' => $o->reference,
+                        'len'       => strlen($zpl),
+                    ]);
+
+                    $this->dispatch('print-zpl', zpl: $zpl);
+
+                    \Filament\Notifications\Notification::make()
+                        ->title('Patient label sent to browser')
+                        ->success()
+                        ->send();
+                }),
+
+            ActionGroup::make([
+                Action::make('addSixMonthReview')
+                    ->label('Add 6-month review')
+                    ->icon('heroicon-o-calendar-days')
+                    ->color('warning')
+                    ->modalHeading('Add 6-month review')
+                    ->modalSubmitActionLabel('Save review')
+                    ->form([
+                        Textarea::make('review_text')
+                            ->label('Review note')
+                            ->required()
+                            ->rows(5)
+                            ->placeholder('Write the 6-month review note for this patient.'),
+                    ])
+                    ->action(function (array $data) {
+                        $record = $this->record;
+
+                        if (! $record) {
+                            return;
+                        }
+
+                        $text = trim((string) ($data['review_text'] ?? ''));
+
+                        if ($text === '') {
+                            Notification::make()
+                                ->danger()
+                                ->title('Review note is required')
+                                ->send();
+
+                            return;
+                        }
+
+                        $meta = is_array($record->meta)
+                            ? $record->meta
+                            : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                        $reviews = data_get($meta, 'six_month_reviews', []);
+
+                        if (! is_array($reviews)) {
+                            $reviews = [];
+                        }
+
+                        $user = auth()->user();
+
+                        $reviews[] = [
+                            'date' => now()->toIso8601String(),
+                            'text' => $text,
+                            'by' => $user?->name ?: trim(($user?->first_name ?? '') . ' ' . ($user?->last_name ?? '')),
+                            'user_id' => auth()->id(),
+                        ];
+
+                        data_set($meta, 'six_month_reviews', $reviews);
+
+                        $record->meta = $meta;
+                        $record->save();
+
+                        Notification::make()
+                            ->success()
+                            ->title('6-month review saved')
+                            ->send();
+                    }),
+
+                Action::make('deleteSixMonthReview')
+                    ->label('Delete 6-month review')
+                    ->icon('heroicon-o-trash')
+                    ->color('danger')
+                    ->modalHeading('Delete 6-month review')
+                    ->modalSubmitActionLabel('Delete selected review')
+                    ->requiresConfirmation()
+                    ->form([
+                        Select::make('review_entry')
+                            ->label('Select review')
+                            ->options(fn (): array => static::sixMonthReviewRowsForRecord($this->record)
+                                ->mapWithKeys(function (array $row) {
+                                    $label = '[' . $row['date'] . '] ' . $row['text'];
+                                    return [$row['id'] => mb_strlen($label) > 140 ? mb_substr($label, 0, 140) . '…' : $label];
+                                })
+                                ->all())
+                            ->searchable()
+                            ->required(),
+                    ])
+                    ->visible(fn (): bool => static::sixMonthReviewRowsForRecord($this->record)->isNotEmpty())
+                    ->action(function (array $data): void {
+                        $entryId = is_string($data['review_entry'] ?? null) ? trim($data['review_entry']) : '';
+
+                        if ($entryId === '') {
+                            Notification::make()
+                                ->danger()
+                                ->title('Select a review')
+                                ->send();
+
+                            return;
+                        }
+
+                        if (! static::deleteSixMonthReviewForCompleted($this->record, $entryId)) {
+                            Notification::make()
+                                ->danger()
+                                ->title('Could not delete review')
+                                ->body('The selected review could not be found.')
+                                ->send();
+
+                            return;
+                        }
+
+                        Notification::make()
+                            ->success()
+                            ->title('6-month review deleted')
+                            ->send();
+                    }),
+            ])
+                ->label('6-month review')
+                ->icon('heroicon-o-calendar-days')
+                ->color('warning')
+                ->button(),
                 
             ActionGroup::make([
                 Action::make('pdf_full')
@@ -837,6 +1211,7 @@ class CompletedOrderDetails extends ViewRecord
                     ->send();
             })
             ->button(),
+
         ];
     }
 
@@ -1462,6 +1837,18 @@ class CompletedOrderDetails extends ViewRecord
                         ]),
                 ])
                 ->columnSpanFull(),
+
+            Section::make('6-month review')
+                ->collapsible()
+                ->collapsed(false)
+                ->columnSpanFull()
+                ->schema([
+                    TextEntry::make('six_month_review_history')
+                        ->hiddenLabel()
+                        ->state(fn ($record) => static::sixMonthReviewHistoryForCompleted($record))
+                        ->formatStateUsing(fn ($state) => $state && $state !== '—' ? nl2br(e($state)) : '—')
+                        ->html(),
+                ]),
 
             Section::make('Consultation notes')
     ->collapsible()

@@ -216,6 +216,58 @@
       @endif
     </div>
   </div>
+
+  <div
+    x-cloak
+    x-show="showSaveAllTabsConfirm"
+    x-transition.opacity.duration.150ms
+    role="dialog"
+    aria-modal="true"
+    x-on:keydown.escape.window="cancelCompleteAfterSaveCheck()"
+    x-bind:style="showSaveAllTabsConfirm ? 'display:block; position:fixed; inset:0; z-index:999999; background:rgba(0,0,0,0.78);' : 'display:none;'"
+  >
+    <div
+      x-show="showSaveAllTabsConfirm"
+      x-on:click.outside="cancelCompleteAfterSaveCheck()"
+      style="position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); width:calc(100vw - 32px); max-width:460px; border-radius:18px; border:1px solid rgba(255,255,255,0.12); background:#151515; padding:24px; box-shadow:0 24px 80px rgba(0,0,0,0.65); color:#fff;"
+    >
+      <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px;">
+        <div>
+          <h2 style="margin:0; font-size:20px; line-height:1.3; font-weight:700; color:#fff;">Have you saved all tabs?</h2>
+          <p style="margin:10px 0 0; font-size:14px; line-height:1.65; color:#d1d5db;">
+            Please confirm that all consultation tabs have been saved before completing this consultation.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          x-on:click="cancelCompleteAfterSaveCheck()"
+          aria-label="Close"
+          style="border:0; background:transparent; color:#9ca3af; cursor:pointer; font-size:22px; line-height:1; padding:2px 4px;"
+        >
+          ×
+        </button>
+      </div>
+
+      <div style="display:flex; flex-wrap:wrap; justify-content:flex-end; gap:12px; margin-top:24px;">
+        <button
+          type="button"
+          x-on:click="cancelCompleteAfterSaveCheck()"
+          style="border:1px solid rgba(255,255,255,0.14); background:rgba(255,255,255,0.06); color:#e5e7eb; cursor:pointer; border-radius:12px; padding:10px 18px; font-size:14px; font-weight:700;"
+        >
+          No, go back
+        </button>
+
+        <button
+          type="button"
+          x-on:click="proceedCompleteAfterSaveCheck()"
+          style="border:0; background:#16a34a; color:#fff; cursor:pointer; border-radius:12px; padding:10px 18px; font-size:14px; font-weight:700;"
+        >
+          Yes, complete
+        </button>
+      </div>
+    </div>
+  </div>
 <script>
   document.addEventListener('DOMContentLoaded', function(){
       // Ensure a default __go_next=0 exists so Enter triggers Save
@@ -263,6 +315,7 @@
   function consultationRunner() {
     return {
       isSubmitting: false,
+      showSaveAllTabsConfirm: false,
       saveAllTabsMessage: '',
       submitCurrent(goNext) {
         const area = document.getElementById('consultation-section');
@@ -299,8 +352,16 @@
         if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
       },
       confirmComplete() {
+        this.showSaveAllTabsConfirm = true;
+      },
+      cancelCompleteAfterSaveCheck() {
+        this.showSaveAllTabsConfirm = false;
+      },
+      proceedCompleteAfterSaveCheck() {
         const form = document.getElementById('consult-complete-form');
         if (!form) return;
+
+        this.showSaveAllTabsConfirm = false;
         this.isSubmitting = true;
         form.submit();
       },

@@ -9,7 +9,6 @@ use App\Filament\Resources\Appointments\Pages\EditAppointment;
 use App\Filament\Resources\Appointments\Pages\ViewAppointment;
 use App\Filament\Resources\Appointments\Pages as Pages;
 use App\Models\Appointment;
- 
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Select;
@@ -1018,19 +1017,80 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                     ->label('Time')
                     ->native(false)
                     ->options(function (\Filament\Schemas\Components\Utilities\Get $get, $record = null): array {
-                        $serviceSlug = static::appointmentServiceSlugForSlotLookup(
-                            $get('service_id'),
-                            $get('service_slug'),
-                            $get('service') ?: static::appointmentServiceLabel($get('service_id'))
-                        );
+                        $options = [];
 
-                        return static::appointmentAvailableTimeOptions(
-                            $serviceSlug,
-                            $get('start_date'),
-                            $record?->getKey()
-                        );
+                        for ($hour = 9; $hour <= 18; $hour++) {
+                            $hh = str_pad((string) $hour, 2, '0', STR_PAD_LEFT);
+
+                            if ($hour === 18) {
+                                $options[$hh . ':00'] = $hh . ':00';
+                                continue;
+                            }
+
+                            for ($minute = 0; $minute < 60; $minute += 15) {
+                                $mm = str_pad((string) $minute, 2, '0', STR_PAD_LEFT);
+                                $options[$hh . ':' . $mm] = $hh . ':' . $mm;
+                            }
+                        }
+
+                        $date = $get('start_date');
+                        if (! $date) {
+                            return $options;
+                        }
+
+                        try {
+                            $dayStartUtc = Carbon::parse($date, 'Europe/London')
+                                ->startOfDay()
+                                ->utc()
+                                ->format('Y-m-d H:i:s');
+
+                            $dayEndUtc = Carbon::parse($date, 'Europe/London')
+                                ->endOfDay()
+                                ->utc()
+                                ->format('Y-m-d H:i:s');
+
+                            $bookedRows = Appointment::query()
+                                ->when($record?->getKey(), fn ($query) => $query->whereKeyNot($record->getKey()))
+                                ->when(SchemaFacade::hasColumn('appointments', 'status'), function ($query) {
+                                    $query->where(function ($statusQuery) {
+                                        $statusQuery
+                                            ->whereNull('status')
+                                            ->orWhere('status', '')
+                                            ->orWhereNotIn('status', [
+                                                'completed',
+                                                'complete',
+                                                'done',
+                                                'cancelled',
+                                                'canceled',
+                                                'rejected',
+                                            ]);
+                                    });
+                                })
+                                ->whereBetween('start_at', [$dayStartUtc, $dayEndUtc])
+                                ->get(['id', 'start_at']);
+
+                            foreach ($bookedRows as $bookedRow) {
+                                $rawStartAt = method_exists($bookedRow, 'getRawOriginal')
+                                    ? $bookedRow->getRawOriginal('start_at')
+                                    : $bookedRow->start_at;
+
+                                if (! $rawStartAt) {
+                                    continue;
+                                }
+
+                                $bookedTime = Carbon::parse($rawStartAt, 'UTC')
+                                    ->tz('Europe/London')
+                                    ->format('H:i');
+
+                                unset($options[$bookedTime]);
+                            }
+                        } catch (\Throwable $e) {
+                            return $options;
+                        }
+
+                        return $options;
                     })
-                    ->placeholder('Check times for this service/date')
+                    ->placeholder('Select a time between 09:00 and 18:00')
                     ->searchable()
                     ->required()
                     ->live()
@@ -1055,19 +1115,10 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                             return;
                         }
 
-                        $serviceSlug = static::appointmentServiceSlugForSlotLookup(
-                            $get('service_id'),
-                            $get('service_slug'),
-                            $get('service')
-                        );
-                        $schedule = static::appointmentScheduleForService($serviceSlug);
-                        $timezone = static::appointmentScheduleTimezone($schedule);
-                        $slotMinutes = static::appointmentScheduleSlotMinutes($schedule);
-
                         try {
-                            $dt = Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, $timezone);
+                            $dt = Carbon::createFromFormat('Y-m-d H:i', $date . ' ' . $time, 'Europe/London');
                             $set('start_at', $dt->copy()->utc()->format('Y-m-d H:i:s'));
-                            $set('end_at', $dt->copy()->utc()->addMinutes($slotMinutes)->format('Y-m-d H:i:s'));
+                            $set('end_at', $dt->copy()->utc()->addMinutes(20)->format('Y-m-d H:i:s'));
                         } catch (\Throwable $e) {
                             $set('start_at', null);
                             $set('end_at', null);
@@ -1111,7 +1162,14 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
     public static function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn (Builder $query) => static::applyPendingOnlyAppointmentsConstraints($query))
+            ->modifyQueryUsing(function (Builder $query): Builder {
+                return static::applyPendingOnlyAppointmentsConstraints($query)
+                    ->select('appointments.*')
+                    ->with(['order.user'])
+                    ->orderBy('appointments.start_at', 'asc');
+            })
+            ->defaultPaginationPageOption(10)
+            ->paginationPageOptions([10, 25, 50])
             ->columns([
                 TextColumn::make('start_at')
                     ->label('When')
@@ -1121,17 +1179,23 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                         }
 
                         try {
-                            $display = static::displayStartAtFor($record);
+                            $rawStartAt = method_exists($record, 'getRawOriginal')
+                                ? $record->getRawOriginal('start_at')
+                                : $record->start_at;
 
-                            return $display
-                                ? $display->copy()->tz('Europe/London')->format('d M Y, H:i')
-                                : null;
+                            if (empty($rawStartAt)) {
+                                return null;
+                            }
+
+                            return Carbon::parse($rawStartAt, 'UTC')
+                                ->tz('Europe/London')
+                                ->format('d M Y, H:i');
                         } catch (\Throwable $e) {
                             return null;
                         }
                     })
                     ->sortable()
-                    ->searchable(),
+                    ->toggleable(),
 
                 TextColumn::make('reference')
                     ->label('Ref')
@@ -1140,22 +1204,11 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                             return '—';
                         }
 
-                        // 1) If linked order exists, show the real reference
-                        $ref = static::resolveOrderRef($record);
-                        if (is_string($ref)) {
-                            $r = trim($ref);
-                            if ($r !== '' && $r !== '-') {
-                                return $r;
-                            }
-                        }
-
-                        // 2) If a PCAO ref is already stored, show it
                         $stored = is_string($record->order_reference ?? null) ? trim((string) $record->order_reference) : '';
-                        if ($stored !== '' && str_starts_with($stored, 'PCAO')) {
+                        if ($stored !== '') {
                             return $stored;
                         }
 
-                        // 3) Fallback: derive a stable PCAO ref from appointment ID
                         $id = $record->getKey();
                         if ($id) {
                             return 'PCAO' . str_pad((string) $id, 6, '0', STR_PAD_LEFT);
@@ -1178,6 +1231,7 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                         });
                     }),
 
+
                 TextColumn::make('order_item')
                     ->label('Item')
                     ->getStateUsing(function ($record) {
@@ -1185,15 +1239,19 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                             return '—';
                         }
 
-                        
+                        $appointmentItem = is_string($record->service_name ?? null) ? trim($record->service_name) : '';
+                        if ($appointmentItem !== '') {
+                            return $appointmentItem;
+                        }
+
+                        $appointmentService = is_string($record->service ?? null) ? trim($record->service) : '';
+                        if ($appointmentService !== '') {
+                            return $appointmentService;
+                        }
 
                         $ord = static::findRelatedOrder($record);
                         if (! $ord) {
-                            $name = is_string($record->service_name ?? null) ? trim($record->service_name) : '';
-                            if ($name === '') {
-                                $name = is_string($record->service ?? null) ? trim($record->service) : '';
-                            }
-                            return $name !== '' ? $name : '—';
+                            return '—';
                         }
 
                         $meta = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
@@ -1315,8 +1373,8 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                             return $name;
                         }
 
-                        // 3) Linked order (using helper)
-                        $order = static::findRelatedOrder($record);
+                        // 3) Avoid expensive fallback order lookups on the appointment list unless the row is directly linked.
+                        $order = ! empty($record->order_id) ? static::findRelatedOrder($record) : null;
                         if ($order) {
                             // 3a) Order's own first / last
                             $of = is_string($order->first_name ?? null) ? trim($order->first_name) : '';
@@ -1656,6 +1714,7 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                         }
 
                         $record->save();
+                        static::cancelOtherActiveAppointmentsFor($record);
                         $record->refresh(); // make sure "When" column updates
 
                         // 1.5) If we successfully found an order, hard-link it to the appointment
@@ -1675,6 +1734,7 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                             }
 
                             $record->save();
+                            static::cancelOtherActiveAppointmentsFor($record);
                             $record->refresh();
 
                             try {
@@ -1906,7 +1966,7 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
         return parent::getEloquentQuery();
     }
 
-    protected static function applyPendingOnlyAppointmentsConstraints(Builder $base): Builder
+   /*protected static function applyPendingOnlyAppointmentsConstraints(Builder $base): Builder
     {
         $pendingRefCol = null;
         try {
@@ -2010,6 +2070,73 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                                    ->orWhere('orders.payment_status', '!=', 'unpaid');
                             });
                         });
+                });
+            });
+    }*/
+
+    protected static function applyPendingOnlyAppointmentsConstraints(Builder $base): Builder
+    {
+        return $base
+            ->whereNotNull('appointments.start_at')
+            ->when(SchemaFacade::hasColumn('appointments', 'status'), function (Builder $query): void {
+                $query->where(function (Builder $statusQuery): void {
+                    $statusQuery
+                        ->whereNull('appointments.status')
+                        ->orWhere('appointments.status', '')
+                        ->orWhereNotIn('appointments.status', [
+                            'completed',
+                            'complete',
+                            'done',
+                            'cancelled',
+                            'canceled',
+                            'rejected',
+                        ]);
+                });
+            })
+            ->where(function (Builder $query): void {
+                // Linked by order_id: show while the order is still pending.
+                $query->orWhereExists(function ($orders): void {
+                    $orders
+                        ->select(DB::raw('1'))
+                        ->from('orders')
+                        ->whereColumn('orders.id', 'appointments.order_id')
+                        ->where(function ($statusQuery): void {
+                            $statusQuery
+                                ->where('orders.status', 'pending')
+                                ->orWhere('orders.booking_status', 'pending');
+                        })
+                        ->where(function ($paymentQuery): void {
+                            $paymentQuery
+                                ->whereNull('orders.payment_status')
+                                ->orWhere('orders.payment_status', '')
+                                ->orWhere('orders.payment_status', '!=', 'unpaid');
+                        });
+                });
+
+                // Linked by order_reference: show while the matching order is still pending.
+                $query->orWhereExists(function ($orders): void {
+                    $orders
+                        ->select(DB::raw('1'))
+                        ->from('orders')
+                        ->whereColumn('orders.reference', 'appointments.order_reference')
+                        ->where(function ($statusQuery): void {
+                            $statusQuery
+                                ->where('orders.status', 'pending')
+                                ->orWhere('orders.booking_status', 'pending');
+                        })
+                        ->where(function ($paymentQuery): void {
+                            $paymentQuery
+                                ->whereNull('orders.payment_status')
+                                ->orWhere('orders.payment_status', '')
+                                ->orWhere('orders.payment_status', '!=', 'unpaid');
+                        });
+                });
+
+                // Manual appointment-only bookings stay visible.
+                $query->orWhere(function (Builder $manualQuery): void {
+                    $manualQuery
+                        ->whereNull('appointments.order_id')
+                        ->where('appointments.order_reference', 'like', 'PCAO%');
                 });
             });
     }
@@ -2295,9 +2422,84 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
     // -- Helper methods for Ref/Item/URL placeholders and actions --
     // -- Helper methods for Ref/Item/URL placeholders and actions --
 
+    public static function cancelOtherActiveAppointmentsFor($record): void
+    {
+        if (! $record || ! method_exists($record, 'getKey') || ! $record->getKey()) {
+            return;
+        }
+
+        try {
+            if (! SchemaFacade::hasColumn('appointments', 'status')) {
+                return;
+            }
+
+            $orderId = $record->order_id ?? null;
+            $orderReference = is_string($record->order_reference ?? null)
+                ? trim((string) $record->order_reference)
+                : '';
+
+            if (! $orderId && $orderReference === '') {
+                return;
+            }
+
+            $currentStatus = strtolower(trim((string) ($record->status ?? '')));
+            $activeStatuses = ['pending', 'booked', 'approved', 'waiting'];
+
+            if ($currentStatus !== '' && ! in_array($currentStatus, $activeStatuses, true)) {
+                return;
+            }
+
+            Appointment::query()
+                ->whereKeyNot($record->getKey())
+                ->where(function (Builder $query) use ($orderId, $orderReference): void {
+                    if ($orderId) {
+                        $query->where('order_id', $orderId);
+                    }
+
+                    if ($orderReference !== '') {
+                        $orderId
+                            ? $query->orWhere('order_reference', $orderReference)
+                            : $query->where('order_reference', $orderReference);
+                    }
+                })
+                ->where(function (Builder $query): void {
+                    $query->whereNull('status')
+                        ->orWhere('status', '')
+                        ->orWhereIn('status', [
+                            'pending',
+                            'booked',
+                            'approved',
+                            'waiting',
+                        ]);
+                })
+                ->update([
+                    'status' => 'cancelled',
+                    'updated_at' => now(),
+                ]);
+        } catch (\Throwable $e) {
+            \Log::warning('appointment.cancel_other_active_failed', [
+                'appointment_id' => method_exists($record, 'getKey') ? $record->getKey() : null,
+                'order_id' => $record->order_id ?? null,
+                'order_reference' => $record->order_reference ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
     public static function findRelatedOrder($record): ?\App\Models\Order
     {
         if (! $record) return null;
+
+        if (method_exists($record, 'relationLoaded') && $record->relationLoaded('order') && $record->order) {
+            $order = $record->order;
+
+            if (method_exists($order, 'loadMissing')) {
+                $order->loadMissing('user');
+            }
+
+            return $order;
+        }
+
         $cacheKey = $record->getKey();
         if (array_key_exists($cacheKey, static::$relatedOrderCache)) {
             return static::$relatedOrderCache[$cacheKey];

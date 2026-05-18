@@ -178,6 +178,16 @@
 
 @endphp
 
+@if(isset($pharmacy['logo']) && is_file($pharmacy['logo']))
+  <div style="margin-bottom:12px;">
+    <img src="{{ $pharmacy['logo'] }}" alt="Pharmacy Express" style="height:42px; display:block; margin-bottom:8px;">
+  </div>
+@elseif(isset($ph['logo']) && is_file($ph['logo']))
+  <div style="margin-bottom:12px;">
+    <img src="{{ $ph['logo'] }}" alt="Pharmacy Express" style="height:42px; display:block; margin-bottom:8px;">
+  </div>
+@endif
+
 <div style="font-size:12px; line-height:1.5; margin-bottom:12px;">
  
   @php $pname = $ph['name'] ?? data_get($pharmacy ?? [], 'name'); @endphp

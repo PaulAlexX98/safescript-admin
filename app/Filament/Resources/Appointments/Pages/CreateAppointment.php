@@ -17,6 +17,11 @@ class CreateAppointment extends CreateRecord
 {
     protected static string $resource = AppointmentResource::class;
 
+    public function form(\Filament\Schemas\Schema $schema): \Filament\Schemas\Schema
+    {
+        return AppointmentResource::form($schema);
+    }
+
     protected function appointmentHasColumn(string $column): bool
     {
         try {
@@ -325,28 +330,8 @@ class CreateAppointment extends CreateRecord
     }
 }
 
-// Final server-side capacity guard.
-// The dropdown hides taken slots, but this prevents duplicate saves if two staff members
-// load the same slot before one of them saves.
-$serviceSlugForCapacity = $data['service_slug'] ?? null;
-
-if ((! is_string($serviceSlugForCapacity) || trim($serviceSlugForCapacity) === '') && ! empty($data['service'])) {
-    $serviceSlugForCapacity = Str::slug((string) $data['service']);
-}
-
-if (! AppointmentResource::appointmentSlotHasCapacityForStartAt(
-    $data['start_at'] ?? null,
-    is_string($serviceSlugForCapacity) ? trim($serviceSlugForCapacity) : null,
-    null
-)) {
-    Notification::make()
-        ->danger()
-        ->title('This appointment slot is no longer available')
-        ->body('Please select another time. The selected time may have already been booked by another staff member.')
-        ->send();
-
-    $this->halt();
-}
+// Admin-created appointments intentionally allow manual booking between 09:00 and 18:00,
+// regardless of the service schedule configured for patient-facing bookings.
 
 return $data;
     }
@@ -367,6 +352,7 @@ return $data;
 
         $record = $this->record;
         if (! $record) return;
+        AppointmentResource::cancelOtherActiveAppointmentsFor($record);
 
         // Prefer form state / raw DB value to avoid accessors
         $email = '';

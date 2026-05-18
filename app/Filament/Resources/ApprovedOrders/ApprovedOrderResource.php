@@ -138,11 +138,35 @@ class ApprovedOrderResource extends Resource
 
                 TextColumn::make('paid_at')
                     ->label('Paid At')
-                    ->dateTime('d M Y, H:i')
+                    ->formatStateUsing(function ($state, $record) {
+                        $paidAt = null;
+
+                        try {
+                            $paidAt = method_exists($record, 'getRawOriginal')
+                                ? $record->getRawOriginal('paid_at')
+                                : null;
+                        } catch (Throwable $e) {
+                            $paidAt = null;
+                        }
+
+                        $paidAt = $paidAt ?: $state;
+
+                        if (! $paidAt) {
+                            return '—';
+                        }
+
+                        try {
+                            return Carbon::parse($paidAt, 'UTC')
+                                ->timezone('Europe/London')
+                                ->format('d M Y, H:i');
+                        } catch (Throwable $e) {
+                            return (string) $paidAt;
+                        }
+                    })
                     ->sortable()
                     ->toggleable(),
 
-                // Service name from order meta
+            
                 TextColumn::make('service_name')
                     ->label('Order Service')
                     ->getStateUsing(function ($record) {
@@ -546,7 +570,31 @@ class ApprovedOrderResource extends Resource
                                             }),
                                         TextEntry::make('created_at')
                                             ->label('Created At')
-                                            ->dateTime('d-m-Y H:i'),
+                                            ->formatStateUsing(function ($state, $record) {
+                                                $createdAt = null;
+
+                                                try {
+                                                    $createdAt = method_exists($record, 'getRawOriginal')
+                                                        ? $record->getRawOriginal('created_at')
+                                                        : null;
+                                                } catch (Throwable $e) {
+                                                    $createdAt = null;
+                                                }
+
+                                                $createdAt = $createdAt ?: $state;
+
+                                                if (! $createdAt) {
+                                                    return '—';
+                                                }
+
+                                                try {
+                                                    return Carbon::parse($createdAt, 'UTC')
+                                                        ->timezone('Europe/London')
+                                                        ->format('d-m-Y H:i');
+                                                } catch (Throwable $e) {
+                                                    return (string) $createdAt;
+                                                }
+                                            }),
 
                                         TextEntry::make('patient_address_block')
                                             ->label('Home address')
@@ -959,6 +1007,16 @@ class ApprovedOrderResource extends Resource
                                 ->send();
                         }
                     }),
+                            ]),
+
+                         Section::make('6-month review')
+                            ->columnSpanFull()
+                            ->schema([
+                                TextEntry::make('six_month_review_history')
+                                    ->hiddenLabel()
+                                    ->getStateUsing(fn ($record) => static::sixMonthReviewHistoryForPending($record))
+                                    ->formatStateUsing(fn ($state) => $state && $state !== '—' ? nl2br(e($state)) : '—')
+                                    ->html(),
                             ]),
 
                         Section::make('Consultation notes')
@@ -2448,6 +2506,150 @@ class ApprovedOrderResource extends Resource
                                 ->icon('heroicon-o-link')
                                 ->url('https://scribe.heidihealth.com/')
                                 ->openUrlInNewTab(),
+
+                         Action::make('addSixMonthReview')
+                            ->label('Add 6-month review')
+                            ->button()
+                            ->color('warning')
+                            ->icon('heroicon-o-calendar-days')
+                            ->modalHeading('Add 6-month review')
+                            ->modalSubmitActionLabel('Save review')
+                            ->form([
+                                Textarea::make('review_text')
+                                    ->label('Review note')
+                                    ->required()
+                                    ->rows(5)
+                                    ->placeholder('Write the 6-month review note for this patient.'),
+                            ])
+                            ->action(function ($record, array $data) {
+                                if (! $record) {
+                                    return;
+                                }
+
+                                $text = trim((string) ($data['review_text'] ?? ''));
+
+                                if ($text === '') {
+                                    Notification::make()
+                                        ->danger()
+                                        ->title('Review note is required')
+                                        ->send();
+
+                                    return;
+                                }
+
+                                $meta = is_array($record->meta)
+                                    ? $record->meta
+                                    : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                $reviews = data_get($meta, 'six_month_reviews', []);
+                                if (! is_array($reviews)) {
+                                    $reviews = [];
+                                }
+
+                                $user = auth()->user();
+
+                                $reviews[] = [
+                                    'date' => now()->toIso8601String(),
+                                    'text' => $text,
+                                    'by' => $user?->name ?: trim(($user?->first_name ?? '') . ' ' . ($user?->last_name ?? '')),
+                                    'user_id' => auth()->id(),
+                                ];
+
+                                data_set($meta, 'six_month_reviews', $reviews);
+
+                                $record->meta = $meta;
+                                $record->save();
+
+                                Notification::make()
+                                    ->success()
+                                    ->title('6-month review saved')
+                                    ->send();
+                            }),
+
+                            Action::make('clearSixMonthReviews')
+                                ->label('Clear 6-month review')
+                                ->button()
+                                ->color('gray')
+                                ->icon('heroicon-o-trash')
+                                ->requiresConfirmation()
+                                ->modalHeading('Clear 6-month review history')
+                                ->modalDescription('This will clear all saved 6-month review notes for this patient from pending and completed order meta.')
+                                ->modalSubmitActionLabel('Clear review history')
+                                ->action(function ($record) {
+                                    if (! $record) {
+                                        return;
+                                    }
+
+                                    $userId = (int) ($record->user_id ?? optional($record->user)->id ?? 0);
+
+                                    if ($userId < 1) {
+                                        Notification::make()
+                                            ->danger()
+                                            ->title('Could not find patient')
+                                            ->send();
+
+                                        return;
+                                    }
+
+                                    $clearFromRecord = function ($sourceRecord): bool {
+                                        if (! $sourceRecord) {
+                                            return false;
+                                        }
+
+                                        $meta = is_array($sourceRecord->meta)
+                                            ? $sourceRecord->meta
+                                            : (json_decode($sourceRecord->meta ?? '[]', true) ?: []);
+
+                                        if (! is_array(data_get($meta, 'six_month_reviews'))) {
+                                            return false;
+                                        }
+
+                                        data_forget($meta, 'six_month_reviews');
+
+                                        $sourceRecord->meta = $meta;
+                                        $sourceRecord->save();
+
+                                        return true;
+                                    };
+
+                                    $cleared = 0;
+
+                                    try {
+                                        PendingOrder::query()
+                                            ->where('user_id', $userId)
+                                            ->whereNotNull('meta')
+                                            ->get()
+                                            ->each(function ($pending) use (&$cleared, $clearFromRecord) {
+                                                if ($clearFromRecord($pending)) {
+                                                    $cleared++;
+                                                }
+                                            });
+                                    } catch (Throwable $e) {
+                                        //
+                                    }
+
+                                    try {
+                                        Order::query()
+                                            ->where('user_id', $userId)
+                                            ->whereNotNull('meta')
+                                            ->get()
+                                            ->each(function ($order) use (&$cleared, $clearFromRecord) {
+                                                if ($clearFromRecord($order)) {
+                                                    $cleared++;
+                                                }
+                                            });
+                                    } catch (Throwable $e) {
+                                        //
+                                    }
+
+                                    Notification::make()
+                                        ->success()
+                                        ->title('6-month review cleared')
+                                        ->body($cleared > 0 ? 'Review history was removed for this patient.' : 'No review history was found.')
+                                        ->send();
+                                }),
+                    
+                          
                     ]),
             ]);
     }
@@ -2495,6 +2697,173 @@ class ApprovedOrderResource extends Resource
         }
         return $count > 0 ? 'primary' : 'gray';
     }
+
+     protected static function sixMonthReviewHistoryForPending($record): string
+    {
+        if (! $record) {
+            return '—';
+        }
+
+        $userId = (int) ($record->user_id ?? optional($record->user)->id ?? 0);
+        if ($userId < 1) {
+            return '—';
+        }
+
+        $rows = collect();
+
+        $collectFromRecord = function ($sourceRecord, string $sourceLabel) use (&$rows) {
+            if (! $sourceRecord) {
+                return;
+            }
+
+            $meta = is_array($sourceRecord->meta)
+                ? $sourceRecord->meta
+                : (json_decode($sourceRecord->meta ?? '[]', true) ?: []);
+
+            $reviews = data_get($meta, 'six_month_reviews', []);
+            if (! is_array($reviews)) {
+                return;
+            }
+
+            foreach ($reviews as $review) {
+                if (! is_array($review)) {
+                    continue;
+                }
+
+                $text = trim((string) ($review['text'] ?? $review['review'] ?? $review['note'] ?? ''));
+                if ($text === '') {
+                    continue;
+                }
+
+                $date = $review['date'] ?? $review['created_at'] ?? $sourceRecord->created_at ?? null;
+
+                try {
+                    $dateText = $date ? Carbon::parse($date)->format('d-m-Y H:i') : '—';
+                } catch (Throwable $e) {
+                    $dateText = (string) $date;
+                }
+
+                $author = trim((string) ($review['by'] ?? $review['author'] ?? ''));
+                $reference = (string) ($sourceRecord->reference ?? '');
+
+                $rows->push([
+                    'sort' => $date ? strtotime((string) $date) : 0,
+                    'date' => $dateText,
+                    'text' => $text,
+                    'author' => $author,
+                    'reference' => $reference,
+                    'source' => $sourceLabel,
+                ]);
+            }
+        };
+
+        try {
+            PendingOrder::query()
+                ->where('user_id', $userId)
+                ->whereNotNull('meta')
+                ->latest('id')
+                ->limit(50)
+                ->get()
+                ->each(fn ($pending) => $collectFromRecord($pending, 'Pending'));
+        } catch (Throwable $e) {
+            //
+        }
+
+        try {
+            Order::query()
+                ->where('user_id', $userId)
+                ->whereNotNull('meta')
+                ->latest('id')
+                ->limit(50)
+                ->get()
+                ->each(fn ($order) => $collectFromRecord($order, 'Order'));
+        } catch (Throwable $e) {
+            //
+        }
+
+        $rows = $rows
+            ->sortByDesc('sort')
+            ->unique(fn ($row) => implode('|', [$row['date'], $row['text'], $row['reference']]))
+            ->values();
+
+        if ($rows->isEmpty()) {
+            return '—';
+        }
+
+        return $rows->map(function ($row) {
+            return '[' . $row['date'] . ']' . "\n" . $row['text'];
+        })->implode("\n\n");
+    }
+
+    protected static function sixMonthReviewBannerForPending($record): ?string
+    {
+        if (! $record || ! static::isWeightManagementRecord($record)) {
+            return null;
+        }
+
+        $userId = (int) ($record->user_id ?? optional($record->user)->id ?? 0);
+        if ($userId < 1) {
+            return null;
+        }
+
+        $wmFilter = function ($query) {
+            return $query->where(function ($q) {
+                $q->where('reference', 'like', 'PWMN%')
+                  ->orWhere('reference', 'like', 'PWMR%')
+                  ->orWhereRaw("LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service_slug')), '')) = ?", ['weight-management']);
+            });
+        };
+
+        $firstOrder = $wmFilter(Order::query()->where('user_id', $userId))
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->first();
+
+        if (! $firstOrder || ! $firstOrder->created_at || ! $record->created_at) {
+            return null;
+        }
+
+        try {
+            $firstAt = Carbon::parse($firstOrder->created_at);
+            $currentAt = Carbon::parse($record->created_at);
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        $daysSinceFirst = (int) floor($firstAt->diffInSeconds($currentAt, false) / 86400);
+        if ($daysSinceFirst < 180) {
+            return null;
+        }
+
+        $cycle = (int) floor($daysSinceFirst / 180);
+        if ($cycle < 1) {
+            return null;
+        }
+
+        $dueAt = $firstAt->copy()->addDays($cycle * 180);
+        $nextDueAt = $firstAt->copy()->addDays(($cycle + 1) * 180);
+
+        $firstOrderAfterDue = $wmFilter(Order::query()->where('user_id', $userId))
+            ->where('created_at', '>=', $dueAt)
+            ->where('created_at', '<', $nextDueAt)
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->first();
+
+        if (! $firstOrderAfterDue) {
+            return null;
+        }
+
+        $currentRef = (string) ($record->reference ?? '');
+        $firstRef = (string) ($firstOrderAfterDue->reference ?? '');
+
+        if ($currentRef === '' || $firstRef === '' || $currentRef !== $firstRef) {
+            return null;
+        }
+
+        return 'This patient is due for their 6-month weight management review.';
+    }
+    
     public function startConsultationAction($record)
     {
         // Normalise meta

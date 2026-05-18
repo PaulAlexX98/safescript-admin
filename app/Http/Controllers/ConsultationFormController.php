@@ -185,6 +185,62 @@ class ConsultationFormController extends Controller
         }
     }
 
+    private function sendReviewRequestEmail(?string $email): void
+    {
+        $email = is_string($email) ? trim($email) : '';
+
+        if ($email === '') {
+            return;
+        }
+
+        $subject = 'Thank you for your order with Pharmacy Express';
+
+        $body = implode("\n", [
+            'Dear Patient,',
+            '',
+            'Thank you for your order with Pharmacy Express.',
+            '',
+            'If you have a moment, we’d really appreciate it if you could leave us a review. Your feedback means a lot to us and helps us continue providing excellent service to all our customers.',
+            '',
+            'Even if you’ve reviewed a previous order before, you’re very welcome to leave another review based on your latest experience.',
+            '',
+            'We also use customer feedback to recognise and reward our team for their hard work and dedication.',
+            '',
+            'Thank you again for your support.',
+            '',
+            'Best wishes,',
+            'Pharmacy Express',
+            '',
+            'Leave a review on Trustpilot:',
+            'Trustpilot Review Page',
+            'https://uk.trustpilot.com/evaluate/pharmacy-express.co.uk',
+            '',
+            'Or leave a Google review:',
+            'Google Review Page',
+            'https://g.page/r/CcqwrKScHZ5hEAE/review',
+        ]);
+
+        try {
+            $fromAddress = config('mail.from.address') ?: 'info@pharmacy-express.co.uk';
+            $fromName = config('mail.from.name') ?: 'Pharmacy Express';
+
+            Mail::raw($body, function ($message) use ($email, $subject, $fromAddress, $fromName) {
+                $message->from($fromAddress, $fromName)
+                    ->to($email)
+                    ->subject($subject);
+            });
+
+            \Log::info('consultation.review_email_sent', [
+                'email' => $email,
+            ]);
+        } catch (\Throwable $e) {
+            \Log::warning('consultation.review_email_failed', [
+                'email' => $email,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
     public function save(Request $request, $sessionId, ClinicForm $form)
     {
         // 1) Basic validation
@@ -2811,6 +2867,8 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     }
                 }
             });
+
+            $this->sendReviewRequestEmail($email);
 
             Notification::make()->success()->title('Approval email sent to ' . $email)->send();
         } catch (\Throwable $e) {
