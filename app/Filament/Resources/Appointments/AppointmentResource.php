@@ -14,6 +14,8 @@ use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\ToggleButtons;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Mail;
 use Filament\Schemas\Schema;
@@ -33,6 +35,229 @@ use Illuminate\Support\Arr;
 
 class AppointmentResource extends Resource
 {
+    protected static function sixMonthReviewUserIdForAppointment($record): int
+    {
+        if (! $record) {
+            return 0;
+        }
+
+        $directUserId = (int) ($record->user_id ?? optional($record->user ?? null)->id ?? 0);
+        if ($directUserId > 0) {
+            return $directUserId;
+        }
+
+        try {
+            $order = static::findRelatedOrder($record);
+            $orderUserId = (int) ($order?->user_id ?? optional($order?->user)->id ?? 0);
+            if ($orderUserId > 0) {
+                return $orderUserId;
+            }
+        } catch (\Throwable $e) {
+            //
+        }
+
+        $email = trim((string) ($record->email ?? ''));
+        if ($email !== '') {
+            try {
+                $orderUserId = (int) (Order::query()
+                    ->where('email', $email)
+                    ->whereNotNull('user_id')
+                    ->latest('id')
+                    ->value('user_id') ?? 0);
+
+                if ($orderUserId > 0) {
+                    return $orderUserId;
+                }
+            } catch (\Throwable $e) {
+                //
+            }
+
+            try {
+                $pendingUserId = (int) (PendingOrder::query()
+                    ->where('email', $email)
+                    ->whereNotNull('user_id')
+                    ->latest('id')
+                    ->value('user_id') ?? 0);
+
+                if ($pendingUserId > 0) {
+                    return $pendingUserId;
+                }
+            } catch (\Throwable $e) {
+                //
+            }
+        }
+
+        return 0;
+    }
+
+    protected static function sixMonthReviewHistoryForAppointment($record): string
+    {
+        if (! $record) {
+            return '—';
+        }
+
+        $userId = static::sixMonthReviewUserIdForAppointment($record);
+        if ($userId < 1) {
+            return '—';
+        }
+
+        $rows = collect();
+
+        $collectFromRecord = function ($sourceRecord, string $sourceLabel) use (&$rows) {
+            if (! $sourceRecord) {
+                return;
+            }
+
+            $meta = is_array($sourceRecord->meta)
+                ? $sourceRecord->meta
+                : (json_decode($sourceRecord->meta ?? '[]', true) ?: []);
+
+            $reviews = data_get($meta, 'six_month_reviews', []);
+            if (! is_array($reviews)) {
+                return;
+            }
+
+            foreach ($reviews as $review) {
+                if (! is_array($review)) {
+                    continue;
+                }
+
+                $text = trim((string) ($review['text'] ?? $review['review'] ?? $review['note'] ?? ''));
+                $date = $review['date'] ?? $review['created_at'] ?? $sourceRecord->created_at ?? null;
+
+                try {
+                    $dateText = $date ? Carbon::parse($date)->format('d-m-Y H:i') : '—';
+                } catch (\Throwable $e) {
+                    $dateText = (string) $date;
+                }
+
+                $reference = (string) ($sourceRecord->reference ?? '');
+
+                $formatNumber = function ($value, int $decimals = 1): string {
+                    if ($value === null || $value === '') {
+                        return '';
+                    }
+
+                    $formatted = number_format((float) $value, $decimals, '.', '');
+
+                    return str_contains($formatted, '.')
+                        ? rtrim(rtrim($formatted, '0'), '.')
+                        : $formatted;
+                };
+
+                $heightUnit = strtolower(trim((string) ($review['height_unit'] ?? '')));
+                $weightUnit = strtolower(trim((string) ($review['weight_unit'] ?? '')));
+
+                $heightText = '';
+                if ($heightUnit === 'imperial') {
+                    $heightParts = [];
+                    if (($review['height_ft'] ?? null) !== null && $review['height_ft'] !== '') {
+                        $heightParts[] = $formatNumber($review['height_ft']) . ' ft';
+                    }
+                    if (($review['height_in'] ?? null) !== null && $review['height_in'] !== '') {
+                        $heightParts[] = $formatNumber($review['height_in']) . ' in';
+                    }
+                    $heightText = trim(implode(' ', $heightParts));
+                } elseif (($review['height_cm'] ?? null) !== null && $review['height_cm'] !== '') {
+                    $heightText = $formatNumber($review['height_cm']) . ' cm';
+                } elseif (($review['height'] ?? null) !== null && trim((string) $review['height']) !== '') {
+                    $heightText = trim((string) $review['height']);
+                }
+
+                $weightText = '';
+                if ($weightUnit === 'imperial') {
+                    $weightParts = [];
+                    if (($review['weight_st'] ?? null) !== null && $review['weight_st'] !== '') {
+                        $weightParts[] = $formatNumber($review['weight_st']) . ' st';
+                    }
+                    if (($review['weight_lb'] ?? null) !== null && $review['weight_lb'] !== '') {
+                        $weightParts[] = $formatNumber($review['weight_lb']) . ' lb';
+                    }
+                    $weightText = trim(implode(' ', $weightParts));
+                } elseif (($review['weight_kg'] ?? null) !== null && $review['weight_kg'] !== '') {
+                    $weightText = $formatNumber($review['weight_kg']) . ' kg';
+                } elseif (($review['weight'] ?? null) !== null && trim((string) $review['weight']) !== '') {
+                    $weightText = trim((string) $review['weight']);
+                }
+
+                $bmiText = '';
+                if (($review['bmi'] ?? null) !== null && $review['bmi'] !== '') {
+                    $bmiText = $formatNumber($review['bmi']);
+                }
+
+                $measurementParts = [];
+                if ($heightText !== '') {
+                    $measurementParts[] = 'Height: ' . $heightText;
+                }
+                if ($weightText !== '') {
+                    $measurementParts[] = 'Weight: ' . $weightText;
+                }
+                if ($bmiText !== '') {
+                    $measurementParts[] = 'BMI: ' . $bmiText;
+                }
+
+                if ($text === '' && empty($measurementParts)) {
+                    continue;
+                }
+
+                $rows->push([
+                    'sort' => $date ? strtotime((string) $date) : 0,
+                    'date' => $dateText,
+                    'text' => $text,
+                    'measurements' => implode(' | ', $measurementParts),
+                    'reference' => $reference,
+                    'source' => $sourceLabel,
+                ]);
+            }
+        };
+
+        try {
+            PendingOrder::query()
+                ->where('user_id', $userId)
+                ->whereNotNull('meta')
+                ->latest('id')
+                ->limit(50)
+                ->get()
+                ->each(fn ($pending) => $collectFromRecord($pending, 'Pending'));
+        } catch (\Throwable $e) {
+            //
+        }
+
+        try {
+            Order::query()
+                ->where('user_id', $userId)
+                ->whereNotNull('meta')
+                ->latest('id')
+                ->limit(50)
+                ->get()
+                ->each(fn ($order) => $collectFromRecord($order, 'Order'));
+        } catch (\Throwable $e) {
+            //
+        }
+
+        $rows = $rows
+            ->sortByDesc('sort')
+            ->unique(fn ($row) => implode('|', [$row['date'], $row['text'], $row['measurements'], $row['reference']]))
+            ->values();
+
+        if ($rows->isEmpty()) {
+            return '—';
+        }
+
+        return $rows->map(function ($row) {
+            $parts = ['[' . $row['date'] . ']'];
+
+            if (! empty($row['measurements'])) {
+                $parts[] = $row['measurements'];
+            }
+
+            if (! empty($row['text'])) {
+                $parts[] = $row['text'];
+            }
+
+            return implode("\n", $parts);
+        })->implode("\n\n");
+    }
     protected static ?string $model = Appointment::class;
     protected static array $relatedOrderCache = [];
     protected static array $relatedPendingCache = [];
@@ -1513,6 +1738,13 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                         });
                     }),
 
+                TextColumn::make('six_month_review_history')
+                    ->label('6-month review')
+                    ->getStateUsing(fn ($record) => static::sixMonthReviewHistoryForAppointment($record))
+                    ->formatStateUsing(fn ($state) => filled($state) ? $state : '—')
+                    ->wrap()
+                    ->toggleable(isToggledHiddenByDefault: true),
+
             ])
             ->filters([
                 Filter::make('day')
@@ -1551,6 +1783,199 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                     ->url(fn ($record) => static::orderDetailsUrlForRecord($record))
                     ->openUrlInNewTab(),
 
+                \Filament\Actions\Action::make('addSixMonthReview')
+                    ->label('Add 6-month review')
+                    ->button()
+                    ->color('warning')
+                    ->icon('heroicon-o-calendar-days')
+                    ->modalHeading('Add 6-month review')
+                    ->modalSubmitActionLabel('Save review')
+                    ->form([
+                        ToggleButtons::make('height_unit')
+                            ->label('Height units')
+                            ->options([
+                                'metric' => 'Metric',
+                                'imperial' => 'Imperial',
+                            ])
+                            ->default('metric')
+                            ->inline()
+                            ->live(),
+
+                        TextInput::make('height_cm')
+                            ->label('Height (cm)')
+                            ->numeric()
+                            ->step('0.1')
+                            ->visible(fn (Get $get) => $get('height_unit') === 'metric'),
+
+                        TextInput::make('height_ft')
+                            ->label('Height (ft)')
+                            ->numeric()
+                            ->step('1')
+                            ->visible(fn (Get $get) => $get('height_unit') === 'imperial'),
+
+                        TextInput::make('height_in')
+                            ->label('Height (in)')
+                            ->numeric()
+                            ->step('0.1')
+                            ->visible(fn (Get $get) => $get('height_unit') === 'imperial'),
+
+                        ToggleButtons::make('weight_unit')
+                            ->label('Weight units')
+                            ->options([
+                                'metric' => 'Metric',
+                                'imperial' => 'Imperial',
+                            ])
+                            ->default('metric')
+                            ->inline()
+                            ->live(),
+
+                        TextInput::make('weight_kg')
+                            ->label('Weight (kg)')
+                            ->numeric()
+                            ->step('0.1')
+                            ->visible(fn (Get $get) => $get('weight_unit') === 'metric'),
+
+                        TextInput::make('weight_st')
+                            ->label('Weight (st)')
+                            ->numeric()
+                            ->step('0.1')
+                            ->visible(fn (Get $get) => $get('weight_unit') === 'imperial'),
+
+                        TextInput::make('weight_lb')
+                            ->label('Weight (lb)')
+                            ->numeric()
+                            ->step('0.1')
+                            ->visible(fn (Get $get) => $get('weight_unit') === 'imperial'),
+
+                        TextInput::make('bmi')
+                            ->label('BMI')
+                            ->disabled()
+                            ->dehydrated()
+                            ->placeholder('BMI will be calculated after saving'),
+
+                        Textarea::make('review_text')
+                            ->label('Review note')
+                            ->rows(5)
+                            ->placeholder('Optional note for this 6-month review.'),
+                    ])
+                    ->action(function ($record, array $data) {
+                        if (! $record) {
+                            return;
+                        }
+
+                        $userId = static::sixMonthReviewUserIdForAppointment($record);
+
+                        if ($userId < 1) {
+                            Notification::make()
+                                ->danger()
+                                ->title('Could not find patient')
+                                ->send();
+
+                            return;
+                        }
+
+                        $text = trim((string) ($data['review_text'] ?? ''));
+                        $heightUnit = $data['height_unit'] ?? 'metric';
+                        $weightUnit = $data['weight_unit'] ?? 'metric';
+
+                        $heightCm = null;
+                        $weightKg = null;
+
+                        if ($heightUnit === 'metric') {
+                            $heightCm = (float) ($data['height_cm'] ?? 0);
+                        } else {
+                            $ft = (float) ($data['height_ft'] ?? 0);
+                            $in = (float) ($data['height_in'] ?? 0);
+                            $heightCm = (($ft * 12) + $in) * 2.54;
+                        }
+
+                        if ($weightUnit === 'metric') {
+                            $weightKg = (float) ($data['weight_kg'] ?? 0);
+                        } else {
+                            $st = (float) ($data['weight_st'] ?? 0);
+                            $lb = (float) ($data['weight_lb'] ?? 0);
+                            $weightKg = (($st * 14) + $lb) * 0.45359237;
+                        }
+
+                        $bmi = null;
+
+                        if ($heightCm > 0 && $weightKg > 0) {
+                            $heightM = $heightCm / 100;
+                            $bmi = round($weightKg / ($heightM * $heightM), 1);
+                        }
+
+                        if ($text === '' && ! ($heightCm > 0) && ! ($weightKg > 0)) {
+                            Notification::make()
+                                ->danger()
+                                ->title('Add height, weight or a note')
+                                ->send();
+
+                            return;
+                        }
+
+                        $sourceRecord = PendingOrder::query()
+                            ->where('user_id', $userId)
+                            ->whereNotNull('meta')
+                            ->latest('id')
+                            ->first();
+
+                        if (! $sourceRecord) {
+                            $sourceRecord = Order::query()
+                                ->where('user_id', $userId)
+                                ->whereNotNull('meta')
+                                ->latest('id')
+                                ->first();
+                        }
+
+                        if (! $sourceRecord) {
+                            Notification::make()
+                                ->danger()
+                                ->title('Could not find an order to save the review')
+                                ->send();
+
+                            return;
+                        }
+
+                        $meta = is_array($sourceRecord->meta)
+                            ? $sourceRecord->meta
+                            : (json_decode($sourceRecord->meta ?? '[]', true) ?: []);
+
+                        $reviews = data_get($meta, 'six_month_reviews', []);
+
+                        if (! is_array($reviews)) {
+                            $reviews = [];
+                        }
+
+                        $user = auth()->user();
+
+                        $reviews[] = [
+                            'date' => now()->toIso8601String(),
+                            'height_unit' => $heightUnit,
+                            'height_cm' => $heightCm ?: null,
+                            'height_ft' => $data['height_ft'] ?? null,
+                            'height_in' => $data['height_in'] ?? null,
+                            'weight_unit' => $weightUnit,
+                            'weight_kg' => $weightKg ?: null,
+                            'weight_st' => $data['weight_st'] ?? null,
+                            'weight_lb' => $data['weight_lb'] ?? null,
+                            'bmi' => $bmi,
+                            'text' => $text,
+                            'by' => $user?->name ?: trim(($user?->first_name ?? '') . ' ' . ($user?->last_name ?? '')),
+                            'user_id' => auth()->id(),
+                        ];
+
+                        data_set($meta, 'six_month_reviews', $reviews);
+
+                        $sourceRecord->meta = $meta;
+                        $sourceRecord->save();
+
+                        Notification::make()
+                            ->success()
+                            ->title('6-month review saved')
+                            ->send();
+                    }),
+
+                   
                 \Filament\Actions\Action::make('reschedule')
                     ->label('Reschedule')
                     ->button()
