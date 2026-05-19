@@ -18,6 +18,7 @@ use App\Filament\Resources\ApprovedOrders\Pages\ListApprovedOrders;
 use App\Filament\Resources\ApprovedOrders\Schemas\ApprovedOrderForm;
 use App\Models\ApprovedOrder;
 use App\Models\Order;
+use App\Models\PendingOrder;
 use BackedEnum;
 use UnitEnum;
 use Filament\Actions\Action;
@@ -36,6 +37,9 @@ use Illuminate\Support\Facades\Schema as SchemaFacade;
 use App\Services\Consultations\StartConsultation;
 use App\Models\ConsultationSession;
 use Filament\Forms\Components\Placeholder;
+use Filament\Forms\Components\ToggleButtons;
+use Filament\Schemas\Components\Utilities\Get;
+use Filament\Forms\Components\Select;
 
 class ApprovedOrderResource extends Resource
 {
@@ -2515,9 +2519,70 @@ class ApprovedOrderResource extends Resource
                             ->modalHeading('Add 6-month review')
                             ->modalSubmitActionLabel('Save review')
                             ->form([
+                                ToggleButtons::make('height_unit')
+                                    ->label('Height units')
+                                    ->options([
+                                        'metric' => 'Metric',
+                                        'imperial' => 'Imperial',
+                                    ])
+                                    ->default('metric')
+                                    ->inline()
+                                    ->live(),
+
+                                TextInput::make('height_cm')
+                                    ->label('Height (cm)')
+                                    ->numeric()
+                                    ->step('0.1')
+                                    ->visible(fn (Get $get) => $get('height_unit') === 'metric'),
+
+                                TextInput::make('height_ft')
+                                    ->label('Height (ft)')
+                                    ->numeric()
+                                    ->step('1')
+                                    ->visible(fn (Get $get) => $get('height_unit') === 'imperial'),
+
+                                TextInput::make('height_in')
+                                    ->label('Height (in)')
+                                    ->numeric()
+                                    ->step('0.1')
+                                    ->visible(fn (Get $get) => $get('height_unit') === 'imperial'),
+
+                                ToggleButtons::make('weight_unit')
+                                    ->label('Weight units')
+                                    ->options([
+                                        'metric' => 'Metric',
+                                        'imperial' => 'Imperial',
+                                    ])
+                                    ->default('metric')
+                                    ->inline()
+                                    ->live(),
+
+                                TextInput::make('weight_kg')
+                                    ->label('Weight (kg)')
+                                    ->numeric()
+                                    ->step('0.1')
+                                    ->visible(fn (Get $get) => $get('weight_unit') === 'metric'),
+
+                                TextInput::make('weight_st')
+                                    ->label('Weight (st)')
+                                    ->numeric()
+                                    ->step('0.1')
+                                    ->visible(fn (Get $get) => $get('weight_unit') === 'imperial'),
+
+                                TextInput::make('weight_lb')
+                                    ->label('Weight (lb)')
+                                    ->numeric()
+                                    ->step('0.1')
+                                    ->visible(fn (Get $get) => $get('weight_unit') === 'imperial'),
+
+                                TextInput::make('bmi')
+                                    ->label('BMI')
+                                    ->disabled()
+                                    ->dehydrated()
+                                    ->placeholder('BMI will be calculated after saving'),
+
                                 Textarea::make('review_text')
-                                    ->label('Review note')
-                                    ->required()
+                                    ->label('Review note')                              
                                     ->rows(5)
                                     ->placeholder('Write the 6-month review note for this patient.'),
                             ])
@@ -2528,10 +2593,39 @@ class ApprovedOrderResource extends Resource
 
                                 $text = trim((string) ($data['review_text'] ?? ''));
 
-                                if ($text === '') {
+                                $heightUnit = $data['height_unit'] ?? 'metric';
+                                $weightUnit = $data['weight_unit'] ?? 'metric';
+
+                                $heightCm = null;
+                                $weightKg = null;
+
+                                if ($heightUnit === 'metric') {
+                                    $heightCm = (float) ($data['height_cm'] ?? 0);
+                                } else {
+                                    $ft = (float) ($data['height_ft'] ?? 0);
+                                    $in = (float) ($data['height_in'] ?? 0);
+                                    $heightCm = (($ft * 12) + $in) * 2.54;
+                                }
+
+                                if ($weightUnit === 'metric') {
+                                    $weightKg = (float) ($data['weight_kg'] ?? 0);
+                                } else {
+                                    $st = (float) ($data['weight_st'] ?? 0);
+                                    $lb = (float) ($data['weight_lb'] ?? 0);
+                                    $weightKg = (($st * 14) + $lb) * 0.45359237;
+                                }
+
+                                $bmi = null;
+
+                                if ($heightCm > 0 && $weightKg > 0) {
+                                    $heightM = $heightCm / 100;
+                                    $bmi = round($weightKg / ($heightM * $heightM), 1);
+                                }
+
+                                if ($text === '' && ! ($heightCm > 0) && ! ($weightKg > 0)) {
                                     Notification::make()
                                         ->danger()
-                                        ->title('Review note is required')
+                                        ->title('Add height, weight or a note')
                                         ->send();
 
                                     return;
@@ -2542,6 +2636,7 @@ class ApprovedOrderResource extends Resource
                                     : (json_decode($record->meta ?? '[]', true) ?: []);
 
                                 $reviews = data_get($meta, 'six_month_reviews', []);
+
                                 if (! is_array($reviews)) {
                                     $reviews = [];
                                 }
@@ -2550,6 +2645,19 @@ class ApprovedOrderResource extends Resource
 
                                 $reviews[] = [
                                     'date' => now()->toIso8601String(),
+
+                                    'height_unit' => $heightUnit,
+                                    'height_cm' => $heightCm ?: null,
+                                    'height_ft' => $data['height_ft'] ?? null,
+                                    'height_in' => $data['height_in'] ?? null,
+
+                                    'weight_unit' => $weightUnit,
+                                    'weight_kg' => $weightKg ?: null,
+                                    'weight_st' => $data['weight_st'] ?? null,
+                                    'weight_lb' => $data['weight_lb'] ?? null,
+
+                                    'bmi' => $bmi,
+
                                     'text' => $text,
                                     'by' => $user?->name ?: trim(($user?->first_name ?? '') . ' ' . ($user?->last_name ?? '')),
                                     'user_id' => auth()->id(),
@@ -2566,89 +2674,235 @@ class ApprovedOrderResource extends Resource
                                     ->send();
                             }),
 
-                            Action::make('clearSixMonthReviews')
-                                ->label('Clear 6-month review')
-                                ->button()
-                                ->color('gray')
-                                ->icon('heroicon-o-trash')
-                                ->requiresConfirmation()
-                                ->modalHeading('Clear 6-month review history')
-                                ->modalDescription('This will clear all saved 6-month review notes for this patient from pending and completed order meta.')
-                                ->modalSubmitActionLabel('Clear review history')
-                                ->action(function ($record) {
-                                    if (! $record) {
-                                        return;
-                                    }
+                            Action::make('deleteSixMonthReview')
+    ->label('Delete 6-month review')
+    ->button()
+    ->color('gray')
+    ->icon('heroicon-o-trash')
+    ->requiresConfirmation()
+    ->modalHeading('Delete 6-month review')
+    ->modalDescription('Select one saved 6-month review entry to delete for this patient.')
+    ->modalSubmitActionLabel('Delete review')
+    ->form([
+        Select::make('review_entry')
+            ->label('Select review')
+            ->options(function ($record): array {
+                if (! $record) {
+                    return [];
+                }
 
-                                    $userId = (int) ($record->user_id ?? optional($record->user)->id ?? 0);
+                $userId = (int) ($record->user_id ?? optional($record->user)->id ?? 0);
 
-                                    if ($userId < 1) {
-                                        Notification::make()
-                                            ->danger()
-                                            ->title('Could not find patient')
-                                            ->send();
+                if ($userId < 1) {
+                    return [];
+                }
 
-                                        return;
-                                    }
+                $formatNumber = function ($value, int $decimals = 1): string {
+                    if ($value === null || $value === '') {
+                        return '';
+                    }
 
-                                    $clearFromRecord = function ($sourceRecord): bool {
-                                        if (! $sourceRecord) {
-                                            return false;
-                                        }
+                    $formatted = number_format((float) $value, $decimals, '.', '');
 
-                                        $meta = is_array($sourceRecord->meta)
-                                            ? $sourceRecord->meta
-                                            : (json_decode($sourceRecord->meta ?? '[]', true) ?: []);
+                    return str_contains($formatted, '.')
+                        ? rtrim(rtrim($formatted, '0'), '.')
+                        : $formatted;
+                };
 
-                                        if (! is_array(data_get($meta, 'six_month_reviews'))) {
-                                            return false;
-                                        }
+                $rows = collect();
 
-                                        data_forget($meta, 'six_month_reviews');
+                $collectFromRecord = function ($sourceRecord, string $sourceType) use (&$rows, $formatNumber) {
+                    if (! $sourceRecord) {
+                        return;
+                    }
 
-                                        $sourceRecord->meta = $meta;
-                                        $sourceRecord->save();
+                    $meta = is_array($sourceRecord->meta)
+                        ? $sourceRecord->meta
+                        : (json_decode($sourceRecord->meta ?? '[]', true) ?: []);
 
-                                        return true;
-                                    };
+                    $reviews = data_get($meta, 'six_month_reviews', []);
 
-                                    $cleared = 0;
+                    if (! is_array($reviews)) {
+                        return;
+                    }
 
-                                    try {
-                                        PendingOrder::query()
-                                            ->where('user_id', $userId)
-                                            ->whereNotNull('meta')
-                                            ->get()
-                                            ->each(function ($pending) use (&$cleared, $clearFromRecord) {
-                                                if ($clearFromRecord($pending)) {
-                                                    $cleared++;
-                                                }
-                                            });
-                                    } catch (Throwable $e) {
-                                        //
-                                    }
+                    foreach ($reviews as $index => $review) {
+                        if (! is_array($review)) {
+                            continue;
+                        }
 
-                                    try {
-                                        Order::query()
-                                            ->where('user_id', $userId)
-                                            ->whereNotNull('meta')
-                                            ->get()
-                                            ->each(function ($order) use (&$cleared, $clearFromRecord) {
-                                                if ($clearFromRecord($order)) {
-                                                    $cleared++;
-                                                }
-                                            });
-                                    } catch (Throwable $e) {
-                                        //
-                                    }
+                        $text = trim((string) ($review['text'] ?? $review['review'] ?? $review['note'] ?? ''));
 
-                                    Notification::make()
-                                        ->success()
-                                        ->title('6-month review cleared')
-                                        ->body($cleared > 0 ? 'Review history was removed for this patient.' : 'No review history was found.')
-                                        ->send();
-                                }),
-                    
+                        $date = $review['date'] ?? $review['created_at'] ?? $sourceRecord->created_at ?? null;
+
+                        try {
+                            $dateText = $date ? Carbon::parse($date)->format('d-m-Y H:i') : '—';
+                        } catch (Throwable $e) {
+                            $dateText = (string) $date;
+                        }
+
+                        $heightUnit = strtolower(trim((string) ($review['height_unit'] ?? '')));
+                        $weightUnit = strtolower(trim((string) ($review['weight_unit'] ?? '')));
+
+                        $heightText = '';
+                        if ($heightUnit === 'imperial') {
+                            $heightParts = [];
+
+                            if (($review['height_ft'] ?? null) !== null && $review['height_ft'] !== '') {
+                                $heightParts[] = $formatNumber($review['height_ft']) . ' ft';
+                            }
+
+                            if (($review['height_in'] ?? null) !== null && $review['height_in'] !== '') {
+                                $heightParts[] = $formatNumber($review['height_in']) . ' in';
+                            }
+
+                            $heightText = trim(implode(' ', $heightParts));
+                        } elseif (($review['height_cm'] ?? null) !== null && $review['height_cm'] !== '') {
+                            $heightText = $formatNumber($review['height_cm']) . ' cm';
+                        }
+
+                        $weightText = '';
+                        if ($weightUnit === 'imperial') {
+                            $weightParts = [];
+
+                            if (($review['weight_st'] ?? null) !== null && $review['weight_st'] !== '') {
+                                $weightParts[] = $formatNumber($review['weight_st']) . ' st';
+                            }
+
+                            if (($review['weight_lb'] ?? null) !== null && $review['weight_lb'] !== '') {
+                                $weightParts[] = $formatNumber($review['weight_lb']) . ' lb';
+                            }
+
+                            $weightText = trim(implode(' ', $weightParts));
+                        } elseif (($review['weight_kg'] ?? null) !== null && $review['weight_kg'] !== '') {
+                            $weightText = $formatNumber($review['weight_kg']) . ' kg';
+                        }
+
+                        $bmiText = '';
+                        if (($review['bmi'] ?? null) !== null && $review['bmi'] !== '') {
+                            $bmiText = $formatNumber($review['bmi']);
+                        }
+
+                        $measurementParts = [];
+
+                        if ($heightText !== '') {
+                            $measurementParts[] = 'Height: ' . $heightText;
+                        }
+
+                        if ($weightText !== '') {
+                            $measurementParts[] = 'Weight: ' . $weightText;
+                        }
+
+                        if ($bmiText !== '') {
+                            $measurementParts[] = 'BMI: ' . $bmiText;
+                        }
+
+                        if ($text === '' && empty($measurementParts)) {
+                            continue;
+                        }
+
+                        $details = trim(implode(' ', array_filter([
+                            implode(' | ', $measurementParts),
+                            $text,
+                        ], fn ($value) => trim((string) $value) !== '')));
+
+                        $id = implode('|', [
+                            $sourceType,
+                            $sourceRecord->getKey(),
+                            $index,
+                        ]);
+
+                        $label = '[' . $dateText . '] ' . ($details !== '' ? $details : '6-month review');
+
+                        $rows->put($id, mb_strlen($label) > 140 ? mb_substr($label, 0, 140) . '…' : $label);
+                    }
+                };
+
+                PendingOrder::query()
+                    ->where('user_id', $userId)
+                    ->whereNotNull('meta')
+                    ->latest('id')
+                    ->limit(50)
+                    ->get()
+                    ->each(fn ($pending) => $collectFromRecord($pending, 'pending'));
+
+                Order::query()
+                    ->where('user_id', $userId)
+                    ->whereNotNull('meta')
+                    ->latest('id')
+                    ->limit(50)
+                    ->get()
+                    ->each(fn ($order) => $collectFromRecord($order, 'order'));
+
+                return $rows->all();
+            })
+            ->searchable()
+            ->required(),
+    ])
+    ->action(function ($record, array $data) {
+        if (! $record) {
+            return;
+        }
+
+        $selected = (string) ($data['review_entry'] ?? '');
+
+        if ($selected === '') {
+            return;
+        }
+
+        [$sourceType, $sourceId, $index] = array_pad(explode('|', $selected), 3, null);
+
+        $sourceId = (int) $sourceId;
+        $index = (int) $index;
+
+        $sourceRecord = match ($sourceType) {
+            'pending' => PendingOrder::find($sourceId),
+            'order' => Order::find($sourceId),
+            default => null,
+        };
+
+        if (! $sourceRecord) {
+            Notification::make()
+                ->danger()
+                ->title('Review could not be found')
+                ->send();
+
+            return;
+        }
+
+        $meta = is_array($sourceRecord->meta)
+            ? $sourceRecord->meta
+            : (json_decode($sourceRecord->meta ?? '[]', true) ?: []);
+
+        $reviews = data_get($meta, 'six_month_reviews', []);
+
+        if (! is_array($reviews) || ! array_key_exists($index, $reviews)) {
+            Notification::make()
+                ->danger()
+                ->title('Review could not be found')
+                ->send();
+
+            return;
+        }
+
+        unset($reviews[$index]);
+
+        $reviews = array_values($reviews);
+
+        if (empty($reviews)) {
+            data_forget($meta, 'six_month_reviews');
+        } else {
+            data_set($meta, 'six_month_reviews', $reviews);
+        }
+
+        $sourceRecord->meta = $meta;
+        $sourceRecord->save();
+
+        Notification::make()
+            ->success()
+            ->title('6-month review deleted')
+            ->send();
+    }),
                           
                     ]),
             ]);
@@ -2698,7 +2952,7 @@ class ApprovedOrderResource extends Resource
         return $count > 0 ? 'primary' : 'gray';
     }
 
-     protected static function sixMonthReviewHistoryForPending($record): string
+    protected static function sixMonthReviewHistoryForPending($record): string
     {
         if (! $record) {
             return '—';
@@ -2746,10 +3000,74 @@ class ApprovedOrderResource extends Resource
                 $author = trim((string) ($review['by'] ?? $review['author'] ?? ''));
                 $reference = (string) ($sourceRecord->reference ?? '');
 
+                $formatNumber = function ($value, int $decimals = 1): string {
+                    if ($value === null || $value === '') {
+                        return '';
+                    }
+
+                    $formatted = number_format((float) $value, $decimals, '.', '');
+
+                    return str_contains($formatted, '.')
+                        ? rtrim(rtrim($formatted, '0'), '.')
+                        : $formatted;
+                };
+
+                $heightUnit = strtolower(trim((string) ($review['height_unit'] ?? '')));
+                $weightUnit = strtolower(trim((string) ($review['weight_unit'] ?? '')));
+
+                $heightText = '';
+                if ($heightUnit === 'imperial') {
+                    $heightParts = [];
+                    if (($review['height_ft'] ?? null) !== null && $review['height_ft'] !== '') {
+                        $heightParts[] = $formatNumber($review['height_ft']) . ' ft';
+                    }
+                    if (($review['height_in'] ?? null) !== null && $review['height_in'] !== '') {
+                        $heightParts[] = $formatNumber($review['height_in']) . ' in';
+                    }
+                    $heightText = trim(implode(' ', $heightParts));
+                } elseif (($review['height_cm'] ?? null) !== null && $review['height_cm'] !== '') {
+                    $heightText = $formatNumber($review['height_cm']) . ' cm';
+                } elseif (($review['height'] ?? null) !== null && trim((string) $review['height']) !== '') {
+                    $heightText = trim((string) $review['height']);
+                }
+
+                $weightText = '';
+                if ($weightUnit === 'imperial') {
+                    $weightParts = [];
+                    if (($review['weight_st'] ?? null) !== null && $review['weight_st'] !== '') {
+                        $weightParts[] = $formatNumber($review['weight_st']) . ' st';
+                    }
+                    if (($review['weight_lb'] ?? null) !== null && $review['weight_lb'] !== '') {
+                        $weightParts[] = $formatNumber($review['weight_lb']) . ' lb';
+                    }
+                    $weightText = trim(implode(' ', $weightParts));
+                } elseif (($review['weight_kg'] ?? null) !== null && $review['weight_kg'] !== '') {
+                    $weightText = $formatNumber($review['weight_kg']) . ' kg';
+                } elseif (($review['weight'] ?? null) !== null && trim((string) $review['weight']) !== '') {
+                    $weightText = trim((string) $review['weight']);
+                }
+
+                $bmiText = '';
+                if (($review['bmi'] ?? null) !== null && $review['bmi'] !== '') {
+                    $bmiText = $formatNumber($review['bmi']);
+                }
+
+                $measurementParts = [];
+                if ($heightText !== '') {
+                    $measurementParts[] = 'Height: ' . $heightText;
+                }
+                if ($weightText !== '') {
+                    $measurementParts[] = 'Weight: ' . $weightText;
+                }
+                if ($bmiText !== '') {
+                    $measurementParts[] = 'BMI: ' . $bmiText;
+                }
+
                 $rows->push([
                     'sort' => $date ? strtotime((string) $date) : 0,
                     'date' => $dateText,
                     'text' => $text,
+                    'measurements' => implode(' | ', $measurementParts),
                     'author' => $author,
                     'reference' => $reference,
                     'source' => $sourceLabel,
@@ -2791,7 +3109,15 @@ class ApprovedOrderResource extends Resource
         }
 
         return $rows->map(function ($row) {
-            return '[' . $row['date'] . ']' . "\n" . $row['text'];
+            $parts = ['[' . $row['date'] . ']'];
+
+            if (! empty($row['measurements'])) {
+                $parts[] = $row['measurements'];
+            }
+
+            $parts[] = $row['text'];
+
+            return implode("\n", $parts);
         })->implode("\n\n");
     }
 

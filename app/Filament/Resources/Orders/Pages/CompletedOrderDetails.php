@@ -29,6 +29,8 @@ use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\ToggleButtons;
+use Filament\Schemas\Components\Utilities\Get;
 
 class CompletedOrderDetails extends ViewRecord
 {
@@ -107,10 +109,6 @@ class CompletedOrderDetails extends ViewRecord
 
                 $text = trim((string) ($review['text'] ?? $review['review'] ?? $review['note'] ?? ''));
 
-                if ($text === '') {
-                    continue;
-                }
-
                 $date = $review['date'] ?? $review['created_at'] ?? $sourceRecord->created_at ?? null;
 
                 try {
@@ -126,6 +124,72 @@ class CompletedOrderDetails extends ViewRecord
                 $sourceType = $sourceRecord instanceof PendingOrder ? 'pending' : 'order';
                 $id = implode('|', [$sourceType, $sourceId, $index]);
 
+                $formatNumber = function ($value, int $decimals = 1): string {
+                    if ($value === null || $value === '') {
+                        return '';
+                    }
+
+                    $formatted = number_format((float) $value, $decimals, '.', '');
+
+                    return str_contains($formatted, '.')
+                        ? rtrim(rtrim($formatted, '0'), '.')
+                        : $formatted;
+                };
+
+                $heightUnit = strtolower(trim((string) ($review['height_unit'] ?? '')));
+                $weightUnit = strtolower(trim((string) ($review['weight_unit'] ?? '')));
+
+                $heightText = '';
+                if ($heightUnit === 'imperial') {
+                    $heightParts = [];
+                    if (($review['height_ft'] ?? null) !== null && $review['height_ft'] !== '') {
+                        $heightParts[] = $formatNumber($review['height_ft']) . ' ft';
+                    }
+                    if (($review['height_in'] ?? null) !== null && $review['height_in'] !== '') {
+                        $heightParts[] = $formatNumber($review['height_in']) . ' in';
+                    }
+                    $heightText = trim(implode(' ', $heightParts));
+                } elseif (($review['height_cm'] ?? null) !== null && $review['height_cm'] !== '') {
+                    $heightText = $formatNumber($review['height_cm']) . ' cm';
+                } elseif (($review['height'] ?? null) !== null && trim((string) $review['height']) !== '') {
+                    $heightText = trim((string) $review['height']);
+                }
+
+                $weightText = '';
+                if ($weightUnit === 'imperial') {
+                    $weightParts = [];
+                    if (($review['weight_st'] ?? null) !== null && $review['weight_st'] !== '') {
+                        $weightParts[] = $formatNumber($review['weight_st']) . ' st';
+                    }
+                    if (($review['weight_lb'] ?? null) !== null && $review['weight_lb'] !== '') {
+                        $weightParts[] = $formatNumber($review['weight_lb']) . ' lb';
+                    }
+                    $weightText = trim(implode(' ', $weightParts));
+                } elseif (($review['weight_kg'] ?? null) !== null && $review['weight_kg'] !== '') {
+                    $weightText = $formatNumber($review['weight_kg']) . ' kg';
+                } elseif (($review['weight'] ?? null) !== null && trim((string) $review['weight']) !== '') {
+                    $weightText = trim((string) $review['weight']);
+                }
+
+                $bmiText = '';
+                if (($review['bmi'] ?? null) !== null && $review['bmi'] !== '') {
+                    $bmiText = $formatNumber($review['bmi']);
+                }
+
+                $measurementParts = [];
+                if ($heightText !== '') {
+                    $measurementParts[] = 'Height: ' . $heightText;
+                }
+                if ($weightText !== '') {
+                    $measurementParts[] = 'Weight: ' . $weightText;
+                }
+                if ($bmiText !== '') {
+                    $measurementParts[] = 'BMI: ' . $bmiText;
+                }
+                if ($text === '' && empty($measurementParts)) {
+                    continue;
+                }
+
                 $rows->push([
                     'id' => $id,
                     'source_type' => $sourceType,
@@ -134,6 +198,7 @@ class CompletedOrderDetails extends ViewRecord
                     'sort' => $sort,
                     'date' => $dateText,
                     'text' => $text,
+                    'measurements' => implode(' | ', $measurementParts),
                     'reference' => $reference,
                     'source' => $sourceLabel,
                 ]);
@@ -179,7 +244,17 @@ class CompletedOrderDetails extends ViewRecord
         }
 
         return $rows->map(function ($row) {
-            return '[' . $row['date'] . ']' . "\n" . $row['text'];
+            $parts = ['[' . $row['date'] . ']'];
+
+            if (! empty($row['measurements'])) {
+                $parts[] = $row['measurements'];
+            }
+
+            if (! empty($row['text'])) {
+                $parts[] = $row['text'];
+            }
+
+            return implode("\n", $parts);
         })->implode("\n\n");
     }
 
@@ -448,11 +523,66 @@ class CompletedOrderDetails extends ViewRecord
                     ->modalHeading('Add 6-month review')
                     ->modalSubmitActionLabel('Save review')
                     ->form([
+                        ToggleButtons::make('height_unit')
+                            ->label('Height units')
+                            ->options([
+                                'metric' => 'Metric',
+                                'imperial' => 'Imperial',
+                            ])
+                            ->default('metric')
+                            ->inline()
+                            ->live(),
+
+                        TextInput::make('height_cm')
+                            ->label('Height (cm)')
+                            ->numeric()
+                            ->step('0.1')
+                            ->visible(fn (Get $get) => $get('height_unit') === 'metric'),
+
+                        TextInput::make('height_ft')
+                            ->label('Height (ft)')
+                            ->numeric()
+                            ->step('1')
+                            ->visible(fn (Get $get) => $get('height_unit') === 'imperial'),
+
+                        TextInput::make('height_in')
+                            ->label('Height (in)')
+                            ->numeric()
+                            ->step('0.1')
+                            ->visible(fn (Get $get) => $get('height_unit') === 'imperial'),
+
+                        ToggleButtons::make('weight_unit')
+                            ->label('Weight units')
+                            ->options([
+                                'metric' => 'Metric',
+                                'imperial' => 'Imperial',
+                            ])
+                            ->default('metric')
+                            ->inline()
+                            ->live(),
+
+                        TextInput::make('weight_kg')
+                            ->label('Weight (kg)')
+                            ->numeric()
+                            ->step('0.1')
+                            ->visible(fn (Get $get) => $get('weight_unit') === 'metric'),
+
+                        TextInput::make('weight_st')
+                            ->label('Weight (st)')
+                            ->numeric()
+                            ->step('0.1')
+                            ->visible(fn (Get $get) => $get('weight_unit') === 'imperial'),
+
+                        TextInput::make('weight_lb')
+                            ->label('Weight (lb)')
+                            ->numeric()
+                            ->step('0.1')
+                            ->visible(fn (Get $get) => $get('weight_unit') === 'imperial'),
+
                         Textarea::make('review_text')
                             ->label('Review note')
-                            ->required()
                             ->rows(5)
-                            ->placeholder('Write the 6-month review note for this patient.'),
+                            ->placeholder('Optional note for this 6-month review.'),
                     ])
                     ->action(function (array $data) {
                         $record = $this->record;
@@ -463,10 +593,39 @@ class CompletedOrderDetails extends ViewRecord
 
                         $text = trim((string) ($data['review_text'] ?? ''));
 
-                        if ($text === '') {
+                        $heightUnit = $data['height_unit'] ?? 'metric';
+                        $weightUnit = $data['weight_unit'] ?? 'metric';
+
+                        $heightCm = null;
+                        $weightKg = null;
+
+                        if ($heightUnit === 'metric') {
+                            $heightCm = (float) ($data['height_cm'] ?? 0);
+                        } else {
+                            $ft = (float) ($data['height_ft'] ?? 0);
+                            $in = (float) ($data['height_in'] ?? 0);
+                            $heightCm = (($ft * 12) + $in) * 2.54;
+                        }
+
+                        if ($weightUnit === 'metric') {
+                            $weightKg = (float) ($data['weight_kg'] ?? 0);
+                        } else {
+                            $st = (float) ($data['weight_st'] ?? 0);
+                            $lb = (float) ($data['weight_lb'] ?? 0);
+                            $weightKg = (($st * 14) + $lb) * 0.45359237;
+                        }
+
+                        $bmi = null;
+
+                        if ($heightCm > 0 && $weightKg > 0) {
+                            $heightM = $heightCm / 100;
+                            $bmi = round($weightKg / ($heightM * $heightM), 1);
+                        }
+
+                        if ($text === '' && ! ($heightCm > 0) && ! ($weightKg > 0)) {
                             Notification::make()
                                 ->danger()
-                                ->title('Review note is required')
+                                ->title('Add height, weight or a note')
                                 ->send();
 
                             return;
@@ -486,6 +645,19 @@ class CompletedOrderDetails extends ViewRecord
 
                         $reviews[] = [
                             'date' => now()->toIso8601String(),
+
+                            'height_unit' => $heightUnit,
+                            'height_cm' => $heightCm ?: null,
+                            'height_ft' => $data['height_ft'] ?? null,
+                            'height_in' => $data['height_in'] ?? null,
+
+                            'weight_unit' => $weightUnit,
+                            'weight_kg' => $weightKg ?: null,
+                            'weight_st' => $data['weight_st'] ?? null,
+                            'weight_lb' => $data['weight_lb'] ?? null,
+
+                            'bmi' => $bmi,
+
                             'text' => $text,
                             'by' => $user?->name ?: trim(($user?->first_name ?? '') . ' ' . ($user?->last_name ?? '')),
                             'user_id' => auth()->id(),
@@ -514,7 +686,13 @@ class CompletedOrderDetails extends ViewRecord
                             ->label('Select review')
                             ->options(fn (): array => static::sixMonthReviewRowsForRecord($this->record)
                                 ->mapWithKeys(function (array $row) {
-                                    $label = '[' . $row['date'] . '] ' . $row['text'];
+                                    $details = trim(implode(' ', array_filter([
+                                        (string) ($row['measurements'] ?? ''),
+                                        (string) ($row['text'] ?? ''),
+                                    ], fn ($value) => trim((string) $value) !== '')));
+
+                                    $label = '[' . $row['date'] . '] ' . ($details !== '' ? $details : '6-month review');
+
                                     return [$row['id'] => mb_strlen($label) > 140 ? mb_substr($label, 0, 140) . '…' : $label];
                                 })
                                 ->all())
