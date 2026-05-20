@@ -64,18 +64,40 @@ class ZoomMeetingService
             return null;
         }
 
-        // You may need to adjust these field names to match your appointments table
+        $timezone = 'Europe/London';
         $start = null;
+        $duration = 20;
 
         if ($appointment->start_at) {
-            $start = Carbon::parse($appointment->start_at);
-        } elseif ($appointment->date && $appointment->time) {
-            $start = Carbon::parse($appointment->date . ' ' . $appointment->time);
+            $rawStart = method_exists($appointment, 'getRawOriginal')
+                ? $appointment->getRawOriginal('start_at')
+                : $appointment->start_at;
+
+            try {
+                $start = Carbon::parse($rawStart, 'UTC')->tz($timezone);
+            } catch (\Throwable $e) {
+                $start = Carbon::parse($appointment->start_at)->tz($timezone);
+            }
+        } elseif (($appointment->date ?? null) && ($appointment->time ?? null)) {
+            $start = Carbon::parse($appointment->date . ' ' . $appointment->time, $timezone);
         }
 
         if (! $start) {
             // Fall back to now plus fifteen minutes if no start stored
-            $start = now()->addMinutes(15);
+            $start = now($timezone)->addMinutes(15);
+        }
+
+        if ($appointment->end_at) {
+            $rawEnd = method_exists($appointment, 'getRawOriginal')
+                ? $appointment->getRawOriginal('end_at')
+                : $appointment->end_at;
+
+            try {
+                $end = Carbon::parse($rawEnd, 'UTC')->tz($timezone);
+                $duration = max(1, (int) round($start->diffInMinutes($end, false)));
+            } catch (\Throwable $e) {
+                $duration = 20;
+            }
         }
 
         // Build a patient name for the Zoom topic (appointment fields first, then order/meta fallback)
@@ -129,9 +151,11 @@ class ZoomMeetingService
         $payload = [
             'topic'      => $topic,
             'type'       => 2, // scheduled meeting
-            'start_time' => $start->copy()->setTimezone('UTC')->toIso8601String(),
-            'duration'   => 20, // minutes
-            'timezone'   => config('app.timezone', 'Europe/London'),
+            // Send Zoom a Europe/London wall-clock time plus timezone. Sending UTC here makes
+            // Zoom show the meeting earlier than the appointment in the admin calendar.
+            'start_time' => $start->copy()->format('Y-m-d\TH:i:s'),
+            'duration'   => $duration, // minutes
+            'timezone'   => $timezone,
             'settings'   => [
                 'join_before_host'   => false,
                 'waiting_room'       => true,
@@ -148,6 +172,10 @@ class ZoomMeetingService
         // Treat any 2xx response (including 201 Created) as success
         if (! $response->successful()) {
             \Log::error('zoom.meeting_create_failed', [
+                'appointment_id' => $appointment->getKey(),
+                'appointment_start_at' => $appointment->start_at ?? null,
+                'zoom_start_time' => $payload['start_time'] ?? null,
+                'zoom_timezone' => $payload['timezone'] ?? null,
                 'status' => $response->status(),
                 'body'   => $response->body(),
             ]);
@@ -159,6 +187,10 @@ class ZoomMeetingService
         \Log::info('zoom.meeting.created', [
             'appointment_id' => $appointment->getKey(),
             'order_id'       => $order?->getKey(),
+            'appointment_start_at' => $appointment->start_at ?? null,
+            'zoom_start_time' => $payload['start_time'] ?? null,
+            'zoom_timezone' => $payload['timezone'] ?? null,
+            'duration' => $payload['duration'] ?? null,
             'zoom_id'        => $data['id'] ?? null,
             'join_url'       => $data['join_url'] ?? null,
             'status'         => $response->status(),

@@ -47,7 +47,15 @@ class AppointmentResource extends Resource
         }
 
         try {
-            $order = static::findRelatedOrder($record);
+            $order = $record->order ?? null;
+
+            if (! $order && ! empty($record->order_id)) {
+                $order = Order::query()
+                    ->select(['id', 'user_id'])
+                    ->whereKey($record->order_id)
+                    ->first();
+            }
+
             $orderUserId = (int) ($order?->user_id ?? optional($order?->user)->id ?? 0);
             if ($orderUserId > 0) {
                 return $orderUserId;
@@ -1464,18 +1472,29 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                             return '—';
                         }
 
+                        // Prefer the linked order/cart item first. Appointment service_name/service is usually
+                        // just the service label, e.g. "Weight Management", not the purchased item.
+                        $ord = $record->order ?? null;
+
+                        if (! $ord && ! empty($record->order_id)) {
+                            $ord = Order::query()
+                                ->with('user')
+                                ->whereKey($record->order_id)
+                                ->first();
+                        }
+
                         $appointmentItem = is_string($record->service_name ?? null) ? trim($record->service_name) : '';
-                        if ($appointmentItem !== '') {
-                            return $appointmentItem;
-                        }
-
                         $appointmentService = is_string($record->service ?? null) ? trim($record->service) : '';
-                        if ($appointmentService !== '') {
-                            return $appointmentService;
-                        }
 
-                        $ord = static::findRelatedOrder($record);
                         if (! $ord) {
+                            if ($appointmentItem !== '') {
+                                return $appointmentItem;
+                            }
+
+                            if ($appointmentService !== '') {
+                                return $appointmentService;
+                            }
+
                             return '—';
                         }
 
@@ -1519,11 +1538,21 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                         $qtySuffix = ' × ' . (($qty !== null && $qty > 0) ? $qty : 1);
 
                         if ($name === '' && $variation === '') {
+                            if ($appointmentItem !== '') {
+                                return $appointmentItem;
+                            }
+
+                            if ($appointmentService !== '') {
+                                return $appointmentService;
+                            }
+
                             return '—';
                         }
+
                         if ($name !== '' && $variation !== '') {
                             return $name . ' — ' . $variation . $qtySuffix;
                         }
+
                         return ($name !== '' ? $name : $variation) . $qtySuffix;
                     })
                     ->searchable(true, function (Builder $query, string $search): Builder {
@@ -1599,7 +1628,14 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                         }
 
                         // 3) Avoid expensive fallback order lookups on the appointment list unless the row is directly linked.
-                        $order = ! empty($record->order_id) ? static::findRelatedOrder($record) : null;
+                        $order = $record->order ?? null;
+
+                        if (! $order && ! empty($record->order_id)) {
+                            $order = Order::query()
+                                ->with('user')
+                                ->whereKey($record->order_id)
+                                ->first();
+                        }
                         if ($order) {
                             // 3a) Order's own first / last
                             $of = is_string($order->first_name ?? null) ? trim($order->first_name) : '';
@@ -1780,7 +1816,7 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                     ->button()
                     ->color('gray')
                     ->icon('heroicon-o-eye')
-                    ->url(fn ($record) => static::orderDetailsUrlForRecord($record))
+                    ->url(fn ($record) => static::fastOrderDetailsUrlForRecord($record))
                     ->openUrlInNewTab(),
 
                 \Filament\Actions\Action::make('addSixMonthReview')
@@ -2795,25 +2831,6 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
         }
 
         try {
-            $order = static::findRelatedOrder($record);
-            if ($order) {
-                $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
-
-                $metaAt = data_get($meta, 'appointment_at')
-                    ?? data_get($meta, 'appointment_start_at')
-                    ?? data_get($meta, 'appointment_start')
-                    ?? data_get($meta, 'appointment_datetime')
-                    ?? data_get($meta, 'appointmentDateTime');
-
-                if (is_string($metaAt) && trim($metaAt) !== '') {
-                    return \Carbon\Carbon::parse(trim($metaAt));
-                }
-            }
-        } catch (\Throwable $e) {
-            // fall back to appointment row value below
-        }
-
-        try {
             $raw = method_exists($record, 'getRawOriginal') ? $record->getRawOriginal('start_at') : $record->start_at;
             if (! $raw) {
                 return null;
@@ -3094,6 +3111,35 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
         if ($name === '' && $variation === '') return null;
         if ($name !== '' && $variation !== '') return $name.' — '.$variation.$qtySuffix;
         return ($name !== '' ? $name : $variation).$qtySuffix;
+    }
+
+    protected static function fastOrderDetailsUrlForRecord($record): ?string
+    {
+        if (! $record) {
+            return null;
+        }
+
+        $reference = is_string($record->order_reference ?? null)
+            ? trim((string) $record->order_reference)
+            : '';
+
+        if ($reference === '' && ! empty($record->order?->reference)) {
+            $reference = trim((string) $record->order->reference);
+        }
+
+        if ($reference !== '') {
+            return url('/admin/pending-orders?tableSearch=' . urlencode($reference));
+        }
+
+        if (! empty($record->order_id)) {
+            return url('/admin/orders?tableSearch=' . urlencode((string) $record->order_id));
+        }
+
+        try {
+            return static::getUrl('edit', ['record' => $record]);
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     protected static function orderDetailsUrlForRecord($record): string

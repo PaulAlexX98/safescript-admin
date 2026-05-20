@@ -949,6 +949,64 @@ class PendingOrderResource extends Resource
                         });
                     })
                     ->toggleable(),
+
+                    TextColumn::make('has_appointment')
+                        ->label('Appointment')
+                        ->getStateUsing(function ($record) {
+                            if (! $record) {
+                                return 'No';
+                            }
+
+                            $meta = is_array($record->meta)
+                                ? $record->meta
+                                : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                            $appointmentAt = data_get($meta, 'appointment_at')
+                                ?? data_get($meta, 'appointment_start_at')
+                                ?? data_get($meta, 'appointment_start')
+                                ?? data_get($meta, 'appointment_datetime')
+                                ?? data_get($meta, 'appointmentDateTime');
+
+                            if (! $appointmentAt) {
+                                $date = data_get($meta, 'booking_date')
+                                    ?? data_get($meta, 'consultation_date')
+                                    ?? data_get($meta, 'appointment_date');
+
+                                $time = data_get($meta, 'booking_time')
+                                    ?? data_get($meta, 'consultation_time')
+                                    ?? data_get($meta, 'appointment_time');
+
+                                if ($date && $time) {
+                                    $appointmentAt = trim((string) $date) . ' ' . trim((string) $time);
+                                }
+                            }
+
+                            if ($appointmentAt) {
+                                return 'Yes';
+                            }
+
+                            try {
+                                $hasAppointment = Appointment::query()
+                                    ->where(function ($query) use ($record) {
+                                        if (! empty($record->id)) {
+                                            $query->orWhere('order_id', $record->id);
+                                        }
+
+                                        if (! empty($record->reference)) {
+                                            $query->orWhere('order_reference', $record->reference);
+                                        }
+                                    })
+                                    ->exists();
+
+                                return $hasAppointment ? 'Yes' : 'No';
+                            } catch (Throwable $e) {
+                                return 'No';
+                            }
+                        })
+                        ->badge()
+                        ->color(fn ($state) => $state === 'Yes' ? 'success' : 'danger')
+                        ->sortable(false)
+                        ->toggleable(),
             ])
             ->filters([
                 SelectFilter::make('type')
@@ -984,6 +1042,8 @@ class PendingOrderResource extends Resource
                             }
                         });
                     }),
+
+                    
             ])
             ->recordActions([
                 Action::make('viewOrder')
