@@ -2959,13 +2959,35 @@ class ApprovedOrderResource extends Resource
         }
 
         $userId = (int) ($record->user_id ?? optional($record->user)->id ?? 0);
-        if ($userId < 1) {
-            return '—';
-        }
+
+        $recordMeta = is_array($record->meta)
+            ? $record->meta
+            : (json_decode($record->meta ?? '[]', true) ?: []);
+
+        $recordEmail = strtolower(trim((string) (
+            data_get($recordMeta, 'email')
+            ?: data_get($recordMeta, 'patient.email')
+            ?: data_get($recordMeta, 'customer.email')
+            ?: optional($record->user)->email
+        )));
+
+        $recordReference = trim((string) ($record->reference ?? ''));
+
+        $formatNumber = function ($value, int $decimals = 1): string {
+            if ($value === null || $value === '') {
+                return '';
+            }
+
+            $formatted = number_format((float) $value, $decimals, '.', '');
+
+            return str_contains($formatted, '.')
+                ? rtrim(rtrim($formatted, '0'), '.')
+                : $formatted;
+        };
 
         $rows = collect();
 
-        $collectFromRecord = function ($sourceRecord, string $sourceLabel) use (&$rows) {
+        $collectFromRecord = function ($sourceRecord, string $sourceType) use (&$rows, $formatNumber) {
             if (! $sourceRecord) {
                 return;
             }
@@ -2975,42 +2997,27 @@ class ApprovedOrderResource extends Resource
                 : (json_decode($sourceRecord->meta ?? '[]', true) ?: []);
 
             $reviews = data_get($meta, 'six_month_reviews', []);
-            if (! is_array($reviews)) {
+
+            if (! is_array($reviews) || empty($reviews)) {
                 return;
             }
 
-            foreach ($reviews as $review) {
+            foreach ($reviews as $index => $review) {
                 if (! is_array($review)) {
                     continue;
                 }
 
                 $text = trim((string) ($review['text'] ?? $review['review'] ?? $review['note'] ?? ''));
-                if ($text === '') {
-                    continue;
-                }
 
                 $date = $review['date'] ?? $review['created_at'] ?? $sourceRecord->created_at ?? null;
 
                 try {
                     $dateText = $date ? Carbon::parse($date)->format('d-m-Y H:i') : '—';
+                    $sortDate = $date ? Carbon::parse($date)->timestamp : 0;
                 } catch (Throwable $e) {
                     $dateText = (string) $date;
+                    $sortDate = 0;
                 }
-
-                $author = trim((string) ($review['by'] ?? $review['author'] ?? ''));
-                $reference = (string) ($sourceRecord->reference ?? '');
-
-                $formatNumber = function ($value, int $decimals = 1): string {
-                    if ($value === null || $value === '') {
-                        return '';
-                    }
-
-                    $formatted = number_format((float) $value, $decimals, '.', '');
-
-                    return str_contains($formatted, '.')
-                        ? rtrim(rtrim($formatted, '0'), '.')
-                        : $formatted;
-                };
 
                 $heightUnit = strtolower(trim((string) ($review['height_unit'] ?? '')));
                 $weightUnit = strtolower(trim((string) ($review['weight_unit'] ?? '')));
@@ -3018,12 +3025,15 @@ class ApprovedOrderResource extends Resource
                 $heightText = '';
                 if ($heightUnit === 'imperial') {
                     $heightParts = [];
+
                     if (($review['height_ft'] ?? null) !== null && $review['height_ft'] !== '') {
                         $heightParts[] = $formatNumber($review['height_ft']) . ' ft';
                     }
+
                     if (($review['height_in'] ?? null) !== null && $review['height_in'] !== '') {
                         $heightParts[] = $formatNumber($review['height_in']) . ' in';
                     }
+
                     $heightText = trim(implode(' ', $heightParts));
                 } elseif (($review['height_cm'] ?? null) !== null && $review['height_cm'] !== '') {
                     $heightText = $formatNumber($review['height_cm']) . ' cm';
@@ -3034,12 +3044,15 @@ class ApprovedOrderResource extends Resource
                 $weightText = '';
                 if ($weightUnit === 'imperial') {
                     $weightParts = [];
+
                     if (($review['weight_st'] ?? null) !== null && $review['weight_st'] !== '') {
                         $weightParts[] = $formatNumber($review['weight_st']) . ' st';
                     }
+
                     if (($review['weight_lb'] ?? null) !== null && $review['weight_lb'] !== '') {
                         $weightParts[] = $formatNumber($review['weight_lb']) . ' lb';
                     }
+
                     $weightText = trim(implode(' ', $weightParts));
                 } elseif (($review['weight_kg'] ?? null) !== null && $review['weight_kg'] !== '') {
                     $weightText = $formatNumber($review['weight_kg']) . ' kg';
@@ -3053,72 +3066,136 @@ class ApprovedOrderResource extends Resource
                 }
 
                 $measurementParts = [];
+
                 if ($heightText !== '') {
                     $measurementParts[] = 'Height: ' . $heightText;
                 }
+
                 if ($weightText !== '') {
                     $measurementParts[] = 'Weight: ' . $weightText;
                 }
+
                 if ($bmiText !== '') {
                     $measurementParts[] = 'BMI: ' . $bmiText;
                 }
 
+                if ($text === '' && empty($measurementParts)) {
+                    continue;
+                }
+
+                $lines = ['[' . $dateText . ']'];
+
+                if (! empty($measurementParts)) {
+                    $lines[] = implode(' | ', $measurementParts);
+                }
+
+                if ($text !== '') {
+                    $lines[] = $text;
+                }
+
                 $rows->push([
-                    'sort' => $date ? strtotime((string) $date) : 0,
-                    'date' => $dateText,
-                    'text' => $text,
-                    'measurements' => implode(' | ', $measurementParts),
-                    'author' => $author,
-                    'reference' => $reference,
-                    'source' => $sourceLabel,
+                    'sort' => $sortDate,
+                    'display' => implode("\n", $lines),
+                    'dedupe' => strtolower(trim(implode('|', [
+                        $dateText,
+                        $heightText,
+                        $weightText,
+                        $bmiText,
+                        $text,
+                    ]))),
                 ]);
             }
         };
 
-        try {
-            PendingOrder::query()
-                ->where('user_id', $userId)
-                ->whereNotNull('meta')
-                ->latest('id')
-                ->limit(50)
-                ->get()
-                ->each(fn ($pending) => $collectFromRecord($pending, 'Pending'));
-        } catch (Throwable $e) {
-            //
+        $collectFromRecord($record, 'approved');
+
+        if ($userId > 0) {
+            try {
+                Order::query()
+                    ->where('user_id', $userId)
+                    ->whereNotNull('meta')
+                    ->latest('id')
+                    ->limit(100)
+                    ->get()
+                    ->each(fn ($order) => $collectFromRecord($order, 'order'));
+            } catch (Throwable $e) {
+            }
+
+            try {
+                PendingOrder::query()
+                    ->where('user_id', $userId)
+                    ->whereNotNull('meta')
+                    ->latest('id')
+                    ->limit(100)
+                    ->get()
+                    ->each(fn ($pending) => $collectFromRecord($pending, 'pending'));
+            } catch (Throwable $e) {
+            }
         }
 
-        try {
-            Order::query()
-                ->where('user_id', $userId)
-                ->whereNotNull('meta')
-                ->latest('id')
-                ->limit(50)
-                ->get()
-                ->each(fn ($order) => $collectFromRecord($order, 'Order'));
-        } catch (Throwable $e) {
-            //
+        if ($recordReference !== '') {
+            try {
+                Order::query()
+                    ->where('reference', $recordReference)
+                    ->whereNotNull('meta')
+                    ->latest('id')
+                    ->limit(20)
+                    ->get()
+                    ->each(fn ($order) => $collectFromRecord($order, 'order'));
+
+                PendingOrder::query()
+                    ->where('reference', $recordReference)
+                    ->whereNotNull('meta')
+                    ->latest('id')
+                    ->limit(20)
+                    ->get()
+                    ->each(fn ($pending) => $collectFromRecord($pending, 'pending'));
+            } catch (Throwable $e) {
+            }
+        }
+
+        if ($recordEmail !== '') {
+            try {
+                Order::query()
+                    ->whereNotNull('meta')
+                    ->where(function ($query) use ($recordEmail) {
+                        $query->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email'))) = ?", [$recordEmail])
+                            ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.email'))) = ?", [$recordEmail])
+                            ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.email'))) = ?", [$recordEmail]);
+                    })
+                    ->latest('id')
+                    ->limit(100)
+                    ->get()
+                    ->each(fn ($order) => $collectFromRecord($order, 'order'));
+
+                PendingOrder::query()
+                    ->whereNotNull('meta')
+                    ->where(function ($query) use ($recordEmail) {
+                        $query->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email'))) = ?", [$recordEmail])
+                            ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.email'))) = ?", [$recordEmail])
+                            ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.email'))) = ?", [$recordEmail]);
+                    })
+                    ->latest('id')
+                    ->limit(100)
+                    ->get()
+                    ->each(fn ($pending) => $collectFromRecord($pending, 'pending'));
+            } catch (Throwable $e) {
+            }
         }
 
         $rows = $rows
+            ->filter(fn ($row) => trim((string) ($row['display'] ?? '')) !== '')
+            ->unique(fn ($row) => $row['dedupe'])
             ->sortByDesc('sort')
-            ->unique(fn ($row) => implode('|', [$row['date'], $row['text'], $row['reference']]))
             ->values();
 
         if ($rows->isEmpty()) {
             return '—';
         }
 
-        return $rows->map(function ($row) {
-            $parts = ['[' . $row['date'] . ']'];
-
-            if (! empty($row['measurements'])) {
-                $parts[] = $row['measurements'];
-            }
-
-            $parts[] = $row['text'];
-
-            return implode("\n", $parts);
-        })->implode("\n\n");
+        return $rows
+            ->pluck('display')
+            ->implode("\n\n");
     }
 
     protected static function sixMonthReviewBannerForPending($record): ?string
