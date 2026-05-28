@@ -950,11 +950,11 @@ class PendingOrderResource extends Resource
                     })
                     ->toggleable(),
 
-                    TextColumn::make('has_appointment')
+                    TextColumn::make('appointment_datetime')
                         ->label('Appointment')
                         ->getStateUsing(function ($record) {
                             if (! $record) {
-                                return 'No';
+                                return null;
                             }
 
                             $meta = is_array($record->meta)
@@ -965,7 +965,9 @@ class PendingOrderResource extends Resource
                                 ?? data_get($meta, 'appointment_start_at')
                                 ?? data_get($meta, 'appointment_start')
                                 ?? data_get($meta, 'appointment_datetime')
-                                ?? data_get($meta, 'appointmentDateTime');
+                                ?? data_get($meta, 'appointmentDateTime')
+                                ?? data_get($meta, 'appointment.start_at')
+                                ?? data_get($meta, 'booking.start_at');
 
                             if (! $appointmentAt) {
                                 $date = data_get($meta, 'booking_date')
@@ -978,33 +980,47 @@ class PendingOrderResource extends Resource
 
                                 if ($date && $time) {
                                     $appointmentAt = trim((string) $date) . ' ' . trim((string) $time);
+                                } elseif ($date) {
+                                    $appointmentAt = $date;
                                 }
                             }
 
-                            if ($appointmentAt) {
-                                return 'Yes';
+                            if (! $appointmentAt) {
+                                try {
+                                    $appointment = Appointment::query()
+                                        ->where(function ($query) use ($record) {
+                                            if (! empty($record->id)) {
+                                                $query->orWhere('order_id', $record->id);
+                                            }
+
+                                            if (! empty($record->reference)) {
+                                                $query->orWhere('order_reference', $record->reference);
+                                            }
+                                        })
+                                        ->orderByDesc('id')
+                                        ->first();
+
+                                    if ($appointment?->start_at) {
+                                        $appointmentAt = $appointment->getRawOriginal('start_at') ?: $appointment->start_at;
+                                    }
+                                } catch (Throwable $e) {
+                                    // ignore
+                                }
+                            }
+
+                            if (! $appointmentAt) {
+                                return null;
                             }
 
                             try {
-                                $hasAppointment = Appointment::query()
-                                    ->where(function ($query) use ($record) {
-                                        if (! empty($record->id)) {
-                                            $query->orWhere('order_id', $record->id);
-                                        }
-
-                                        if (! empty($record->reference)) {
-                                            $query->orWhere('order_reference', $record->reference);
-                                        }
-                                    })
-                                    ->exists();
-
-                                return $hasAppointment ? 'Yes' : 'No';
+                                return Carbon::parse($appointmentAt)
+                                    ->timezone('Europe/London')
+                                    ->format('d M Y, H:i');
                             } catch (Throwable $e) {
-                                return 'No';
+                                return (string) $appointmentAt;
                             }
                         })
-                        ->badge()
-                        ->color(fn ($state) => $state === 'Yes' ? 'success' : 'danger')
+                        ->placeholder('—')
                         ->sortable(false)
                         ->toggleable(),
             ])
