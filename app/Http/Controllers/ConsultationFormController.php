@@ -187,6 +187,9 @@ class ConsultationFormController extends Controller
 
     private function sendReviewRequestEmail(?string $email): void
     {
+        // Review requests are now handled separately, so do not send Trustpilot review emails from this controller.
+        return;
+
         $email = is_string($email) ? trim($email) : '';
 
         if ($email === '') {
@@ -2613,15 +2616,10 @@ foreach ($flatSchemaFields as $idx => $fld) {
             ?? optional($session->user)->first_name
             ?? '';
 
-        $name = is_string($first) ? trim($first) : 'there';
+        $name = is_string($first) && trim($first) !== '' ? trim($first) : 'there';
         $ref  = $order->reference ?? $order->getKey();
 
-        // Optional Zoom link for weight management consultations
-        $zoomUrl = data_get($meta, 'zoom.weight_management_join_url')
-            ?? data_get($meta, 'zoom.join_url');
-
-        // Optional PDF attachments (Record of Supply and Invoice)
-        // Expecting file paths or public URLs to be stored in order meta under pdfs.record_of_supply and pdfs.invoice
+        // Optional PDF attachments: Record of Supply, Invoice and weight management documents
         $attachments = [];
 
         // Attach static GLP-1 guides for weight management services
@@ -2633,6 +2631,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     $guideDir . '/YOUR WEIGHT LOSS JOURNEY WITH GLP-1 MEDICATIONS – PATIENT GUIDE ON WHAT TO EXPECT.docx.pdf' => 'GLP-1 What To Expect.pdf',
                     $guideDir . '/GLP-1 WEIGHT LOSS PROGRAMME_ PATIENT STARTER PACK & INFORMATION GUIDE ON HOW THE MEDICATION WORKS.docx.pdf' => 'GLP-1 Starter Pack.pdf',
                 ];
+
                 foreach ($files as $abs => $downloadName) {
                     if (is_file($abs)) {
                         $attachments[] = [
@@ -2697,22 +2696,20 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 return null;
             }
 
-            // Skip remote URLs here; you can extend this to download and attach via attachData if required
+            // Skip remote URLs here
             if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
                 return null;
             }
 
-            // Common "public storage" style path like /storage/consultations/...
+            // Common public storage path like /storage/consultations/...
             if (str_starts_with($path, '/storage/')) {
                 $relative = ltrim(substr($path, strlen('/storage/')), '/');
 
-                // 1) Try the public/storage symlink if it exists
                 $candidate = public_path('storage/' . $relative);
                 if (is_file($candidate)) {
                     return $candidate;
                 }
 
-                // 2) Fallback directly to storage/app/public
                 $candidate = storage_path('app/public/' . $relative);
                 if (is_file($candidate)) {
                     return $candidate;
@@ -2726,13 +2723,13 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 return is_file($path) ? $path : null;
             }
 
-            // Try storage/app/public first (handles paths like consultations/foo.pdf stored on the public disk)
+            // Try storage/app/public first
             $candidate = storage_path('app/public/' . ltrim($path, '/'));
             if (is_file($candidate)) {
                 return $candidate;
             }
 
-            // Fallback to generic storage/app
+            // Fallback to storage/app
             $candidate = storage_path('app/' . ltrim($path, '/'));
             if (is_file($candidate)) {
                 return $candidate;
@@ -2795,53 +2792,122 @@ foreach ($flatSchemaFields as $idx => $fld) {
             }
         }
 
-        $subject = 'Your order has been approved';
+        $subject = 'Your Pharmacy Express order has been completed';
 
-        $body = "Dear Patient,\n\n"
-            . "Your order has been approved. Please see the attached documents, which include:\n\n";
+        $safeName = e($name ?: 'there');
+        $safeRef = e((string) $ref);
 
-       if ($isWeight) {
-            $body .= "Medication Review:\n\n"
-                . "• Dose: once weekly injection, same day each week\n"
-                . "• Storage: keep pen in fridge\n\n"
-                . "Clinical Consultation:\n"
-                . "• Weight management consultation\n\n"
-                . "Patient Education:\n"
-                . "• Injection technique: once weekly subcutaneous injection, same day each week\n"
-                . "• Fluid intake: 2-3 litres daily to prevent constipation/diarrhoea\n"
-                . "• Side effects discussed: initial nausea and headache (usually resolves), constipation or diarrhoea\n"
-                . "• Rare side effect counselling: pancreatitis symptoms (severe abdominal pain radiating to back, high temperature, vomiting) - seek medical advice immediately\n"
-                . "• Dosing schedule: start with current strength, reorder at end of week three via website, next dose. (either go down up or stay same in strengths)\n"
-                . "• Can remain on current strength if effective and weight loss achieved\n\n"
-                . "Important safety information:\n"
-                . "Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.\n"
-                . "Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.\n"
-                . "Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.\n\n"
-                . "Plan:\n"
-                . "• Order dispatched today or tomorrow latest\n"
-                . "• Reorder via website at end of week three for next dose.\n"
-                . "• Continue current strength if effective weight loss achieved\n\n";
-        }   else {
-            $body .= "Your record of supply\n"
-                . "Your invoice\n\n";
+        $documentsIntro = $isWeight
+            ? 'Your order has been completed. We have attached any relevant treatment guides and clinical documents for your weight management treatment.'
+            : 'Your order has been completed. We have attached any relevant order documents where available.';
+
+        $weightSafetyHtml = '';
+        if ($isWeight) {
+            $weightSafetyHtml = '
+            <tr>
+                <td style="padding:0 34px 26px 34px;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;border:1px solid rgba(18,63,64,.14);">
+                    <tr>
+                    <td style="padding:22px 24px;">
+                        <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Important treatment information</p>
+                        <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">Please read the attached weight management guides carefully before using your medication.</p>
+                        <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">Use your injection once weekly on the same day each week and store your pen in the fridge unless advised otherwise.</p>
+                        <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">Seek urgent medical advice if you experience severe, persistent abdominal pain that may radiate to your back, especially with nausea, vomiting or a high temperature.</p>
+                    </td>
+                    </tr>
+                </table>
+                </td>
+            </tr>';
         }
 
-        $body .= "If you have any questions or experience any issues, please don’t hesitate to contact us by email or via WhatsApp through our website.\n\n"
-            . "Thank you.\n\n"
-            . "W M Malik MRPharmS";
+        $body = '<!doctype html>
+    <html>
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <title>' . e($subject) . '</title>
+    </head>
+    <body style="margin:0;padding:0;background:#f6f6f4;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;margin:0;padding:32px 12px;">
+        <tr>
+        <td align="center">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid rgba(18,63,64,.14);">
+            <tr>
+                <td style="background:#123f40;padding:34px 34px 30px 34px;border-bottom:4px solid #10c7a4;">
+                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.20em;text-transform:uppercase;color:#10c7a4;font-weight:700;">Pharmacy Express</p>
+                <h1 style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:34px;line-height:38px;color:#ffffff;font-weight:800;letter-spacing:-.05em;">Order completed</h1>
+                <p style="margin:14px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:24px;color:rgba(255,255,255,.72);">Your order has been completed by our pharmacy team.</p>
+                </td>
+            </tr>
+            <tr>
+                <td style="padding:34px 34px 10px 34px;">
+                <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">Hi ' . $safeName . ',</p>
+                <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">Your Pharmacy Express order <strong style="color:#123f40;">' . $safeRef . '</strong> has been completed by our pharmacy team.</p>
 
-        if ($zoomUrl) {
-            $body .= "\n\nYour video consultation link\n{$zoomUrl}\n";
-        }
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;border:1px solid rgba(18,63,64,.14);margin:0 0 24px 0;">
+                    <tr>
+                    <td style="padding:22px 24px;">
+                        <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">What happens next</p>
+                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                        <tr>
+                            <td style="width:30px;vertical-align:top;padding:3px 12px 12px 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">1</td>
+                            <td style="padding:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">Your order has now been completed by the pharmacy team.</td>
+                        </tr>
+                        <tr>
+                            <td style="width:30px;vertical-align:top;padding:3px 12px 12px 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">2</td>
+                            <td style="padding:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">If your order requires delivery, it will be prepared and dispatched as soon as possible.</td>
+                        </tr>
+                        <tr>
+                            <td style="width:30px;vertical-align:top;padding:3px 12px 0 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">3</td>
+                            <td style="padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">You will receive any available delivery or tracking updates separately.</td>
+                        </tr>
+                        </table>
+                    </td>
+                    </tr>
+                </table>
+
+                <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:24px;color:#334155;">' . e($documentsIntro) . '</p>
+                </td>
+            </tr>
+            ' . $weightSafetyHtml . '
+            <tr>
+                <td style="padding:0 34px 26px 34px;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#123f40;">
+                    <tr>
+                    <td style="padding:22px 24px;">
+                        <p style="margin:0 0 10px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#10c7a4;font-weight:700;">Order reference</p>
+                        <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:25px;line-height:31px;color:#ffffff;font-weight:800;letter-spacing:.02em;">' . $safeRef . '</p>
+                        <p style="margin:12px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:21px;color:rgba(255,255,255,.72);">Please keep this reference safe in case you need to contact us about your order.</p>
+                    </td>
+                    </tr>
+                </table>
+                </td>
+            </tr>
+            <tr>
+                <td style="padding:0 34px 32px 34px;">
+                <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:22px;color:#64748b;">This email confirms that your order has been completed. Delivery is not immediate and may take additional time depending on dispatch and courier timescales.</p>
+                </td>
+            </tr>
+            </table>
+        </td>
+        </tr>
+    </table>
+    </body>
+    </html>';
 
         try {
             $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
             $fromName    = config('mail.from.name') ?: 'Safescript Pharmacy';
 
-            Mail::raw($body, function ($m) use ($email, $subject, $fromAddress, $fromName, $attachments, $order) {
-                $m->from($fromAddress, $fromName)->to($email)->subject($subject);
+            Mail::html($body, function ($m) use ($email, $subject, $fromAddress, $fromName, $attachments, $order) {
+                $m->from($fromAddress, $fromName)
+                    ->to($email)
+                    ->subject($subject);
 
-                // Attach any resolved PDFs (record of supply, invoice)
+                // Attach any resolved PDFs
                 \Log::info('consultation.email.attachments_start', [
                     'email'       => $email,
                     'order_id'    => $order->getKey(),
@@ -2868,11 +2934,13 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 }
             });
 
-            $this->sendReviewRequestEmail($email);
-
-            Notification::make()->success()->title('Approval email sent to ' . $email)->send();
+            Notification::make()->success()->title('Processed order email sent to ' . $email)->send();
         } catch (\Throwable $e) {
-            Notification::make()->danger()->title('Could not send approval email')->body(substr($e->getMessage(), 0, 200))->send();
+            Notification::make()->danger()
+                ->title('Could not send completed order email')
+                ->body(substr($e->getMessage(), 0, 200))
+                ->send();
+
             report($e);
         }
     }
