@@ -2798,27 +2798,76 @@ foreach ($flatSchemaFields as $idx => $fld) {
         $safeRef = e((string) $ref);
 
         $documentsIntro = $isWeight
-            ? 'Your order has been completed. We have attached any relevant treatment guides and clinical documents for your weight management treatment.'
-            : 'Your order has been completed. We have attached any relevant order documents where available.';
+    ? 'Your order has been completed. Please see the attached documents, which include your medication review, clinical consultation information and patient education guides.'
+    : 'Your order has been completed. We have attached any relevant order documents where available.';
 
-        $weightSafetyHtml = '';
-        if ($isWeight) {
-            $weightSafetyHtml = '
-            <tr>
-                <td style="padding:0 34px 26px 34px;">
+    $weightSafetyHtml = '';
+
+    if ($isWeight) {
+        $weightSafetyHtml = '
+        <tr>
+            <td style="padding:0 34px 26px 34px;">
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;border:1px solid rgba(18,63,64,.14);">
                     <tr>
-                    <td style="padding:22px 24px;">
-                        <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Important treatment information</p>
-                        <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">Please read the attached weight management guides carefully before using your medication.</p>
-                        <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">Use your injection once weekly on the same day each week and store your pen in the fridge unless advised otherwise.</p>
-                        <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">Seek urgent medical advice if you experience severe, persistent abdominal pain that may radiate to your back, especially with nausea, vomiting or a high temperature.</p>
-                    </td>
+                        <td style="padding:22px 24px;">
+                            <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Medication review</p>
+
+                            <p style="margin:0 0 8px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                <strong>Dose:</strong> once weekly injection, on the same day each week.
+                            </p>
+
+                            <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                <strong>Storage:</strong> keep your pen in the fridge unless advised otherwise.
+                            </p>
+
+                            <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Clinical consultation</p>
+
+                            <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                Weight management consultation completed by our pharmacy team.
+                            </p>
+
+                            <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Patient education</p>
+
+                            <ul style="margin:0 0 18px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                <li style="margin:0 0 8px 0;">Injection technique: once weekly subcutaneous injection, on the same day each week.</li>
+                                <li style="margin:0 0 8px 0;">Fluid intake: aim for 2-3 litres daily to help reduce the risk of constipation or diarrhoea.</li>
+                                <li style="margin:0 0 8px 0;">Side effects discussed: initial nausea and headache, which usually settle, as well as constipation or diarrhoea.</li>
+                                <li style="margin:0 0 8px 0;">Rare side effect counselling: pancreatitis symptoms, including severe abdominal pain radiating to the back, high temperature or vomiting. Seek medical advice immediately if these occur.</li>
+                                <li style="margin:0 0 8px 0;">Dosing schedule: start with your current strength and reorder at the end of week three via the website for your next dose.</li>
+                                <li style="margin:0;">Your next dose may go down, go up or remain the same depending on clinical suitability and your progress. You can remain on your current strength if it is effective and weight loss is being achieved.</li>
+                            </ul>
+
+                            <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Important safety information</p>
+
+                            <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                Pancreatitis, which is inflammation of the pancreas, is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports, this can have serious or fatal outcomes.
+                            </p>
+
+                            <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.
+                            </p>
+
+                            <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
+                            </p>
+
+                            <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Plan</p>
+
+                            <ul style="margin:0 0 18px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                <li style="margin:0 0 8px 0;">Your order will be dispatched today or tomorrow at the latest.</li>
+                                <li style="margin:0 0 8px 0;">Please reorder via the website at the end of week three for your next dose.</li>
+                                <li style="margin:0;">Continue your current strength if it is effective and weight loss is being achieved.</li>
+                            </ul>
+
+                            <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                If you have any questions or experience any issues, please contact us by email or via WhatsApp through our website.
+                            </p>
+                        </td>
                     </tr>
                 </table>
-                </td>
-            </tr>';
-        }
+            </td>
+        </tr>';
+    }
 
         $body = '<!doctype html>
     <html>
@@ -2845,29 +2894,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
             <tr>
                 <td style="padding:34px 34px 10px 34px;">
                 <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">Hi ' . $safeName . ',</p>
-                <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">Your Pharmacy Express order <strong style="color:#123f40;">' . $safeRef . '</strong> has been completed by our pharmacy team.</p>
-
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;border:1px solid rgba(18,63,64,.14);margin:0 0 24px 0;">
-                    <tr>
-                    <td style="padding:22px 24px;">
-                        <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">What happens next</p>
-                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                        <tr>
-                            <td style="width:30px;vertical-align:top;padding:3px 12px 12px 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">1</td>
-                            <td style="padding:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">Your order has now been completed by the pharmacy team.</td>
-                        </tr>
-                        <tr>
-                            <td style="width:30px;vertical-align:top;padding:3px 12px 12px 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">2</td>
-                            <td style="padding:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">If your order requires delivery, it will be prepared and dispatched as soon as possible.</td>
-                        </tr>
-                        <tr>
-                            <td style="width:30px;vertical-align:top;padding:3px 12px 0 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">3</td>
-                            <td style="padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">You will receive any available delivery or tracking updates separately.</td>
-                        </tr>
-                        </table>
-                    </td>
-                    </tr>
-                </table>
+                <p style="margin:0 0 14px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">Your Pharmacy Express order <strong style="color:#123f40;">' . $safeRef . '</strong> has been completed by our pharmacy team.</p>
 
                 <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:24px;color:#334155;">' . e($documentsIntro) . '</p>
                 </td>
@@ -2888,7 +2915,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
             </tr>
             <tr>
                 <td style="padding:0 34px 32px 34px;">
-                <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:22px;color:#64748b;">This email confirms that your order has been completed. Delivery is not immediate and may take additional time depending on dispatch and courier timescales.</p>
+                <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:22px;color:#64748b;">This email confirms that your order has been completed. Please read all attached documents carefully before using your medication.</p>
                 </td>
             </tr>
             </table>
