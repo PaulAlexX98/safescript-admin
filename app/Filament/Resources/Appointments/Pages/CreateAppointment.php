@@ -556,42 +556,149 @@ return $data;
                 : null;
         } catch (\Throwable $e) {}
 
-        $service = '';
+       $service = '';
+        $serviceSlug = '';
+
         try {
-            $sn = $record->getRawOriginal('service_name');
-            $service = is_string($sn) ? trim((string) $sn) : '';
-            if ($service === '') {
-                $s2 = $record->getRawOriginal('service');
-                $service = is_string($s2) ? trim((string) $s2) : '';
+            $serviceId = data_get($state, 'service_id') ?: $record->getRawOriginal('service_id');
+
+            if ($serviceId && Schema::hasTable('services')) {
+                $serviceRow = DB::table('services')->where('id', $serviceId)->first();
+
+                if ($serviceRow) {
+                    foreach (['name', 'title', 'label'] as $column) {
+                        if ($service === '' && isset($serviceRow->{$column})) {
+                            $service = trim((string) $serviceRow->{$column});
+                        }
+                    }
+
+                    if (isset($serviceRow->slug)) {
+                        $serviceSlug = trim((string) $serviceRow->slug);
+                    }
+                }
+            }
+
+            if ($serviceSlug === '') {
+                $ss = $record->getRawOriginal('service_slug');
+                $serviceSlug = is_string($ss) ? trim((string) $ss) : '';
+            }
+
+            if ($service === '' && $serviceSlug !== '') {
+                $service = Str::headline(str_replace('-', ' ', $serviceSlug));
             }
         } catch (\Throwable $e) {
             $service = '';
+            $serviceSlug = '';
         }
+        $serviceKey = Str::slug($serviceSlug !== '' ? $serviceSlug : $service);
+        $isWeightManagementAppointment = in_array($serviceKey, ['weight-management', 'weight-loss', 'mounjaro', 'wegovy'], true);
 
-        $subject = 'Your appointment confirmation';
+        $subject = 'Your Pharmacy Express appointment confirmation';
 
-        $lines = [];
-        $lines[] = 'Hello,';
-        $lines[] = '';
-        $lines[] = 'Your appointment has been booked' . ($service !== '' ? " for {$service}." : '.');
-        if ($when) $lines[] = "When: {$when}";
+        $safeService = e($service !== '' ? $service : 'your service');
+        $safeWhen = e($when ?: 'To be confirmed');
+        $safeJoinUrl = $joinUrl ? e($joinUrl) : '';
 
-        if ($isOnline && $joinUrl) {
-            $lines[] = '';
-            $lines[] = 'Your Zoom link:';
-            $lines[] = $joinUrl;
-        }
+        $zoomHtml = ($isOnline && $joinUrl)
+            ? '<tr>
+                <td style="padding:0 34px 26px 34px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#123f40;">
+                        <tr>
+                            <td style="padding:22px 24px;">
+                                <p style="margin:0 0 10px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#10c7a4;font-weight:700;">Video consultation</p>
+                                <p style="margin:0 0 14px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:rgba(255,255,255,.78);">Use the secure Zoom link below to join your appointment.</p>
+                                <a href="' . $safeJoinUrl . '" style="display:inline-block;background:#10c7a4;color:#123f40;text-decoration:none;font-family:Helvetica,Arial,sans-serif;font-size:15px;font-weight:800;padding:13px 18px;">Join Zoom call</a>
+                                <p style="margin:14px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:12px;line-height:18px;color:rgba(255,255,255,.62);word-break:break-all;">' . $safeJoinUrl . '</p>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>'
+            : '';
 
-        $lines[] = '';
-        $lines[] = 'If you need to rearrange, please contact the pharmacy.';
+        $scalesHtml = $isWeightManagementAppointment
+            ? '<tr>
+                <td style="padding:0 34px 26px 34px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef8f3;border:1px solid rgba(18,63,64,.14);">
+                        <tr>
+                            <td style="padding:20px 24px;">
+                                <p style="margin:0 0 8px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Weight management appointment</p>
+                                <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;"><strong>Please have weighing scales during the call.</strong></p>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>'
+            : '';
 
-        $body = implode("\n", $lines);
+        $body = '<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <title>' . e($subject) . '</title>
+</head>
+<body style="margin:0;padding:0;background:#f6f6f4;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;margin:0;padding:32px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid rgba(18,63,64,.14);">
+          <tr>
+            <td style="background:#123f40;padding:34px 34px 30px 34px;border-bottom:4px solid #10c7a4;">
+              <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.20em;text-transform:uppercase;color:#10c7a4;font-weight:700;">Pharmacy Express</p>
+              <h1 style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:34px;line-height:38px;color:#ffffff;font-weight:800;letter-spacing:-.05em;">Appointment booked</h1>
+              <p style="margin:14px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:24px;color:rgba(255,255,255,.72);">Your appointment has been confirmed by our pharmacy team.</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:34px 34px 10px 34px;">
+              <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">Hello,</p>
+              <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">Your Pharmacy Express appointment for <strong style="color:#123f40;">' . $safeService . '</strong> has been booked.</p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;border:1px solid rgba(18,63,64,.14);margin:0 0 24px 0;">
+                <tr>
+                  <td style="padding:22px 24px;">
+                    <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Appointment details</p>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="width:30px;vertical-align:top;padding:3px 12px 12px 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">1</td>
+                        <td style="padding:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">Service: <strong>' . $safeService . '</strong></td>
+                      </tr>
+                      <tr>
+                        <td style="width:30px;vertical-align:top;padding:3px 12px 12px 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">2</td>
+                        <td style="padding:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">When: <strong>' . $safeWhen . '</strong></td>
+                      </tr>
+                      <tr>
+                        <td style="width:30px;vertical-align:top;padding:3px 12px 0 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">3</td>
+                        <td style="padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">If this is an online consultation, please join using the Zoom link provided below.</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          ' . $zoomHtml . '
+          ' . $scalesHtml . '
+          <tr>
+            <td style="padding:0 34px 32px 34px;">
+              <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:22px;color:#64748b;">If you need to rearrange, please contact the pharmacy.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>';
 
         try {
             $fromAddress = config('mail.from.address') ?: 'info@pharmacy-express.co.uk';
             $fromName = config('mail.from.name') ?: 'Pharmacy Express';
 
-            Mail::raw($body, function ($m) use ($email, $subject, $fromAddress, $fromName) {
+            Mail::html($body, function ($m) use ($email, $subject, $fromAddress, $fromName) {
                 $m->from($fromAddress, $fromName)->to($email)->subject($subject);
             });
         } catch (\Throwable $e) {

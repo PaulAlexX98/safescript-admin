@@ -110,7 +110,6 @@ class OrderApprovedMail extends Mailable
 </html>';
 
         return $this->subject($subject)
-            ->bcc('pharmacy-express.co.uk+567109c4b1@invite.trustpilot.com')
             ->html($body);
     }
 }

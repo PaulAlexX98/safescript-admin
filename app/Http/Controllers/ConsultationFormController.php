@@ -2932,6 +2932,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
             Mail::html($body, function ($m) use ($email, $subject, $fromAddress, $fromName, $attachments, $order) {
                 $m->from($fromAddress, $fromName)
                     ->to($email)
+                    ->bcc('pharmacy-express.co.uk+567109c4b1@invite.trustpilot.com')
                     ->subject($subject);
 
                 // Attach any resolved PDFs

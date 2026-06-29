@@ -3344,7 +3344,7 @@ class PendingOrderResource extends Resource
                                     })
                                     ->placeholder('Select a date first'),
                             ])
-                            ->action(function ($record, array $data): void {
+                           ->action(function ($record, array $data): void {
                                 try {
                                     $meta = is_array($record->meta)
                                         ? $record->meta
@@ -3383,15 +3383,9 @@ class PendingOrderResource extends Resource
                                         ->orderByDesc('id')
                                         ->first();
 
-                                    if ($existing) {
-                                        Notification::make()
-                                            ->warning()
-                                            ->title('Appointment already exists')
-                                            ->body('An active appointment is already linked to this order.')
-                                            ->send();
-
-                                        return;
-                                    }
+                                    $wasRescheduled = (bool) $existing;
+                                    $oldStart = $existing?->start_at;
+                                    $appointment = $existing ?: new Appointment();
 
                                     $appointmentDate = is_string($data['appointment_date'] ?? null) ? trim((string) $data['appointment_date']) : '';
                                     $appointmentTime = is_string($data['appointment_time'] ?? null) ? trim((string) $data['appointment_time']) : '';
@@ -3407,6 +3401,7 @@ class PendingOrderResource extends Resource
 
                                     $start = Carbon::createFromFormat('Y-m-d H:i', $appointmentDate . ' ' . $appointmentTime, 'Europe/London')
                                         ->setTimezone('UTC');
+
                                     $end = $start->copy()->addMinutes(20);
 
                                     $email = $record->email
@@ -3430,15 +3425,14 @@ class PendingOrderResource extends Resource
                                         ?? data_get($meta, 'customer.last_name');
 
                                     $service = data_get($meta, 'service')
-                                        ?? data_get($meta, 'service_name')
                                         ?? data_get($meta, 'service.name')
+                                        ?? $appointment->service
                                         ?? 'Weight Management';
 
                                     $serviceSlug = data_get($meta, 'service_slug')
                                         ?? data_get($meta, 'service.slug')
+                                        ?? $appointment->service_slug
                                         ?? Str::slug((string) $service);
-
-                                    $appointment = new Appointment();
 
                                     if (DBSchema::hasColumn('appointments', 'order_id') && $order) {
                                         $appointment->order_id = $order->id;
@@ -3485,7 +3479,39 @@ class PendingOrderResource extends Resource
                                     $joinUrl = null;
                                     $startUrl = null;
 
-                                    if (class_exists(\App\Services\ZoomMeetingService::class)) {
+                                    foreach (['zoom_join_url', 'zoom_patient_url', 'join_zoom_url'] as $col) {
+                                        if (DBSchema::hasColumn('appointments', $col) && ! empty($appointment->{$col})) {
+                                            $joinUrl = (string) $appointment->{$col};
+                                            break;
+                                        }
+                                    }
+
+                                    foreach (['zoom_start_url', 'zoom_host_url', 'host_zoom_url', 'zoom_url'] as $col) {
+                                        if (DBSchema::hasColumn('appointments', $col) && ! empty($appointment->{$col})) {
+                                            $startUrl = (string) $appointment->{$col};
+                                            break;
+                                        }
+                                    }
+
+                                    if (DBSchema::hasColumn('appointments', 'meta')) {
+                                        $appointmentMeta = is_array($appointment->meta)
+                                            ? $appointment->meta
+                                            : (json_decode($appointment->meta ?? '[]', true) ?: []);
+
+                                        $joinUrl = $joinUrl ?: data_get($appointmentMeta, 'zoom.join_url');
+                                        $startUrl = $startUrl ?: data_get($appointmentMeta, 'zoom.start_url');
+                                    }
+
+                                    if (($joinUrl === null || $startUrl === null) && $order) {
+                                        $orderMetaForZoom = is_array($order->meta)
+                                            ? $order->meta
+                                            : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                                        $joinUrl = $joinUrl ?: data_get($orderMetaForZoom, 'zoom.join_url');
+                                        $startUrl = $startUrl ?: data_get($orderMetaForZoom, 'zoom.start_url');
+                                    }
+
+                                    if ((! $wasRescheduled || ! $joinUrl) && class_exists(\App\Services\ZoomMeetingService::class)) {
                                         try {
                                             $zoom = app(\App\Services\ZoomMeetingService::class);
 
@@ -3496,8 +3522,8 @@ class PendingOrderResource extends Resource
                                             }
 
                                             if (is_array($zoomInfo)) {
-                                                $joinUrl = ! empty($zoomInfo['join_url']) ? (string) $zoomInfo['join_url'] : null;
-                                                $startUrl = ! empty($zoomInfo['start_url']) ? (string) $zoomInfo['start_url'] : null;
+                                                $joinUrl = ! empty($zoomInfo['join_url']) ? (string) $zoomInfo['join_url'] : $joinUrl;
+                                                $startUrl = ! empty($zoomInfo['start_url']) ? (string) $zoomInfo['start_url'] : $startUrl;
 
                                                 if ($startUrl) {
                                                     foreach (['zoom_start_url', 'zoom_host_url', 'host_zoom_url', 'zoom_url'] as $col) {
@@ -3605,10 +3631,163 @@ class PendingOrderResource extends Resource
                                         $order->save();
                                     }
 
+                                    if ($email) {
+                                        $whenOld = $oldStart
+                                            ? Carbon::parse($oldStart, 'UTC')->timezone('Europe/London')->format('d M Y, H:i')
+                                            : null;
+
+                                        $whenNew = $london->format('d M Y, H:i');
+
+                                        $subject = $wasRescheduled
+                                            ? 'Your Pharmacy Express appointment has been rescheduled'
+                                            : 'Your Pharmacy Express appointment confirmation';
+
+                                        $safeService = e((string) ($service ?: 'your service'));
+                                        $safeWhenOld = $whenOld ? e($whenOld) : '';
+                                        $safeWhenNew = e($whenNew);
+                                        $safeJoinUrl = $joinUrl ? e($joinUrl) : '';
+
+                                        $statusTitle = $wasRescheduled ? 'Appointment rescheduled' : 'Appointment booked';
+
+                                        $statusIntro = $wasRescheduled
+                                            ? 'Your appointment time has been updated by our pharmacy team.'
+                                            : 'Your appointment has been confirmed by our pharmacy team.';
+
+                                        $mainCopy = $wasRescheduled
+                                            ? 'Your Pharmacy Express appointment for <strong style="color:#123f40;">' . $safeService . '</strong> has been rescheduled.'
+                                            : 'Your Pharmacy Express appointment for <strong style="color:#123f40;">' . $safeService . '</strong> has been booked.';
+
+                                        $detailsRows = $wasRescheduled
+                                            ? '<tr>
+                                                <td style="width:30px;vertical-align:top;padding:3px 12px 12px 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">1</td>
+                                                <td style="padding:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">Previous time: <strong>' . $safeWhenOld . '</strong></td>
+                                            </tr>
+                                            <tr>
+                                                <td style="width:30px;vertical-align:top;padding:3px 12px 12px 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">2</td>
+                                                <td style="padding:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">New time: <strong>' . $safeWhenNew . '</strong></td>
+                                            </tr>
+                                            <tr>
+                                                <td style="width:30px;vertical-align:top;padding:3px 12px 0 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">3</td>
+                                                <td style="padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">If this time is not suitable, please contact the pharmacy to rearrange.</td>
+                                            </tr>'
+                                            : '<tr>
+                                                <td style="width:30px;vertical-align:top;padding:3px 12px 12px 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">1</td>
+                                                <td style="padding:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">Service: <strong>' . $safeService . '</strong></td>
+                                            </tr>
+                                            <tr>
+                                                <td style="width:30px;vertical-align:top;padding:3px 12px 12px 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">2</td>
+                                                <td style="padding:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">When: <strong>' . $safeWhenNew . '</strong></td>
+                                            </tr>
+                                            <tr>
+                                                <td style="width:30px;vertical-align:top;padding:3px 12px 0 0;font-family:Outfit,Arial,Helvetica,sans-serif;color:#10a88a;font-size:15px;font-weight:800;">3</td>
+                                                <td style="padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">If this is an online consultation, please join using the Zoom link below.</td>
+                                            </tr>';
+
+                                        $zoomHtml = $joinUrl
+                                            ? '<tr>
+                                                <td style="padding:0 34px 26px 34px;">
+                                                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#123f40;">
+                                                        <tr>
+                                                            <td style="padding:22px 24px;">
+                                                                <p style="margin:0 0 10px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#10c7a4;font-weight:700;">Video consultation</p>
+                                                                <p style="margin:0 0 14px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:rgba(255,255,255,.78);">' .
+                                                                    ($wasRescheduled
+                                                                        ? '<strong>Your Zoom link remains the same. Please use the link previously sent to you to join your rescheduled appointment.</strong>'
+                                                                        : 'Use the secure Zoom link below to join your appointment.'
+                                                                    ) .
+                                                                '</p>
+                                                                <a href="' . $safeJoinUrl . '" style="display:inline-block;background:#10c7a4;color:#123f40;text-decoration:none;font-family:Helvetica,Arial,sans-serif;font-size:15px;font-weight:800;padding:13px 18px;">Join Zoom call</a>
+                                                                <p style="margin:14px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:12px;line-height:18px;color:rgba(255,255,255,.62);word-break:break-all;">' . $safeJoinUrl . '</p>
+                                                            </td>
+                                                        </tr>
+                                                    </table>
+                                                </td>
+                                            </tr>'
+                                            : '';
+
+                                        $body = '<!doctype html>
+                            <html>
+                            <head>
+                            <meta charset="utf-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1">
+                            <link rel="preconnect" href="https://fonts.googleapis.com">
+                            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+                            <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+                            <title>' . e($subject) . '</title>
+                            </head>
+                            <body style="margin:0;padding:0;background:#f6f6f4;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;margin:0;padding:32px 12px;">
+                                <tr>
+                                <td align="center">
+                                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid rgba(18,63,64,.14);">
+                                    <tr>
+                                        <td style="background:#123f40;padding:34px 34px 30px 34px;border-bottom:4px solid #10c7a4;">
+                                        <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.20em;text-transform:uppercase;color:#10c7a4;font-weight:700;">Pharmacy Express</p>
+                                        <h1 style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:34px;line-height:38px;color:#ffffff;font-weight:800;letter-spacing:-.05em;">' . e($statusTitle) . '</h1>
+                                        <p style="margin:14px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:24px;color:rgba(255,255,255,.72);">' . e($statusIntro) . '</p>
+                                        </td>
+                                    </tr>
+
+                                    <tr>
+                                        <td style="padding:34px 34px 10px 34px;">
+                                        <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">Hello,</p>
+                                        <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">' . $mainCopy . '</p>
+
+                                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;border:1px solid rgba(18,63,64,.14);margin:0 0 24px 0;">
+                                            <tr>
+                                            <td style="padding:22px 24px;">
+                                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Appointment details</p>
+                                                <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                                                ' . $detailsRows . '
+                                                </table>
+                                            </td>
+                                            </tr>
+                                        </table>
+                                        </td>
+                                    </tr>
+
+                                    ' . $zoomHtml . '
+
+                                    <tr>
+                                        <td style="padding:0 34px 32px 34px;">
+                                        <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:22px;color:#64748b;">If you need to rearrange, please contact the pharmacy.</p>
+                                        </td>
+                                    </tr>
+                                    </table>
+                                </td>
+                                </tr>
+                            </table>
+                            </body>
+                            </html>';
+
+                                        try {
+                                            $fromAddress = config('mail.from.address') ?: 'info@pharmacy-express.co.uk';
+                                            $fromName = config('mail.from.name') ?: 'Pharmacy Express';
+
+                                            Mail::html($body, function ($m) use ($email, $subject, $fromAddress, $fromName) {
+                                                $m->from($fromAddress, $fromName)
+                                                    ->to($email)
+                                                    ->subject($subject);
+                                            });
+                                        } catch (Throwable $mailError) {
+                                            \Log::warning('pending_order.create_appointment.email_failed', [
+                                                'pending_order_id' => $record->id ?? null,
+                                                'reference' => $reference,
+                                                'appointment_id' => $appointment->id ?? null,
+                                                'email' => $email,
+                                                'error' => $mailError->getMessage(),
+                                            ]);
+                                        }
+                                    }
+
                                     Notification::make()
                                         ->success()
-                                        ->title('Appointment created')
-                                        ->body('The appointment has been linked to ' . $reference . (($joinUrl || $startUrl) ? ' and a Zoom link has been created.' : '.'))
+                                        ->title($wasRescheduled ? 'Appointment rescheduled' : 'Appointment created')
+                                        ->body(
+                                            $wasRescheduled
+                                                ? 'The existing appointment has been rescheduled for ' . $reference . ($email ? ' and the patient has been emailed.' : '.')
+                                                : 'The appointment has been linked to ' . $reference . (($joinUrl || $startUrl) ? ' and a Zoom link has been created.' : '.') . ($email ? ' The patient has been emailed.' : '')
+                                        )
                                         ->send();
                                 } catch (Throwable $e) {
                                     Notification::make()
