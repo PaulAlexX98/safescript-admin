@@ -396,6 +396,25 @@ class OrderResource extends Resource
             ->filters([
                 // No filters by default for generic Orders resource
             ])
+            ->headerActions([
+                Action::make('sendRoyalMailDespatchEmails')
+                    ->label('Send Royal Mail Despatch Emails')
+                    ->icon('heroicon-o-paper-airplane')
+                    ->color('success')
+                    ->requiresConfirmation()
+                    ->modalHeading('Send Royal Mail despatch emails')
+                    ->modalDescription('This will check Click & Drop and only email completed orders that have actually been manifested or shipped. Open orders will be skipped.')
+                    ->modalSubmitActionLabel('Check and send')
+                    ->action(function (): void {
+                        $result = static::sendRoyalMailDespatchEmailsForManifestedOrders();
+
+                        \Filament\Notifications\Notification::make()
+                            ->success()
+                            ->title('Royal Mail despatch emails processed')
+                            ->body("Sent: {$result['sent']}. Skipped not manifested: {$result['skipped_not_manifested']}. Skipped already sent: {$result['skipped_already_sent']}. Failed: {$result['failed']}.")
+                            ->send();
+                    }),
+            ])
             ->recordActions([
                 // For COMPLETED: go to the dedicated details page
                 Action::make('viewDetails')
@@ -567,6 +586,194 @@ class OrderResource extends Resource
                             ]),
                     ]),
             ]);
+    }
+
+    protected static function sendRoyalMailDespatchEmailsForManifestedOrders(): array
+    {
+        $result = [
+            'checked' => 0,
+            'sent' => 0,
+            'skipped_not_manifested' => 0,
+            'skipped_already_sent' => 0,
+            'failed' => 0,
+        ];
+
+        $clickAndDrop = app(\App\Services\Shipping\ClickAndDrop::class);
+
+        $orders = Order::query()
+            ->where('status', 'completed')
+            ->latest('updated_at')
+            ->limit(100)
+            ->get();
+
+        foreach ($orders as $order) {
+            $meta = static::normaliseOrderMeta($order->meta);
+
+            $clickAndDropOrderIdentifier = data_get($meta, 'clickanddrop.created_order_identifier')
+                ?? data_get($meta, 'clickanddrop.order_identifier')
+                ?? data_get($meta, 'clickanddrop.created_order.orderIdentifier')
+                ?? data_get($meta, 'shipping.response.createdOrders.0.orderIdentifier');
+
+            $trackingNumber = data_get($meta, 'shipping.tracking_number')
+                ?? data_get($meta, 'shipping.tracking')
+                ?? data_get($meta, 'royal_mail.tracking_number')
+                ?? data_get($meta, 'clickanddrop.tracking_number')
+                ?? data_get($meta, 'clickanddrop.created_order.trackingNumber')
+                ?? data_get($meta, 'shipping.response.createdOrders.0.trackingNumber')
+                ?? data_get($meta, 'shipping.response.createdOrders.0.packages.0.trackingNumber');
+
+            if (! $clickAndDropOrderIdentifier || ! $trackingNumber) {
+                continue;
+            }
+
+            $result['checked']++;
+
+            if (data_get($meta, 'shipping.dispatch_email_sent_at')) {
+                $result['skipped_already_sent']++;
+                continue;
+            }
+
+            try {
+                $clickAndDropOrder = $clickAndDrop->getOrder($clickAndDropOrderIdentifier);
+
+                $isManifested = filled(data_get($clickAndDropOrder, 'manifestedOn'))
+                    || filled(data_get($clickAndDropOrder, 'shippedOn'));
+
+                if (! $isManifested) {
+                    $result['skipped_not_manifested']++;
+                    continue;
+                }
+
+                static::sendRoyalMailDespatchEmail($order, (string) $trackingNumber, $clickAndDropOrder);
+                $result['sent']++;
+            } catch (\Throwable $e) {
+                $result['failed']++;
+
+                \Log::warning('royalmail.despatch_email.failed', [
+                    'order_id' => $order->getKey(),
+                    'reference' => $order->reference,
+                    'clickanddrop_order_identifier' => $clickAndDropOrderIdentifier,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        \Log::info('royalmail.despatch_email.batch_result', $result);
+
+        return $result;
+    }
+
+    protected static function sendRoyalMailDespatchEmail(Order $order, string $trackingNumber, array $clickAndDropOrder = []): void
+    {
+        $meta = static::normaliseOrderMeta($order->meta);
+
+        $email = data_get($meta, 'email')
+            ?? data_get($meta, 'patient.email')
+            ?? optional($order->patient)->email
+            ?? optional($order->user)->email;
+
+        if (! $email) {
+            throw new \RuntimeException('No patient email found for order.');
+        }
+
+        $first = data_get($meta, 'firstName')
+            ?? data_get($meta, 'first_name')
+            ?? data_get($meta, 'patient.firstName')
+            ?? data_get($meta, 'patient.first_name')
+            ?? optional($order->patient)->first_name
+            ?? optional($order->user)->first_name
+            ?? '';
+
+        $name = trim((string) $first) !== '' ? trim((string) $first) : 'there';
+        $ref = $order->reference ?? $order->getKey();
+        $trackingUrl = 'https://www.royalmail.com/track-your-item#/tracking-results/' . $trackingNumber;
+        $subject = 'Your Pharmacy Express order has been despatched';
+
+        $body = '<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>' . e($subject) . '</title>
+</head>
+<body style="margin:0;padding:0;background:#f6f6f4;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;margin:0;padding:32px 12px;">
+    <tr>
+        <td align="center">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid rgba(18,63,64,.14);">
+                <tr>
+                    <td style="background:#123f40;padding:34px 34px 30px 34px;border-bottom:4px solid #10c7a4;">
+                        <p style="margin:0 0 14px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.20em;text-transform:uppercase;color:#10c7a4;font-weight:700;">Pharmacy Express</p>
+                        <h1 style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:32px;line-height:38px;color:#ffffff;font-weight:800;">Order despatched</h1>
+                        <p style="margin:14px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:24px;color:rgba(255,255,255,.72);">Your order has now been despatched with Royal Mail.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding:34px 34px 10px 34px;">
+                        <p style="margin:0 0 18px 0;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:25px;color:#111827;">Hi ' . e($name) . ',</p>
+                        <p style="margin:0 0 14px 0;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:25px;color:#111827;">Your Pharmacy Express order <strong style="color:#123f40;">' . e((string) $ref) . '</strong> has now been despatched with Royal Mail.</p>
+                        <p style="margin:0 0 22px 0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#334155;">Tracking updates may take a little time to appear after Royal Mail scans the parcel.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding:0 34px 26px 34px;">
+                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef8f3;border:1px solid rgba(18,63,64,.14);">
+                            <tr>
+                                <td style="padding:22px 24px;">
+                                    <p style="margin:0 0 10px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Royal Mail tracking</p>
+                                    <p style="margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:24px;line-height:30px;color:#123f40;font-weight:800;letter-spacing:.02em;">' . e($trackingNumber) . '</p>
+                                    <a href="' . e($trackingUrl) . '" style="display:inline-block;background:#123f40;color:#ffffff;text-decoration:none;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;padding:12px 18px;">Track with Royal Mail</a>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding:0 34px 32px 34px;">
+                        <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:22px;color:#64748b;">Thank you for ordering with Pharmacy Express.</p>
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+</body>
+</html>';
+
+        \Illuminate\Support\Facades\Mail::html($body, function ($m) use ($email, $subject) {
+            $m->to($email)->subject($subject);
+        });
+
+        data_set($meta, 'shipping.dispatch_email_sent_at', now()->toIso8601String());
+        data_set($meta, 'shipping.dispatch_email_sent_by', auth()->id());
+        data_set($meta, 'shipping.manifested_at', data_get($clickAndDropOrder, 'manifestedOn'));
+        data_set($meta, 'shipping.shipped_at', data_get($clickAndDropOrder, 'shippedOn'));
+        data_set($meta, 'shipping.tracking_number', $trackingNumber);
+        data_set($meta, 'shipping.tracking_url', $trackingUrl);
+
+        $order->meta = $meta;
+        $order->save();
+
+        \Log::info('royalmail.despatch_email.sent', [
+            'order_id' => $order->getKey(),
+            'reference' => $order->reference,
+            'email' => $email,
+            'tracking' => $trackingNumber,
+        ]);
+    }
+
+    protected static function normaliseOrderMeta($meta): array
+    {
+        if (is_array($meta)) {
+            return $meta;
+        }
+
+        if (is_string($meta) && trim($meta) !== '') {
+            $decoded = json_decode($meta, true);
+            return is_array($decoded) ? $decoded : [];
+        }
+
+        return [];
     }
 
     public static function getRelations(): array

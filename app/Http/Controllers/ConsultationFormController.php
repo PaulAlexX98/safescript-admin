@@ -2798,8 +2798,8 @@ foreach ($flatSchemaFields as $idx => $fld) {
         $safeRef = e((string) $ref);
 
         $documentsIntro = $isWeight
-    ? 'Your order has been completed. Please see the attached documents, which include your medication review, clinical consultation information and patient education guides.'
-    : 'Your order has been completed. We have attached any relevant order documents where available.';
+    ? 'Your order has been completed by our pharmacy team. We will email you again once your Royal Mail tracking is active. Please see the attached documents, which include your medication review, clinical consultation information and patient education guides.'
+    : 'Your order has been completed by our pharmacy team. If your order requires despatch, a Royal Mail tracking email will be sent once tracking is active. We have attached any relevant order documents where available.';
 
     $weightSafetyHtml = '';
 
@@ -2855,6 +2855,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
                             <ul style="margin:0 0 18px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
                                 <li style="margin:0 0 8px 0;">Your order will be dispatched today or tomorrow at the latest.</li>
+                                <li style="margin:0 0 8px 0;">We will send you a separate Royal Mail despatch email once tracking is active.</li>
                                 <li style="margin:0 0 8px 0;">Please reorder via the website at the end of week three for your next dose.</li>
                                 <li style="margin:0;">Continue your current strength if it is effective and weight loss is being achieved.</li>
                             </ul>

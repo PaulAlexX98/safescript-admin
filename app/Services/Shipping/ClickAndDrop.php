@@ -31,6 +31,7 @@ class ClickAndDrop
         $apiKey = (string) ($overrides['api_key'] ?? config('clickanddrop.key'));
         $serviceId = (string) ($overrides['service_identifier'] ?? config('clickanddrop.default_service', 'RM24'));
         $packageId = (string) ($overrides['package_identifier'] ?? config('clickanddrop.default_package', 'Parcel'));
+        $packageFormatIdentifier = $this->normalizePackageFormatIdentifier($packageId);
 
         if ($apiKey === '') {
             throw new RuntimeException('Click & Drop API key is missing.');
@@ -186,18 +187,30 @@ class ClickAndDrop
                     'telephoneNumber' => $phone,
                 ],
                 'packages' => [[
-                    'packageFormatIdentifier' => $packageId,
+                    'packageFormatIdentifier' => $packageFormatIdentifier,
                     'weightInGrams' => $weightG,
                 ]],
-                'postage' => [
-                    'serviceIdentifier' => $serviceId,
+                'postageDetails' => [
+                    'sendNotificationsTo' => 'recipient',
+                    'serviceCode' => $serviceId,
+                    'receiveEmailNotification' => true,
+                    'receiveSmsNotification' => false,
                 ],
-                // Ask the API to include label immediately when supported
-                'includeLabelInResponse' => true,
+                // Ask the API to include label immediately when supported by the Click & Drop account.
+                'label' => [
+                    'includeLabelInResponse' => true,
+                ],
             ]],
         ];
 
-        Log::info('clickanddrop.contact', ['ref' => $ref, 'email' => $email, 'phone' => $phone]);
+        Log::info('clickanddrop.contact', [
+            'ref' => $ref,
+            'email' => $email,
+            'phone' => $phone,
+            'serviceCode' => $serviceId,
+            'packageFormatIdentifier' => $packageFormatIdentifier,
+            'weightInGrams' => $weightG,
+        ]);
 
         // Fire the request using Bearer auth and JSON body
         $url = $base . '/orders';
@@ -220,8 +233,10 @@ class ClickAndDrop
 
         $data = $res->json();
 
+        $responseForLog = $this->withoutInlineLabels($data);
+
         Log::info('clickanddrop.response', [
-            'data' => $data,
+            'data' => $responseForLog,
         ]);
 
         // Persist any inline label/document returned
@@ -245,9 +260,87 @@ class ClickAndDrop
     }
 
     /**
+     * Fetch one Click & Drop order by the order identifier returned by createOrder().
+     */
+    public function getOrder(string|int $orderIdentifier, array $overrides = []): array
+    {
+        $base = rtrim(
+            (string) ($overrides['base'] ?? config('clickanddrop.base') ?? 'https://api.parcel.royalmail.com/api/v1'),
+            '/'
+        );
+
+        $apiKey = (string) ($overrides['api_key'] ?? config('clickanddrop.key'));
+
+        if ($apiKey === '') {
+            throw new RuntimeException('Click & Drop API key is missing.');
+        }
+
+        $res = Http::withToken($apiKey)
+            ->acceptJson()
+            ->get($base . '/orders/' . $orderIdentifier);
+
+        Log::info('clickanddrop.get_order', [
+            'orderIdentifier' => $orderIdentifier,
+            'status' => $res->status(),
+            'ok' => $res->successful(),
+        ]);
+
+        if (! $res->successful()) {
+            Log::warning('clickanddrop.get_order.failed', [
+                'orderIdentifier' => $orderIdentifier,
+                'status' => $res->status(),
+                'body' => $res->body(),
+            ]);
+
+            return [];
+        }
+
+        $json = $res->json();
+        $order = is_array($json) ? ($json[0] ?? $json) : [];
+
+        return is_array($order) ? $order : [];
+    }
+
+    /**
+     * Check whether a Click & Drop order has been manifested or shipped.
+     */
+    public function isManifested(string|int $orderIdentifier, array $overrides = []): bool
+    {
+        $order = $this->getOrder($orderIdentifier, $overrides);
+
+        return filled(data_get($order, 'manifestedOn'))
+            || filled(data_get($order, 'shippedOn'));
+    }
+
+    /**
      * Attempt to coerce a human country string into ISO alpha-2 code.
      * Defaults to GB for any unrecognised/long value.
      */
+    private function withoutInlineLabels(array $data): array
+    {
+        $clean = $data;
+
+        if (isset($clean['createdOrders']) && is_array($clean['createdOrders'])) {
+            foreach ($clean['createdOrders'] as &$createdOrder) {
+                if (isset($createdOrder['label'])) {
+                    $createdOrder['label'] = '[base64 label omitted]';
+                }
+            }
+            unset($createdOrder);
+        }
+
+        if (isset($clean['data']['createdOrders']) && is_array($clean['data']['createdOrders'])) {
+            foreach ($clean['data']['createdOrders'] as &$createdOrder) {
+                if (isset($createdOrder['label'])) {
+                    $createdOrder['label'] = '[base64 label omitted]';
+                }
+            }
+            unset($createdOrder);
+        }
+
+        return $clean;
+    }
+
     private function normalizeCountryCode(string $value): string
     {
         $v = strtoupper(trim($value));
@@ -269,6 +362,31 @@ class ClickAndDrop
             'NORTHERN IRELAND' => 'GB',
         ];
         return $map[$v] ?? 'GB';
+    }
+
+    private function normalizePackageFormatIdentifier(string $value): string
+    {
+        $v = strtolower(trim($value));
+
+        $map = [
+            'letter' => 'letter',
+            'largeletter' => 'largeLetter',
+            'large_letter' => 'largeLetter',
+            'large-letter' => 'largeLetter',
+            'smallparcel' => 'smallParcel',
+            'small_parcel' => 'smallParcel',
+            'small-parcel' => 'smallParcel',
+            'mediumparcel' => 'mediumParcel',
+            'medium_parcel' => 'mediumParcel',
+            'medium-parcel' => 'mediumParcel',
+            'largeparcel' => 'largeParcel',
+            'large_parcel' => 'largeParcel',
+            'large-parcel' => 'largeParcel',
+            'parcel' => 'parcel',
+            'documents' => 'documents',
+        ];
+
+        return $map[$v] ?? 'parcel';
     }
 
     private function iso8601($value): string
