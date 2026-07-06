@@ -2591,13 +2591,52 @@ foreach ($flatSchemaFields as $idx => $fld) {
     protected function sendApprovedEmail(ConsultationSession $session): void
     {
         $order = $session->order ?? null;
-        if (! $order) return;
 
-        $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+        if (! $order) {
+            return;
+        }
 
-        // Determine if this is a weight management style service once and reuse
-        $svc = $session->service_slug ?: \Illuminate\Support\Str::slug((string) $session->service);
-        $isWeight = in_array($svc, ['weight-management', 'weight-loss', 'mounjaro', 'wegovy'], true);
+        $meta = is_array($order->meta)
+            ? $order->meta
+            : (json_decode($order->meta ?? '[]', true) ?: []);
+
+        $svc = \Illuminate\Support\Str::slug((string) (
+            $session->service_slug
+            ?: $session->service
+            ?: data_get($meta, 'service_slug')
+            ?: data_get($meta, 'service')
+            ?: ''
+        ));
+
+        $treatmentSlug = \Illuminate\Support\Str::slug((string) (
+            $session->treatment_slug
+            ?: $session->treatment
+            ?: data_get($meta, 'treatment_slug')
+            ?: data_get($meta, 'treatment')
+            ?: ''
+        ));
+
+        $isWeight = in_array($svc, [
+            'weight-management',
+            'weight-loss',
+            'mounjaro',
+            'wegovy',
+        ], true);
+
+        $isWegovyPill = $svc === 'weight-management'
+            && $treatmentSlug === 'wegovy-pill-semaglutide';
+
+        $isInjectableWeight = $isWeight && ! $isWegovyPill;
+
+        \Log::info('consultation.email.treatment_detected', [
+            'session_id'          => $session->id,
+            'order_id'            => $order->getKey(),
+            'service_slug'        => $svc,
+            'treatment_slug'      => $treatmentSlug,
+            'is_weight'           => $isWeight,
+            'is_wegovy_pill'      => $isWegovyPill,
+            'is_injectable_weight'=> $isInjectableWeight,
+        ]);
 
         $email = data_get($meta, 'email')
             ?? optional($order->patient)->email
@@ -2605,7 +2644,11 @@ foreach ($flatSchemaFields as $idx => $fld) {
             ?? optional($session->user)->email;
 
         if (! $email) {
-            Notification::make()->danger()->title('No patient email on record')->send();
+            Notification::make()
+                ->danger()
+                ->title('No patient email on record')
+                ->send();
+
             return;
         }
 
@@ -2616,20 +2659,34 @@ foreach ($flatSchemaFields as $idx => $fld) {
             ?? optional($session->user)->first_name
             ?? '';
 
-        $name = is_string($first) && trim($first) !== '' ? trim($first) : 'there';
-        $ref  = $order->reference ?? $order->getKey();
+        $name = is_string($first) && trim($first) !== ''
+            ? trim($first)
+            : 'there';
 
-        // Optional PDF attachments: Record of Supply, Invoice and weight management documents
+        $ref = $order->reference ?? $order->getKey();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Attachments
+        |--------------------------------------------------------------------------
+        */
+
         $attachments = [];
 
-        // Attach static GLP-1 guides for weight management services
+        // Only attach the injectable GLP-1 guides to Mounjaro or injectable Wegovy.
         try {
-            if ($isWeight) {
+            if ($isInjectableWeight) {
                 $guideDir = storage_path('app/public/guides/weight-management');
+
                 $files = [
-                    $guideDir . '/GLP-1 WEIGHT MANAGEMENT_ CLINICAL LIFESTYLE, NUTRITION & MOVEMENT GUIDE.docx.pdf' => 'GLP-1 Lifestyle Nutrition Movement.pdf',
-                    $guideDir . '/YOUR WEIGHT LOSS JOURNEY WITH GLP-1 MEDICATIONS – PATIENT GUIDE ON WHAT TO EXPECT.docx.pdf' => 'GLP-1 What To Expect.pdf',
-                    $guideDir . '/GLP-1 WEIGHT LOSS PROGRAMME_ PATIENT STARTER PACK & INFORMATION GUIDE ON HOW THE MEDICATION WORKS.docx.pdf' => 'GLP-1 Starter Pack.pdf',
+                    $guideDir . '/GLP-1 WEIGHT MANAGEMENT_ CLINICAL LIFESTYLE, NUTRITION & MOVEMENT GUIDE.docx.pdf'
+                        => 'GLP-1 Lifestyle Nutrition Movement.pdf',
+
+                    $guideDir . '/YOUR WEIGHT LOSS JOURNEY WITH GLP-1 MEDICATIONS – PATIENT GUIDE ON WHAT TO EXPECT.docx.pdf'
+                        => 'GLP-1 What To Expect.pdf',
+
+                    $guideDir . '/GLP-1 WEIGHT LOSS PROGRAMME_ PATIENT STARTER PACK & INFORMATION GUIDE ON HOW THE MEDICATION WORKS.docx.pdf'
+                        => 'GLP-1 Starter Pack.pdf',
                 ];
 
                 foreach ($files as $abs => $downloadName) {
@@ -2648,12 +2705,14 @@ foreach ($flatSchemaFields as $idx => $fld) {
             ]);
         }
 
-        // Also look directly in storage/app/public/consultations/{session_id} for generated PDFs
+        // Also look directly in storage/app/public/consultations/{session_id}.
         $sessionId = $session->id ?? null;
+
         if ($sessionId && $ref) {
             $baseDir = storage_path('app/public/consultations/' . $sessionId);
 
             $rosPath = $baseDir . '/' . $ref . '_supply.pdf';
+
             if (is_file($rosPath)) {
                 $attachments[] = [
                     'path' => $rosPath,
@@ -2662,6 +2721,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
             }
 
             $invPath = $baseDir . '/' . $ref . '_invoice.pdf';
+
             if (is_file($invPath)) {
                 $attachments[] = [
                     'path' => $invPath,
@@ -2669,7 +2729,8 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 ];
             }
 
-            // Notification of treatment letter for the GP – weight management services only
+            // Notification of treatment applies to all weight-management treatments,
+            // including the Wegovy pill.
             if ($isWeight) {
                 $notPaths = [
                     $baseDir . '/' . $ref . '_notification-of-treatment.pdf',
@@ -2683,34 +2744,47 @@ foreach ($flatSchemaFields as $idx => $fld) {
                             'path' => $np,
                             'name' => 'Notification-of-treatment.pdf',
                         ];
+
                         break;
                     }
                 }
             }
         }
 
-        // Helper to resolve a relative or public storage path into an absolute filesystem path
+        /*
+        |--------------------------------------------------------------------------
+        | Resolve paths stored in order metadata
+        |--------------------------------------------------------------------------
+        */
+
         $resolvePath = function ($path) {
             $path = (string) $path;
+
             if ($path === '') {
                 return null;
             }
 
-            // Skip remote URLs here
-            if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+            if (
+                str_starts_with($path, 'http://')
+                || str_starts_with($path, 'https://')
+            ) {
                 return null;
             }
 
-            // Common public storage path like /storage/consultations/...
             if (str_starts_with($path, '/storage/')) {
-                $relative = ltrim(substr($path, strlen('/storage/')), '/');
+                $relative = ltrim(
+                    substr($path, strlen('/storage/')),
+                    '/'
+                );
 
                 $candidate = public_path('storage/' . $relative);
+
                 if (is_file($candidate)) {
                     return $candidate;
                 }
 
                 $candidate = storage_path('app/public/' . $relative);
+
                 if (is_file($candidate)) {
                     return $candidate;
                 }
@@ -2718,25 +2792,28 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 return null;
             }
 
-            // Absolute path
             if (str_starts_with($path, '/')) {
                 return is_file($path) ? $path : null;
             }
 
-            // Try storage/app/public first
-            $candidate = storage_path('app/public/' . ltrim($path, '/'));
+            $candidate = storage_path(
+                'app/public/' . ltrim($path, '/')
+            );
+
             if (is_file($candidate)) {
                 return $candidate;
             }
 
-            // Fallback to storage/app
-            $candidate = storage_path('app/' . ltrim($path, '/'));
+            $candidate = storage_path(
+                'app/' . ltrim($path, '/')
+            );
+
             if (is_file($candidate)) {
                 return $candidate;
             }
 
-            // Final fallback to public
             $candidate = public_path(ltrim($path, '/'));
+
             if (is_file($candidate)) {
                 return $candidate;
             }
@@ -2744,15 +2821,18 @@ foreach ($flatSchemaFields as $idx => $fld) {
             return null;
         };
 
-        $pdfMeta = is_array($meta['pdfs'] ?? null) ? $meta['pdfs'] : [];
+        $pdfMeta = is_array($meta['pdfs'] ?? null)
+            ? $meta['pdfs']
+            : [];
 
         \Log::info('consultation.email.pdf_meta', [
             'order_id' => $order->getKey(),
             'pdf_meta' => $pdfMeta,
         ]);
 
-        if (!empty($pdfMeta['record_of_supply'])) {
+        if (! empty($pdfMeta['record_of_supply'])) {
             $abs = $resolvePath($pdfMeta['record_of_supply']);
+
             if ($abs) {
                 $attachments[] = [
                     'path' => $abs,
@@ -2761,8 +2841,9 @@ foreach ($flatSchemaFields as $idx => $fld) {
             }
         }
 
-        if (!empty($pdfMeta['invoice'])) {
+        if (! empty($pdfMeta['invoice'])) {
             $abs = $resolvePath($pdfMeta['invoice']);
+
             if ($abs) {
                 $attachments[] = [
                     'path' => $abs,
@@ -2771,18 +2852,21 @@ foreach ($flatSchemaFields as $idx => $fld) {
             }
         }
 
-        // Optional Notification of Treatment PDF – attach only for weight management services
         if ($isWeight) {
-            if (!empty($pdfMeta['notification_of_treatment'])) {
-                $abs = $resolvePath($pdfMeta['notification_of_treatment']);
+            if (! empty($pdfMeta['notification_of_treatment'])) {
+                $abs = $resolvePath(
+                    $pdfMeta['notification_of_treatment']
+                );
+
                 if ($abs) {
                     $attachments[] = [
                         'path' => $abs,
                         'name' => 'Notification-of-treatment.pdf',
                     ];
                 }
-            } elseif (!empty($pdfMeta['notification'])) {
+            } elseif (! empty($pdfMeta['notification'])) {
                 $abs = $resolvePath($pdfMeta['notification']);
+
                 if ($abs) {
                     $attachments[] = [
                         'path' => $abs,
@@ -2792,180 +2876,386 @@ foreach ($flatSchemaFields as $idx => $fld) {
             }
         }
 
-        $subject = 'Your Pharmacy Express order has been completed';
+        /*
+        |--------------------------------------------------------------------------
+        | Email content
+        |--------------------------------------------------------------------------
+        */
+
+        $subject = $isWegovyPill
+            ? 'Your Wegovy pill order has been completed'
+            : 'Your Pharmacy Express order has been completed';
 
         $safeName = e($name ?: 'there');
-        $safeRef = e((string) $ref);
+        $safeRef  = e((string) $ref);
 
-        $documentsIntro = $isWeight
-    ? 'Your order has been completed by our pharmacy team. We will email you again once your Royal Mail tracking is active. Please see the attached documents, which include your medication review, clinical consultation information and patient education guides.'
-    : 'Your order has been completed by our pharmacy team. If your order requires despatch, a Royal Mail tracking email will be sent once tracking is active. We have attached any relevant order documents where available.';
+        if ($isWegovyPill) {
+            $documentsIntro = 'Your Wegovy pill order has been completed by our pharmacy team. We will email you again once your Royal Mail tracking is active. Please read the tablet instructions below carefully before starting your treatment.';
+        } elseif ($isWeight) {
+            $documentsIntro = 'Your order has been completed by our pharmacy team. We will email you again once your Royal Mail tracking is active. Please see the attached documents, which include your medication review, clinical consultation information and patient education guides.';
+        } else {
+            $documentsIntro = 'Your order has been completed by our pharmacy team. If your order requires despatch, a Royal Mail tracking email will be sent once tracking is active. We have attached any relevant order documents where available.';
+        }
 
-    $weightSafetyHtml = '';
+        $weightSafetyHtml = '';
+        $wegovyPillButtonHtml = '';
 
-    if ($isWeight) {
-        $weightSafetyHtml = '
-        <tr>
-            <td style="padding:0 34px 26px 34px;">
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;border:1px solid rgba(18,63,64,.14);">
-                    <tr>
-                        <td style="padding:22px 24px;">
-                            <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Medication review</p>
+        /*
+        |--------------------------------------------------------------------------
+        | Wegovy pill-specific information
+        |--------------------------------------------------------------------------
+        */
 
-                            <p style="margin:0 0 8px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
-                                <strong>Dose:</strong> once weekly injection, on the same day each week.
-                            </p>
+        if ($isWegovyPill) {
+            $wegovyPillGuideUrl = 'https://imshealth.et.e.sparkpost.com/f/a/FkxRBXSi-2in0XkHszx5SQ~~/AAAAARA~/XfOjK4gRW-7NU1g0_dNNDH3-_odpfK2WueOAsY2sEdwz2MVR4gyo0LBZ_r1Co0XGehyD2GxwtArJ5XlJVv4JqyRfbd-gwzkPmi14q5wzUr1N8TZ6FZScDWP9S2D42wXUId5zp1k0qrRJB_LfwCJg0Pm5rJEfSqT9y3V3Xh5eRtDyqaUb_7YZDisutov1ODSbgYzTIybKl7H08ULVawGebD-j_7C0PhngANYpE-dxTqnCSA3sdeNYpl-xXo0I_8Owug3LGNahJD8UKTZ-6qKouf40X3iHs1MIo9AfF3wGHKQ~';
 
-                            <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
-                                <strong>Storage:</strong> keep your pen in the fridge unless advised otherwise.
-                            </p>
-
-                            <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Clinical consultation</p>
-
-                            <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
-                                Weight management consultation completed by our pharmacy team.
-                            </p>
-
-                            <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Patient education</p>
-
-                            <ul style="margin:0 0 18px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
-                                <li style="margin:0 0 8px 0;">Injection technique: once weekly subcutaneous injection, on the same day each week.</li>
-                                <li style="margin:0 0 8px 0;">Fluid intake: aim for 2-3 litres daily to help reduce the risk of constipation or diarrhoea.</li>
-                                <li style="margin:0 0 8px 0;">Side effects discussed: initial nausea and headache, which usually settle, as well as constipation or diarrhoea.</li>
-                                <li style="margin:0 0 8px 0;">Rare side effect counselling: pancreatitis symptoms, including severe abdominal pain radiating to the back, high temperature or vomiting. Seek medical advice immediately if these occur.</li>
-                                <li style="margin:0 0 8px 0;">Dosing schedule: start with your current strength and reorder at the end of week three via the website for your next dose.</li>
-                                <li style="margin:0;">Your next dose may go down, go up or remain the same depending on clinical suitability and your progress. You can remain on your current strength if it is effective and weight loss is being achieved.</li>
-                            </ul>
-
-                            <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Important safety information</p>
-
-                            <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
-                                Pancreatitis, which is inflammation of the pancreas, is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports, this can have serious or fatal outcomes.
-                            </p>
-
-                            <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
-                                Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.
-                            </p>
-
-                            <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
-                                Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
-                            </p>
-
-                            <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Plan</p>
-
-                            <ul style="margin:0 0 18px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
-                                <li style="margin:0 0 8px 0;">Your order will be dispatched today or tomorrow at the latest.</li>
-                                <li style="margin:0 0 8px 0;">We will send you a separate Royal Mail despatch email once tracking is active.</li>
-                                <li style="margin:0 0 8px 0;">Please reorder via the website at the end of week three for your next dose.</li>
-                                <li style="margin:0;">Continue your current strength if it is effective and weight loss is being achieved.</li>
-                            </ul>
-
-                            <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
-                                If you have any questions or experience any issues, please contact us by email or via WhatsApp through our website.
-                            </p>
-                        </td>
-                    </tr>
-                </table>
-            </td>
-        </tr>';
-    }
-
-        $body = '<!doctype html>
-    <html>
-    <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <title>' . e($subject) . '</title>
-    </head>
-    <body style="margin:0;padding:0;background:#f6f6f4;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;margin:0;padding:32px 12px;">
-        <tr>
-        <td align="center">
-            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid rgba(18,63,64,.14);">
-            <tr>
-                <td style="background:#123f40;padding:34px 34px 30px 34px;border-bottom:4px solid #10c7a4;">
-                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.20em;text-transform:uppercase;color:#10c7a4;font-weight:700;">Pharmacy Express</p>
-                <h1 style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:34px;line-height:38px;color:#ffffff;font-weight:800;letter-spacing:-.05em;">Order completed</h1>
-                <p style="margin:14px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:24px;color:rgba(255,255,255,.72);">Your order has been completed by our pharmacy team.</p>
-                </td>
-            </tr>
-            <tr>
-                <td style="padding:34px 34px 10px 34px;">
-                <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">Hi ' . $safeName . ',</p>
-                <p style="margin:0 0 14px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">Your Pharmacy Express order <strong style="color:#123f40;">' . $safeRef . '</strong> has been completed by our pharmacy team.</p>
-
-                <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:24px;color:#334155;">' . e($documentsIntro) . '</p>
-                </td>
-            </tr>
-            ' . $weightSafetyHtml . '
+            $safeWegovyPillGuideUrl = e($wegovyPillGuideUrl);
+            $wegovyPillButtonHtml = '
             <tr>
                 <td style="padding:0 34px 26px 34px;">
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#123f40;">
-                    <tr>
-                    <td style="padding:22px 24px;">
-                        <p style="margin:0 0 10px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#10c7a4;font-weight:700;">Order reference</p>
-                        <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:25px;line-height:31px;color:#ffffff;font-weight:800;letter-spacing:.02em;">' . $safeRef . '</p>
-                        <p style="margin:12px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:21px;color:rgba(255,255,255,.72);">Please keep this reference safe in case you need to contact us about your order.</p>
-                    </td>
-                    </tr>
-                </table>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef8f3;border:1px solid rgba(18,63,64,.16);">
+                        <tr>
+                            <td style="padding:24px;text-align:center;">
+                                <p style="margin:0 0 16px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:24px;color:#334155;">
+                                    For more information, click the button below.
+                                </p>
+
+                                <a
+                                    href="' . $safeWegovyPillGuideUrl . '"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style="display:inline-block;background:#123f40;color:#ffffff;padding:17px 34px;text-decoration:none;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:18px;line-height:24px;font-weight:700;"
+                                >
+                                    Check guide on Wegovy pill
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
                 </td>
-            </tr>
+            </tr>';
+
+            $weightSafetyHtml = '
             <tr>
-                <td style="padding:0 34px 32px 34px;">
-                <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:22px;color:#64748b;">This email confirms that your order has been completed. Please read all attached documents carefully before using your medication.</p>
+                <td style="padding:0 34px 26px 34px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;border:1px solid rgba(18,63,64,.14);">
+                        <tr>
+                            <td style="padding:22px 24px;">
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    How to use Wegovy weight loss pills
+                                </p>
+
+                                <p style="margin:0 0 14px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Swallowing a tablet may sound simple, but the Wegovy pill needs to be taken correctly so your body can absorb it properly.
+                                </p>
+
+                                <ul style="margin:0 0 20px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    <li style="margin:0 0 8px 0;">Take it once daily, first thing in the morning.</li>
+                                    <li style="margin:0 0 8px 0;">Take it on an empty stomach after fasting overnight.</li>
+                                    <li style="margin:0 0 8px 0;">Take it with no more than 120ml of plain water.</li>
+                                    <li style="margin:0 0 8px 0;">Swallow it whole without splitting, crushing or chewing the tablet.</li>
+                                    <li style="margin:0 0 8px 0;">Wait at least 30 minutes before eating or drinking anything other than water.</li>
+                                    <li style="margin:0;">Wait at least 30 minutes before taking any other oral medicines.</li>
+                                </ul>
+
+                                <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    If you miss a dose, skip it and take your next tablet at the usual time the following day. Do not take two doses together to make up for a missed tablet.
+                                </p>
+
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    How does Wegovy pill dose escalation work?
+                                </p>
+
+                                <p style="margin:0 0 14px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Treatment starts at a low dose and increases gradually to help your body adjust and reduce side effects.
+                                </p>
+
+                                <ul style="margin:0 0 20px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    <li style="margin:0 0 8px 0;"><strong>Weeks 1–4:</strong> 1.5mg once daily.</li>
+                                    <li style="margin:0 0 8px 0;"><strong>Weeks 5–8:</strong> 4mg once daily.</li>
+                                    <li style="margin:0 0 8px 0;"><strong>Weeks 9–12:</strong> 9mg once daily.</li>
+                                    <li style="margin:0;"><strong>Week 13 onwards:</strong> 25mg once daily maintenance dose.</li>
+                                </ul>
+
+                                <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    You may stay on a dose for longer if side effects do not settle. Always take the strength prescribed by your clinician. Taking a higher dose than recommended will not speed up weight loss and may increase side effects.
+                                </p>
+
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    Can I take other medicines alongside the Wegovy pill?
+                                </p>
+
+                                <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Most medicines can be taken alongside Wegovy tablets, but oral medicines should usually be taken at least 30 minutes afterwards. Semaglutide can slow stomach emptying, and vomiting or diarrhoea may affect how well some medicines are absorbed.
+                                </p>
+
+                                <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Extra care may be needed with warfarin or other oral anticoagulants, levothyroxine for thyroid disease and oral contraceptive pills if vomiting occurs within 3–4 hours of taking them. Always tell your clinician about every medicine you take before starting treatment.
+                                </p>
+
+                                <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Wegovy tablets should not be taken alongside other GLP-1 receptor agonists or prescription weight loss medicines such as Mounjaro or Wegovy injections.
+                                </p>
+
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    Important safety information
+                                </p>
+
+                                <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea or vomiting, as this may be a sign of pancreatitis.
+                                </p>
+
+                                <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    If pancreatitis is confirmed, do not restart Wegovy or another GLP-1 treatment unless advised by an appropriate clinician.
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
                 </td>
-            </tr>
+            </tr>';
+        } elseif ($isWeight) {
+            /*
+            |--------------------------------------------------------------------------
+            | Injectable Mounjaro and Wegovy information
+            |--------------------------------------------------------------------------
+            */
+
+            $weightSafetyHtml = '
+            <tr>
+                <td style="padding:0 34px 26px 34px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;border:1px solid rgba(18,63,64,.14);">
+                        <tr>
+                            <td style="padding:22px 24px;">
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    Medication review
+                                </p>
+
+                                <p style="margin:0 0 8px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    <strong>Dose:</strong> once weekly injection, on the same day each week.
+                                </p>
+
+                                <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    <strong>Storage:</strong> keep your pen in the fridge unless advised otherwise.
+                                </p>
+
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    Clinical consultation
+                                </p>
+
+                                <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Weight management consultation completed by our pharmacy team.
+                                </p>
+
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    Patient education
+                                </p>
+
+                                <ul style="margin:0 0 18px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    <li style="margin:0 0 8px 0;">Injection technique: once weekly subcutaneous injection, on the same day each week.</li>
+                                    <li style="margin:0 0 8px 0;">Fluid intake: aim for 2–3 litres daily to help reduce the risk of constipation or diarrhoea.</li>
+                                    <li style="margin:0 0 8px 0;">Side effects discussed: initial nausea and headache, which usually settle, as well as constipation or diarrhoea.</li>
+                                    <li style="margin:0 0 8px 0;">Rare side effect counselling: pancreatitis symptoms, including severe abdominal pain radiating to the back, high temperature or vomiting. Seek medical advice immediately if these occur.</li>
+                                    <li style="margin:0 0 8px 0;">Dosing schedule: start with your current strength and reorder at the end of week three via the website for your next dose.</li>
+                                    <li style="margin:0;">Your next dose may go down, go up or remain the same depending on clinical suitability and your progress. You can remain on your current strength if it is effective and weight loss is being achieved.</li>
+                                </ul>
+
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    Important safety information
+                                </p>
+
+                                <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Pancreatitis, which is inflammation of the pancreas, is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports, this can have serious or fatal outcomes.
+                                </p>
+
+                                <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.
+                                </p>
+
+                                <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
+                                </p>
+
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    Plan
+                                </p>
+
+                                <ul style="margin:0 0 18px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    <li style="margin:0 0 8px 0;">Your order will be dispatched today or tomorrow at the latest.</li>
+                                    <li style="margin:0 0 8px 0;">We will send you a separate Royal Mail despatch email once tracking is active.</li>
+                                    <li style="margin:0 0 8px 0;">Please reorder via the website at the end of week three for your next dose.</li>
+                                    <li style="margin:0;">Continue your current strength if it is effective and weight loss is being achieved.</li>
+                                </ul>
+
+                                <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    If you have any questions or experience any issues, please contact us by email or via WhatsApp through our website.
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>';
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Main email template
+        |--------------------------------------------------------------------------
+        */
+
+        $body = '<!doctype html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+
+            <link rel="preconnect" href="https://fonts.googleapis.com">
+            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+            <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+            <title>' . e($subject) . '</title>
+        </head>
+
+        <body style="margin:0;padding:0;background:#f6f6f4;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;margin:0;padding:32px 12px;">
+                <tr>
+                    <td align="center">
+                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid rgba(18,63,64,.14);">
+                            <tr>
+                                <td style="background:#123f40;padding:34px 34px 30px 34px;border-bottom:4px solid #10c7a4;">
+                                    <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.20em;text-transform:uppercase;color:#10c7a4;font-weight:700;">
+                                        Pharmacy Express
+                                    </p>
+
+                                    <h1 style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:34px;line-height:38px;color:#ffffff;font-weight:800;letter-spacing:-.05em;">
+                                        Order completed
+                                    </h1>
+
+                                    <p style="margin:14px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:24px;color:rgba(255,255,255,.72);">
+                                        Your order has been completed by our pharmacy team.
+                                    </p>
+                                </td>
+                            </tr>
+
+                            <tr>
+                                <td style="padding:34px 34px 10px 34px;">
+                                    <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">
+                                        Hi ' . $safeName . ',
+                                    </p>
+
+                                    <p style="margin:0 0 14px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">
+                                        Your Pharmacy Express order
+                                        <strong style="color:#123f40;">' . $safeRef . '</strong>
+                                        has been completed by our pharmacy team.
+                                    </p>
+
+                                    <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:24px;color:#334155;">
+                                        ' . e($documentsIntro) . '
+                                    </p>
+                                </td>
+                            </tr>
+
+                            ' . $weightSafetyHtml . '
+                            ' . $wegovyPillButtonHtml . '
+
+                            <tr>
+                                <td style="padding:0 34px 26px 34px;">
+                                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#123f40;">
+                                        <tr>
+                                            <td style="padding:22px 24px;">
+                                                <p style="margin:0 0 10px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#10c7a4;font-weight:700;">
+                                                    Order reference
+                                                </p>
+
+                                                <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:25px;line-height:31px;color:#ffffff;font-weight:800;letter-spacing:.02em;">
+                                                    ' . $safeRef . '
+                                                </p>
+
+                                                <p style="margin:12px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:21px;color:rgba(255,255,255,.72);">
+                                                    Please keep this reference safe in case you need to contact us about your order.
+                                                </p>
+                                            </td>
+                                        </tr>
+                                    </table>
+                                </td>
+                            </tr>
+
+                            <tr>
+                                <td style="padding:0 34px 32px 34px;">
+                                    <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:22px;color:#64748b;">
+                                        This email confirms that your order has been completed. Please read all attached documents and treatment instructions carefully before using your medication.
+                                    </p>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
             </table>
-        </td>
-        </tr>
-    </table>
-    </body>
-    </html>';
+        </body>
+        </html>';
+
+        /*
+        |--------------------------------------------------------------------------
+        | Send email
+        |--------------------------------------------------------------------------
+        */
 
         try {
-            $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
-            $fromName    = config('mail.from.name') ?: 'Safescript Pharmacy';
+            $fromAddress = config('mail.from.address')
+                ?: 'info@safescript.co.uk';
 
-            Mail::html($body, function ($m) use ($email, $subject, $fromAddress, $fromName, $attachments, $order) {
-                $m->from($fromAddress, $fromName)
-                    ->to($email)
-                    ->bcc('pharmacy-express.co.uk+567109c4b1@invite.trustpilot.com')
-                    ->subject($subject);
+            $fromName = config('mail.from.name')
+                ?: 'Safescript Pharmacy';
 
-                // Attach any resolved PDFs
-                \Log::info('consultation.email.attachments_start', [
-                    'email'       => $email,
-                    'order_id'    => $order->getKey(),
-                    'count'       => count($attachments),
-                    'attachments' => $attachments,
-                ]);
+            Mail::html(
+                $body,
+                function ($m) use (
+                    $email,
+                    $subject,
+                    $fromAddress,
+                    $fromName,
+                    $attachments,
+                    $order
+                ) {
+                    $m->from($fromAddress, $fromName)
+                        ->to($email)
+                        ->bcc('pharmacy-express.co.uk+567109c4b1@invite.trustpilot.com')
+                        ->subject($subject);
 
-                foreach ($attachments as $att) {
-                    $exists = !empty($att['path']) && is_file($att['path']);
-
-                    \Log::info('consultation.email.attach_try', [
-                        'email'    => $email,
-                        'order_id' => $order->getKey(),
-                        'path'     => $att['path'] ?? null,
-                        'exists'   => $exists,
+                    \Log::info('consultation.email.attachments_start', [
+                        'email'       => $email,
+                        'order_id'    => $order->getKey(),
+                        'count'       => count($attachments),
+                        'attachments' => $attachments,
                     ]);
 
-                    if ($exists) {
-                        $m->attach($att['path'], [
-                            'as'   => $att['name'] ?? basename($att['path']),
-                            'mime' => 'application/pdf',
+                    foreach ($attachments as $att) {
+                        $exists = ! empty($att['path'])
+                            && is_file($att['path']);
+
+                        \Log::info('consultation.email.attach_try', [
+                            'email'    => $email,
+                            'order_id' => $order->getKey(),
+                            'path'     => $att['path'] ?? null,
+                            'exists'   => $exists,
                         ]);
+
+                        if ($exists) {
+                            $m->attach($att['path'], [
+                                'as'   => $att['name']
+                                    ?? basename($att['path']),
+                                'mime' => 'application/pdf',
+                            ]);
+                        }
                     }
                 }
-            });
+            );
 
-            Notification::make()->success()->title('Processed order email sent to ' . $email)->send();
+            Notification::make()
+                ->success()
+                ->title('Processed order email sent to ' . $email)
+                ->send();
         } catch (\Throwable $e) {
-            Notification::make()->danger()
+            Notification::make()
+                ->danger()
                 ->title('Could not send completed order email')
                 ->body(substr($e->getMessage(), 0, 200))
                 ->send();
