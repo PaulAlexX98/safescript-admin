@@ -3200,10 +3200,10 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
         try {
             $fromAddress = config('mail.from.address')
-                ?: 'info@safescript.co.uk';
+                ?: 'info@pharmacy-express.co.uk';
 
             $fromName = config('mail.from.name')
-                ?: 'Safescript Pharmacy';
+                ?: 'Pharmacy Express';
 
             Mail::html(
                 $body,
