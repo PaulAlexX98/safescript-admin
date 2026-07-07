@@ -2624,7 +2624,10 @@ foreach ($flatSchemaFields as $idx => $fld) {
         ], true);
 
         $isWegovyPill = $svc === 'weight-management'
-            && $treatmentSlug === 'wegovy-pill-semaglutide';
+            && in_array($treatmentSlug, [
+                'wegovy-pill-semaglutide',
+                'wegovy-pill-semaglutide-pre-order',
+            ], true);
 
         $isInjectableWeight = $isWeight && ! $isWegovyPill;
 
