@@ -8,8 +8,18 @@ class ZplLabelBuilder
 {
     public function forOrder(array $data): string
     {
-        $line1      = mb_strtoupper(trim($data['line1'] ?? ''));
-        $directions = trim($data['directions'] ?? 'Use once a week same day as directed');
+        $line1 = mb_strtoupper(trim($data['line1'] ?? ''));
+
+        $isWegovyPill = str_contains($line1, 'WEGOVY')
+            && (str_contains($line1, 'TABLET') || str_contains($line1, 'PILL'));
+
+        $defaultDirections = $isWegovyPill
+            ? 'Take one tablet once daily as directed'
+            : 'Use once a week same day as directed';
+
+        $directions = $isWegovyPill
+            ? $defaultDirections
+            : trim($data['directions'] ?? $defaultDirections);
         $warning    = trim((string) ($data['warning'] ?? ''));
         $bottomWarning = 'Keep out of the reach and sight of children';
         $patient    = trim($data['patient'] ?? '');
