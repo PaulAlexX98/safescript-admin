@@ -2886,8 +2886,8 @@ foreach ($flatSchemaFields as $idx => $fld) {
         */
 
         $subject = $isWegovyPill
-            ? 'Your Wegovy pill order has been completed'
-            : 'Your Pharmacy Express order has been completed';
+            ? 'Your Wegovy pill order has been completed – ' . $ref
+            : 'Your Pharmacy Express order has been completed – ' . $ref;
 
         $safeName = e($name ?: 'there');
         $safeRef  = e((string) $ref);
