@@ -17,6 +17,8 @@ use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema as SchemaFacade;
 use Illuminate\Support\Str;
+use App\Models\Order;
+use App\Models\PendingOrder;
 
 class WalkInForm
 {
@@ -136,8 +138,452 @@ class WalkInForm
                                         $set('country', $patient->country ?: $user?->country ?: $user?->shipping_country ?: 'United Kingdom');
                                     })
                                     ->columnSpan(10),
-                                
+                                                                  Placeholder::make('order_history')
+                                  ->label('Order history')
+                                  ->content(function (callable $get): HtmlString {
+                                      $patientId = $get('patient_id');
+
+                                      if (! $patientId) {
+                                          return new HtmlString('<div style="font-size:14px;color:#9ca3af;">Search for and select a patient to view their order history.</div>');
+                                      }
+
+                                      $patient = Patient::query()->with('user')->find($patientId);
+
+                                      if (! $patient) {
+                                          return new HtmlString('<div style="font-size:14px;color:#9ca3af;">Patient record not found.</div>');
+                                      }
+
+                                      $userId = $patient->user_id ?: $patient->user?->id;
+
+                                      $query = Order::query()
+                                          ->where('status', 'completed')
+                                          ->where(function ($where) use ($userId, $patientId): void {
+                                              if ($userId) {
+                                                  $where
+                                                      ->orWhere('user_id', $userId)
+                                                      ->orWhereRaw("JSON_EXTRACT(meta, '$.user_id') = ?", [$userId])
+                                                      ->orWhereRaw("JSON_EXTRACT(meta, '$.user.id') = ?", [$userId]);
+                                              }
+
+                                              if ($patientId && SchemaFacade::hasColumn('orders', 'patient_id')) {
+                                                  $where
+                                                      ->orWhere('patient_id', $patientId)
+                                                      ->orWhereRaw("JSON_EXTRACT(meta, '$.patient_id') = ?", [$patientId])
+                                                      ->orWhereRaw("JSON_EXTRACT(meta, '$.patient.id') = ?", [$patientId]);
+                                              }
+                                          });
+
+                                      $orders = $query->latest('id')->limit(25)->get();
+
+                                      if ($orders->isEmpty()) {
+                                          return new HtmlString('<div style="font-size:14px;color:#9ca3af;">No completed orders were found for this patient.</div>');
+                                      }
+
+                                      $money = function (Order $order): string {
+                                          if (isset($order->products_total_minor) && is_numeric($order->products_total_minor)) {
+                                              return '£' . number_format(((int) $order->products_total_minor) / 100, 2);
+                                          }
+
+                                          $meta = is_array($order->meta)
+                                              ? $order->meta
+                                              : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                                          $value = data_get($meta, 'products_total_minor')
+                                              ?? data_get($meta, 'totalMinor')
+                                              ?? data_get($meta, 'amountMinor');
+
+                                          if (is_numeric($value)) {
+                                              return '£' . number_format(((int) $value) / 100, 2);
+                                          }
+
+                                          $sum = 0;
+
+                                          foreach ((array) (data_get($meta, 'items') ?? data_get($meta, 'lines') ?? []) as $item) {
+                                              if (! is_array($item)) {
+                                                  continue;
+                                              }
+
+                                              $quantity = (int) ($item['qty'] ?? $item['quantity'] ?? 1) ?: 1;
+                                              $minor = $item['totalMinor'] ?? $item['lineTotalMinor'] ?? $item['amountMinor'] ?? null;
+
+                                              if ($minor === null && isset($item['unitMinor'])) {
+                                                  $minor = (int) $item['unitMinor'] * $quantity;
+                                              }
+
+                                              if (is_numeric($minor)) {
+                                                  $sum += (int) $minor;
+                                              }
+                                          }
+
+                                          return $sum > 0 ? '£' . number_format($sum / 100, 2) : '—';
+                                      };
+
+                                      $itemsSummary = function (Order $order): string {
+                                          $meta = is_array($order->meta)
+                                              ? $order->meta
+                                              : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                                          $candidates = [
+                                              data_get($meta, 'items'),
+                                              data_get($meta, 'lines'),
+                                              data_get($meta, 'products'),
+                                              data_get($meta, 'line_items'),
+                                          ];
+
+                                          $items = collect($candidates)
+                                              ->first(fn ($candidate) => is_array($candidate) && count($candidate)) ?? [];
+
+                                          if (empty($items)) {
+                                              $name = data_get($meta, 'product_name') ?? data_get($meta, 'selectedProduct.name');
+
+                                              if (! $name) {
+                                                  return '—';
+                                              }
+
+                                              $quantity = (int) (data_get($meta, 'qty') ?? data_get($meta, 'quantity') ?? 1) ?: 1;
+                                              $option = data_get($meta, 'selectedProduct.variations')
+                                                  ?? data_get($meta, 'selectedProduct.optionLabel')
+                                                  ?? data_get($meta, 'variant')
+                                                  ?? data_get($meta, 'dose')
+                                                  ?? data_get($meta, 'strength');
+
+                                              if (is_array($option)) {
+                                                  $option = $option['label'] ?? $option['value'] ?? '';
+                                              }
+
+                                              return e(trim("{$quantity} × {$name}" . ($option ? " {$option}" : '')));
+                                          }
+
+                                          $labels = [];
+
+                                          foreach ($items as $item) {
+                                              if (! is_array($item)) {
+                                                  continue;
+                                              }
+
+                                              $quantity = (int) ($item['qty'] ?? $item['quantity'] ?? 1) ?: 1;
+                                              $name = $item['name'] ?? $item['title'] ?? $item['product_name'] ?? 'Item';
+                                              $option = data_get($item, 'variations')
+                                                  ?? data_get($item, 'variation')
+                                                  ?? data_get($item, 'optionLabel')
+                                                  ?? data_get($item, 'variant')
+                                                  ?? data_get($item, 'dose')
+                                                  ?? data_get($item, 'strength')
+                                                  ?? data_get($item, 'option');
+
+                                              if (is_array($option)) {
+                                                  $option = $option['label']
+                                                      ?? $option['value']
+                                                      ?? implode(' ', array_filter(array_map('strval', $option)));
+                                              }
+
+                                              $labels[] = e(trim("{$quantity} × {$name}" . ($option ? " {$option}" : '')));
+
+                                              if (count($labels) >= 2) {
+                                                  break;
+                                              }
+                                          }
+
+                                          $html = implode('<br>', $labels);
+                                          $remaining = max(0, count($items) - 2);
+
+                                          if ($remaining) {
+                                              $html .= '<br><span class="oh-more">+' . $remaining . ' more</span>';
+                                          }
+
+                                          return $html ?: '—';
+                                      };
+
+                                      // Helper to extract a measurement value from answer containers
+                                      $extractMeasurementFromAnswers = function ($answers, $keys) {
+                                          if (!is_array($answers)) return null;
+                                          foreach ($keys as $key) {
+                                              $val = data_get($answers, $key);
+                                              if ($val !== null && trim((string)$val) !== '') {
+                                                  return trim((string)$val);
+                                              }
+                                          }
+                                          // Also check for direct key in root if answers is associative
+                                          if (array_values($answers) !== $answers) {
+                                              foreach ($keys as $key) {
+                                                  if (isset($answers[$key]) && trim((string)$answers[$key]) !== '') {
+                                                      return trim((string)$answers[$key]);
+                                                  }
+                                              }
+                                          }
+                                          return null;
+                                      };
+
+                                      // Helper to extract from ConsultationFormResponse fallback
+                                      $extractFromFormResponses = function ($sessionId, $keys, $types) use ($extractMeasurementFromAnswers) {
+                                          if (!$sessionId) return null;
+                                          $responses = \App\Models\ConsultationFormResponse::where('consultation_session_id', $sessionId)
+                                              ->whereIn('form_type', $types)
+                                              ->orderByDesc('updated_at')
+                                              ->get();
+                                          foreach ($responses as $resp) {
+                                              $data = is_array($resp->data) ? $resp->data : (json_decode($resp->data ?? '[]', true) ?: []);
+                                              $val = $extractMeasurementFromAnswers($data, $keys);
+                                              if ($val !== null && $val !== '') {
+                                                  return $val;
+                                              }
+                                          }
+                                          return null;
+                                      };
+
+                                      $weightFromOrder = function (Order $order) use ($extractMeasurementFromAnswers, $extractFromFormResponses) {
+                                          $meta = is_array($order->meta)
+                                              ? $order->meta
+                                              : (json_decode($order->meta ?? '[]', true) ?: []);
+                                          // Direct meta keys (unchanged, always first priority)
+                                          $directValues = [
+                                              data_get($meta, 'weight'),
+                                              data_get($meta, 'weight_kg'),
+                                              data_get($meta, 'current_weight'),
+                                              data_get($meta, 'body_weight'),
+                                              data_get($meta, 'patient_weight'),
+                                              data_get($meta, 'raf.weight'),
+                                              data_get($meta, 'raf.weight_kg'),
+                                              data_get($meta, 'riskAssessment.weight'),
+                                              data_get($meta, 'riskAssessment.weight_kg'),
+                                          ];
+                                          foreach ($directValues as $value) {
+                                              if ($value === null) continue;
+                                              $output = trim((string)$value);
+                                              if ($output !== '') return e($output);
+                                          }
+                                          // QA fallback (unchanged)
+                                          $questions = data_get($meta, 'formsQA.raf.qa');
+                                          if (is_array($questions)) {
+                                              foreach ($questions as $row) {
+                                                  $key = strtolower(trim((string) ($row['key'] ?? '')));
+                                                  $question = strtolower(trim((string) ($row['question'] ?? '')));
+                                                  $isWeight = (str_contains($key, 'weight') || str_contains($question, 'weight'))
+                                                      && ! str_contains($key, 'target')
+                                                      && ! str_contains($key, 'goal')
+                                                      && ! str_contains($question, 'target')
+                                                      && ! str_contains($question, 'goal');
+                                                  if (! $isWeight) continue;
+                                                  $answer = $row['answer'] ?? $row['raw'] ?? null;
+                                                  if ($answer === null) continue;
+                                                  $output = is_array($answer)
+                                                      ? trim(implode(', ', array_filter(array_map('strval', $answer))))
+                                                      : trim((string) $answer);
+                                                  if ($output !== '') return e($output);
+                                              }
+                                          }
+                                          // Begin new: consultation session fallback
+                                          $orderMeta = $meta;
+                                          $sessionId = data_get($orderMeta, 'consultation_session_id');
+                                          if ($sessionId) {
+                                              $session = \App\Models\ConsultationSession::find($sessionId);
+                                              if ($session && $session->meta) {
+                                                  $sessionMeta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
+                                                  $answerContainers = [
+                                                      data_get($sessionMeta, 'forms.reorder.answers'),
+                                                      data_get($sessionMeta, 'formsQA.reorder'),
+                                                      data_get($sessionMeta, 'forms_qa.reorder'),
+                                                      data_get($sessionMeta, 'forms.risk_assessment.answers'),
+                                                      data_get($sessionMeta, 'forms.risk-assessment.answers'),
+                                                      data_get($sessionMeta, 'forms.raf.answers'),
+                                                      data_get($sessionMeta, 'formsQA.risk_assessment'),
+                                                      data_get($sessionMeta, 'formsQA.risk-assessment'),
+                                                      data_get($sessionMeta, 'formsQA.raf'),
+                                                      data_get($sessionMeta, 'forms_qa.risk_assessment'),
+                                                      data_get($sessionMeta, 'forms_qa.risk-assessment'),
+                                                      data_get($sessionMeta, 'forms_qa.raf'),
+                                                  ];
+                                                  $weightKeys = ['weight', 'weight_kg', 'current_weight', 'weightkg', 'body_weight', 'your_weight'];
+                                                  foreach ($answerContainers as $answers) {
+                                                      $val = $extractMeasurementFromAnswers($answers, $weightKeys);
+                                                      if ($val !== null && $val !== '') return e($val);
+                                                  }
+                                              }
+                                              // Final fallback: ConsultationFormResponse
+                                              $weightKeys = ['weight', 'weight_kg', 'current_weight', 'weightkg', 'body_weight', 'your_weight'];
+                                              $formTypes = ['reorder', 'raf', 'risk_assessment', 'risk-assessment', 'risk'];
+                                              $val = $extractFromFormResponses($sessionId, $weightKeys, $formTypes);
+                                              if ($val !== null && $val !== '') return e($val);
+                                          }
+                                          return '—';
+                                      };
+
+                                      $heightFromOrder = function (Order $order) use ($extractMeasurementFromAnswers, $extractFromFormResponses) {
+                                          $meta = is_array($order->meta)
+                                              ? $order->meta
+                                              : (json_decode($order->meta ?? '[]', true) ?: []);
+                                          // Direct meta keys (unchanged, always first priority)
+                                          $directValues = [
+                                              data_get($meta, 'height'),
+                                              data_get($meta, 'height_cm'),
+                                              data_get($meta, 'current_height'),
+                                              data_get($meta, 'body_height'),
+                                              data_get($meta, 'patient_height'),
+                                              data_get($meta, 'raf.height'),
+                                              data_get($meta, 'raf.height_cm'),
+                                              data_get($meta, 'riskAssessment.height'),
+                                              data_get($meta, 'riskAssessment.height_cm'),
+                                          ];
+                                          foreach ($directValues as $value) {
+                                              if ($value === null) continue;
+                                              $output = trim((string)$value);
+                                              if ($output !== '') return e($output);
+                                          }
+                                          // QA fallback (unchanged)
+                                          $questions = data_get($meta, 'formsQA.raf.qa');
+                                          if (is_array($questions)) {
+                                              foreach ($questions as $row) {
+                                                  $key = strtolower(trim((string) ($row['key'] ?? '')));
+                                                  $question = strtolower(trim((string) ($row['question'] ?? '')));
+                                                  $isHeight = (str_contains($key, 'height') || str_contains($question, 'height'))
+                                                      && ! str_contains($key, 'target')
+                                                      && ! str_contains($key, 'goal')
+                                                      && ! str_contains($question, 'target')
+                                                      && ! str_contains($question, 'goal');
+                                                  if (! $isHeight) continue;
+                                                  $answer = $row['answer'] ?? $row['raw'] ?? null;
+                                                  if ($answer === null) continue;
+                                                  $output = is_array($answer)
+                                                      ? trim(implode(', ', array_filter(array_map('strval', $answer))))
+                                                      : trim((string) $answer);
+                                                  if ($output !== '') return e($output);
+                                              }
+                                          }
+                                          // Begin new: consultation session fallback
+                                          $orderMeta = $meta;
+                                          $sessionId = data_get($orderMeta, 'consultation_session_id');
+                                          if ($sessionId) {
+                                              $session = \App\Models\ConsultationSession::find($sessionId);
+                                              if ($session && $session->meta) {
+                                                  $sessionMeta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
+                                                  $answerContainers = [
+                                                      data_get($sessionMeta, 'forms.reorder.answers'),
+                                                      data_get($sessionMeta, 'formsQA.reorder'),
+                                                      data_get($sessionMeta, 'forms_qa.reorder'),
+                                                      data_get($sessionMeta, 'forms.risk_assessment.answers'),
+                                                      data_get($sessionMeta, 'forms.risk-assessment.answers'),
+                                                      data_get($sessionMeta, 'forms.raf.answers'),
+                                                      data_get($sessionMeta, 'formsQA.risk_assessment'),
+                                                      data_get($sessionMeta, 'formsQA.risk-assessment'),
+                                                      data_get($sessionMeta, 'formsQA.raf'),
+                                                      data_get($sessionMeta, 'forms_qa.risk_assessment'),
+                                                      data_get($sessionMeta, 'forms_qa.risk-assessment'),
+                                                      data_get($sessionMeta, 'forms_qa.raf'),
+                                                  ];
+                                                  $heightKeys = ['height', 'height_cm', 'current_height', 'heightcm', 'body_height', 'your_height'];
+                                                  foreach ($answerContainers as $answers) {
+                                                      $val = $extractMeasurementFromAnswers($answers, $heightKeys);
+                                                      if ($val !== null && $val !== '') return e($val);
+                                                  }
+                                              }
+                                              // Final fallback: ConsultationFormResponse
+                                              $heightKeys = ['height', 'height_cm', 'current_height', 'heightcm', 'body_height', 'your_height'];
+                                              $formTypes = ['reorder', 'raf', 'risk_assessment', 'risk-assessment', 'risk'];
+                                              $val = $extractFromFormResponses($sessionId, $heightKeys, $formTypes);
+                                              if ($val !== null && $val !== '') return e($val);
+                                          }
+                                          return '—';
+                                      };
+
+                                      $bmiFromOrder = function (Order $order) use ($extractMeasurementFromAnswers, $extractFromFormResponses) {
+                                          $meta = is_array($order->meta)
+                                              ? $order->meta
+                                              : (json_decode($order->meta ?? '[]', true) ?: []);
+                                          // Direct meta keys (unchanged, always first priority)
+                                          $directValues = [
+                                              data_get($meta, 'bmi'),
+                                              data_get($meta, 'BMI'),
+                                              data_get($meta, 'body_mass_index'),
+                                              data_get($meta, 'body-mass-index'),
+                                              data_get($meta, 'current_bmi'),
+                                              data_get($meta, 'patient_bmi'),
+                                              data_get($meta, 'raf.bmi'),
+                                              data_get($meta, 'riskAssessment.bmi'),
+                                          ];
+                                          foreach ($directValues as $value) {
+                                              if ($value === null) continue;
+                                              $output = trim((string)$value);
+                                              if ($output !== '') return e($output);
+                                          }
+                                          // QA fallback (unchanged)
+                                          $questions = data_get($meta, 'formsQA.raf.qa');
+                                          if (is_array($questions)) {
+                                              foreach ($questions as $row) {
+                                                  $key = strtolower(trim((string) ($row['key'] ?? '')));
+                                                  $question = strtolower(trim((string) ($row['question'] ?? '')));
+                                                  $isBmi = $key === 'bmi'
+                                                      || str_contains($key, 'body_mass_index')
+                                                      || str_contains($key, 'body-mass-index')
+                                                      || preg_match('/\bbmi\b/', $question)
+                                                      || str_contains($question, 'body mass index');
+                                                  if (! $isBmi) continue;
+                                                  $answer = $row['answer'] ?? $row['raw'] ?? null;
+                                                  if ($answer === null) continue;
+                                                  $output = is_array($answer)
+                                                      ? trim(implode(', ', array_filter(array_map('strval', $answer))))
+                                                      : trim((string) $answer);
+                                                  if ($output !== '') return e($output);
+                                              }
+                                          }
+                                          // Begin new: consultation session fallback
+                                          $orderMeta = $meta;
+                                          $sessionId = data_get($orderMeta, 'consultation_session_id');
+                                          if ($sessionId) {
+                                              $session = \App\Models\ConsultationSession::find($sessionId);
+                                              if ($session && $session->meta) {
+                                                  $sessionMeta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
+                                                  $answerContainers = [
+                                                      data_get($sessionMeta, 'forms.reorder.answers'),
+                                                      data_get($sessionMeta, 'formsQA.reorder'),
+                                                      data_get($sessionMeta, 'forms_qa.reorder'),
+                                                      data_get($sessionMeta, 'forms.risk_assessment.answers'),
+                                                      data_get($sessionMeta, 'forms.risk-assessment.answers'),
+                                                      data_get($sessionMeta, 'forms.raf.answers'),
+                                                      data_get($sessionMeta, 'formsQA.risk_assessment'),
+                                                      data_get($sessionMeta, 'formsQA.risk-assessment'),
+                                                      data_get($sessionMeta, 'formsQA.raf'),
+                                                      data_get($sessionMeta, 'forms_qa.risk_assessment'),
+                                                      data_get($sessionMeta, 'forms_qa.risk-assessment'),
+                                                      data_get($sessionMeta, 'forms_qa.raf'),
+                                                  ];
+                                                  $bmiKeys = ['bmi', 'body_mass_index'];
+                                                  foreach ($answerContainers as $answers) {
+                                                      $val = $extractMeasurementFromAnswers($answers, $bmiKeys);
+                                                      if ($val !== null && $val !== '') return e($val);
+                                                  }
+                                              }
+                                              // Final fallback: ConsultationFormResponse
+                                              $bmiKeys = ['bmi', 'body_mass_index'];
+                                              $formTypes = ['reorder', 'raf', 'risk_assessment', 'risk-assessment', 'risk'];
+                                              $val = $extractFromFormResponses($sessionId, $bmiKeys, $formTypes);
+                                              if ($val !== null && $val !== '') return e($val);
+                                          }
+                                          return '—';
+                                      };
+
+                                      $rows = $orders->map(function (Order $order) use ($money, $itemsSummary, $weightFromOrder, $bmiFromOrder, $heightFromOrder): array {
+                                          return [
+                                              'ref' => e($order->reference ?? ('#' . $order->id)),
+                                              'created' => optional($order->created_at)->format('d-m-Y H:i') ?? '',
+                                              'items' => $itemsSummary($order),
+                                              'weight' => $weightFromOrder($order),
+                                              // Optionally add height here if your table supports it:
+                                              // 'height' => $heightFromOrder($order),
+                                              'bmi' => $bmiFromOrder($order),
+                                              'total' => $money($order),
+                                              'url' => "/admin/orders/completed-orders/{$order->id}/details",
+                                          ];
+                                      })->values()->all();
+
+                                      return new HtmlString(
+                                          view('filament.partials.order-history-table', ['rows' => $rows])->render()
+                                      );
+                                  })
+                                  ->columnSpan(12),
+                                    
                                 Hidden::make('user_id'),
+
+
 
                                
 

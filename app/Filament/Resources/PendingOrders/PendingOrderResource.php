@@ -1127,6 +1127,101 @@ class PendingOrderResource extends Resource
                     })
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('Close')
+                    ->extraModalFooterActions([
+                        Action::make('emailSixMonthReview')
+                            ->label('Email 6 Months Review')
+                            ->icon('heroicon-o-envelope')
+                            ->color('warning')
+                            ->requiresConfirmation()
+                            ->modalHeading('Email 6 Months Review')
+                            ->modalDescription('Send the patient an email asking them to complete their six-month weight management review?')
+                            ->modalSubmitActionLabel('Send email')
+                            ->visible(fn ($record): bool => static::sixMonthReviewBannerForPending($record) !== null)
+                            ->action(function ($record): void {
+                                if (! $record) {
+                                    Notification::make()
+                                        ->title('Order not found')
+                                        ->danger()
+                                        ->send();
+                                    return;
+                                }
+
+                                $meta = is_array($record->meta)
+                                    ? $record->meta
+                                    : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                $email = trim((string) (
+                                    data_get($meta, 'email')
+                                    ?: data_get($meta, 'patient.email')
+                                    ?: optional($record->user)->email
+                                    ?: ''
+                                ));
+
+                                if ($email === '') {
+                                    Notification::make()
+                                        ->title('No patient email address found')
+                                        ->danger()
+                                        ->send();
+                                    return;
+                                }
+
+                                $firstName = trim((string) (
+                                    data_get($meta, 'firstName')
+                                    ?: data_get($meta, 'first_name')
+                                    ?: data_get($meta, 'patient.first_name')
+                                    ?: optional($record->user)->first_name
+                                    ?: ''
+                                ));
+
+                                $name = $firstName !== '' ? $firstName : 'there';
+                                $reference = trim((string) ($record->reference ?? ''));
+                                $subject = 'Your six-month weight management review – Pharmacy Express';
+
+                                $body = implode("\n", [
+                                    'Dear ' . $name . ',',
+                                    '',
+                                    'It is time to complete your six-month weight management review with Pharmacy Express.',
+                                    '',
+                                    'This review helps our clinical team assess your progress, current weight, treatment response, side effects, and whether your treatment remains appropriate and safe.',
+                                    '',
+                                    'Please reply to this email or contact Pharmacy Express so that we can complete your review.',
+                                    '',
+                                    $reference !== '' ? 'Order reference: ' . $reference : '',
+                                    '',
+                                    'Kind regards,',
+                                    'Pharmacy Express',
+                                ]);
+
+                                $body = collect(explode("\n", $body))
+                                    ->filter(fn ($line, $index) => $line !== null)
+                                    ->implode("\n");
+
+                                try {
+                                    $fromAddress = config('mail.from.address') ?: 'info@pharmacy-express.co.uk';
+                                    $fromName = config('mail.from.name') ?: 'Pharmacy Express';
+
+                                    Mail::raw($body, function ($message) use ($email, $subject, $fromAddress, $fromName) {
+                                        $message->from($fromAddress, $fromName)
+                                            ->to($email)
+                                            ->subject($subject);
+                                    });
+
+                                    Notification::make()
+                                        ->title('Six-month review email sent')
+                                        ->body('Email sent to ' . $email)
+                                        ->success()
+                                        ->send();
+                                } catch (Throwable $e) {
+                                    report($e);
+
+                                    Notification::make()
+                                        ->title('Could not send six-month review email')
+                                        ->body(Str::limit($e->getMessage(), 180))
+                                        ->danger()
+                                        ->send();
+                                }
+                            }),
+                    ])
                     ->modalWidth('5xl')
                     ->schema([
                         // Top two-column layout to "squeeze" content
@@ -3254,6 +3349,7 @@ class PendingOrderResource extends Resource
                                 $action->getLivewire()->dispatch('refreshTable');
                                 $action->success();
                             }),
+                            
                         Action::make('createAppointment')
                             ->label('Create Appointment')
                             ->button()
@@ -3798,6 +3894,137 @@ class PendingOrderResource extends Resource
                                 }
                             }),
 
+                            
+                         Action::make('addSixMonthReview')
+                            ->label('Add 6-month review')
+                            ->icon('heroicon-o-plus')
+                            ->color('success')
+                            ->visible(fn ($record): bool => static::isWeightManagementRecord($record))
+                            ->modalHeading('Add 6-month review')
+                            ->modalDescription('Record a new 6-month weight management review for this patient. This will be stored in the order history.')
+                            ->form([
+                                Textarea::make('review')
+                                    ->label('Review notes')
+                                    ->rows(4)
+                                    ->maxLength(1000)
+                                    ->required(),
+                            ])
+                            ->modalSubmitActionLabel('Add review')
+                            ->action(function (array $data, $record) {
+                                if (! $record) {
+                                    Notification::make()
+                                        ->title('Order not found')
+                                        ->danger()
+                                        ->send();
+                                    return;
+                                }
+                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                $reviews = data_get($meta, 'six_month_reviews', []);
+                                if (! is_array($reviews)) $reviews = [];
+                                $reviews[] = [
+                                    'text' => $data['review'],
+                                    'date' => now()->toDateTimeString(),
+                                    'by' => optional(auth()->user())->name ?: 'Admin',
+                                ];
+                                $meta['six_month_reviews'] = $reviews;
+                                $record->meta = $meta;
+                                $record->save();
+                                Notification::make()
+                                    ->title('6-month review added')
+                                    ->success()
+                                    ->send();
+                            }),
+
+                        Action::make('emailSixMonthReview')
+                            ->label('Email 6 Months Review')
+                            ->icon('heroicon-o-envelope')
+                            ->color('warning')
+                            ->requiresConfirmation()
+                            ->modalHeading('Email 6 Months Review')
+                            ->modalDescription('Send the patient an email asking them to complete their six-month weight management review?')
+                            ->modalSubmitActionLabel('Send email')
+                            ->action(function ($record): void {
+                                if (! $record) {
+                                    Notification::make()
+                                        ->title('Order not found')
+                                        ->danger()
+                                        ->send();
+                                    return;
+                                }
+
+                                $meta = is_array($record->meta)
+                                    ? $record->meta
+                                    : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                $email = trim((string) (
+                                    data_get($meta, 'email')
+                                    ?: data_get($meta, 'patient.email')
+                                    ?: optional($record->user)->email
+                                    ?: ''
+                                ));
+
+                                if ($email === '') {
+                                    Notification::make()
+                                        ->title('No patient email address found')
+                                        ->danger()
+                                        ->send();
+                                    return;
+                                }
+
+                                $firstName = trim((string) (
+                                    data_get($meta, 'firstName')
+                                    ?: data_get($meta, 'first_name')
+                                    ?: data_get($meta, 'patient.first_name')
+                                    ?: optional($record->user)->first_name
+                                    ?: ''
+                                ));
+
+                                $name = $firstName !== '' ? $firstName : 'there';
+                                $reference = trim((string) ($record->reference ?? ''));
+                                $subject = 'Your six-month weight management review – Pharmacy Express';
+
+                                $body = implode("\n", [
+                                    'Dear ' . $name . ',',
+                                    '',
+                                    'Our records show that you are now due for your six-month weight management review.',
+                                    '',
+                                    'As part of our ongoing clinical monitoring and prescribing requirements, we need to verify your current weight to ensure your treatment remains safe and appropriate.',
+                                    '',
+                                    'As part of your review, we will also arrange a short Zoom video consultation. Please let us know your availability between 9.30 am and 5:00 pm, Monday to Friday, and we will arrange a suitable appointment. The Zoom link will be sent to you once your appointment has been confirmed.',
+                                    '',
+                                    'Please reply to this email or contact Pharmacy Express so that we can complete your review.',
+                                    '',
+                                    $reference !== '' ? 'Order reference: ' . $reference : '',
+                                    '',
+                                    'Kind regards,',
+                                    'Pharmacy Express',
+                                ]);
+
+                                try {
+                                    $fromAddress = config('mail.from.address') ?: 'info@pharmacy-express.co.uk';
+                                    $fromName = config('mail.from.name') ?: 'Pharmacy Express';
+
+                                    Mail::raw($body, function ($message) use ($email, $subject, $fromAddress, $fromName) {
+                                        $message->from($fromAddress, $fromName)
+                                            ->to($email)
+                                            ->subject($subject);
+                                    });
+
+                                    Notification::make()
+                                        ->title('Six-month review email sent')
+                                        ->body('Email sent to ' . $email)
+                                        ->success()
+                                        ->send();
+                                } catch (Throwable $e) {
+                                    report($e);
+
+                                    Notification::make()
+                                        ->title('Could not send six-month review email')
+                                        ->body(Str::limit($e->getMessage(), 180))
+                                        ->danger()
+                                        ->send();
+                                }
+                            }),
                         Action::make('addSixMonthReview')
                             ->label('Add 6-month review')
                             ->button()

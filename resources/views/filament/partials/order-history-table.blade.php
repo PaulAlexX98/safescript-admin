@@ -1,4 +1,4 @@
-@php($rows = $getState()['rows'] ?? [])
+@php($rows = isset($getState) ? ($getState()['rows'] ?? []) : ($rows ?? []))
 @php($showWeight = collect($rows)->contains(function ($r) {
     $slug = strtolower((string)($r['service_slug'] ?? $r['service'] ?? $r['service_name'] ?? ''));
     $hasWeight = isset($r['weight']) && trim((string)$r['weight']) !== '' && trim((string)$r['weight']) !== '—';
