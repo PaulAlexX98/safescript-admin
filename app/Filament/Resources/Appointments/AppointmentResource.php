@@ -1398,7 +1398,9 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
             ->modifyQueryUsing(function (Builder $query): Builder {
                 return static::applyPendingOnlyAppointmentsConstraints($query)
                     ->select('appointments.*')
-                    ->with(['order.user'])
+                    ->with([
+                        'order' => fn ($orderQuery) => $orderQuery->with('user'),
+                    ])
                     ->orderBy('appointments.start_at', 'asc');
             })
             ->defaultPaginationPageOption(10)
@@ -1474,14 +1476,8 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
 
                         // Prefer the linked order/cart item first. Appointment service_name/service is usually
                         // just the service label, e.g. "Weight Management", not the purchased item.
+                        // The table query already eager-loads order.user.
                         $ord = $record->order ?? null;
-
-                        if (! $ord && ! empty($record->order_id)) {
-                            $ord = Order::query()
-                                ->with('user')
-                                ->whereKey($record->order_id)
-                                ->first();
-                        }
 
                         $appointmentItem = is_string($record->service_name ?? null) ? trim($record->service_name) : '';
                         $appointmentService = is_string($record->service ?? null) ? trim($record->service) : '';
@@ -1628,14 +1624,8 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                         }
 
                         // 3) Avoid expensive fallback order lookups on the appointment list unless the row is directly linked.
+                        // The table query already eager-loads order.user.
                         $order = $record->order ?? null;
-
-                        if (! $order && ! empty($record->order_id)) {
-                            $order = Order::query()
-                                ->with('user')
-                                ->whereKey($record->order_id)
-                                ->first();
-                        }
                         if ($order) {
                             // 3a) Order's own first / last
                             $of = is_string($order->first_name ?? null) ? trim($order->first_name) : '';

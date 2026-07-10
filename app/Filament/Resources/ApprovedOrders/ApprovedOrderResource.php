@@ -74,30 +74,42 @@ class ApprovedOrderResource extends Resource
                 TextColumn::make('patient_priority_dot')
                     ->label('Priority')
                     ->getStateUsing(function ($record) {
-                        // 1) Try patient-level priority
                         $p = optional($record->user)->priority ?? null;
 
-                        // 2) Fall back to this pending order's meta.priority
-                        if (!is_string($p) || trim($p) === '') {
-                            $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                        if (! is_string($p) || trim($p) === '') {
+                            $meta = is_array($record->meta)
+                                ? $record->meta
+                                : (json_decode($record->meta ?? '[]', true) ?: []);
                             $p = data_get($meta, 'priority');
                         }
 
-                        // 3) Fall back to the real order's meta.priority by reference
-                        if (!is_string($p) || trim($p) === '') {
+                        // Preserve the existing fallback, but cache the resolved
+                        // value on the record so the tooltip does not repeat it.
+                        if (! is_string($p) || trim($p) === '') {
                             try {
-                                $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                $order = Order::query()
+                                    ->select(['id', 'meta'])
+                                    ->where('reference', $record->reference)
+                                    ->latest('id')
+                                    ->first();
+
                                 if ($order) {
-                                    $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
-                                    $p = data_get($om, 'priority');
+                                    $orderMeta = is_array($order->meta)
+                                        ? $order->meta
+                                        : (json_decode($order->meta ?? '[]', true) ?: []);
+                                    $p = data_get($orderMeta, 'priority');
                                 }
-                            } catch (\Throwable $e) {
-                                // ignore
+                            } catch (Throwable $e) {
+                                // Preserve the existing green fallback.
                             }
                         }
 
                         $p = is_string($p) ? strtolower(trim($p)) : null;
-                        return in_array($p, ['red','yellow','green'], true) ? $p : 'green';
+                        $resolved = in_array($p, ['red', 'yellow', 'green'], true) ? $p : 'green';
+
+                        $record->setAttribute('resolved_patient_priority', $resolved);
+
+                        return $resolved;
                     })
                     ->formatStateUsing(function ($state) {
                         // Render a small coloured dot instead of emoji for cleaner UI
@@ -111,23 +123,13 @@ class ApprovedOrderResource extends Resource
                         return '<span title="' . e($label) . '" style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:' . $colour . ';"></span>';
                     })
                     ->tooltip(function ($record) {
-                        $p = optional($record->user)->priority;
-                        if (!is_string($p) || trim($p) === '') {
-                            $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                            $p = data_get($meta, 'priority');
+                        $priority = $record->getAttribute('resolved_patient_priority');
+
+                        if (! is_string($priority) || $priority === '') {
+                            $priority = 'green';
                         }
-                        if (!is_string($p) || trim($p) === '') {
-                            try {
-                                $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
-                                if ($order) {
-                                    $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
-                                    $p = data_get($om, 'priority');
-                                }
-                            } catch (\Throwable $e) {}
-                        }
-                        $p = is_string($p) ? strtolower(trim($p)) : null;
-                        $p = in_array($p, ['red','yellow','green'], true) ? $p : 'green';
-                        return ucfirst($p);
+
+                        return ucfirst($priority);
                     })
                     ->html()
                     ->extraAttributes(['style' => 'text-align:center; width:5rem']),
@@ -458,6 +460,8 @@ class ApprovedOrderResource extends Resource
                     })
                     ->toggleable(),
             ])
+            ->defaultPaginationPageOption(25)
+            ->paginationPageOptions([25, 50, 100])
             ->filters([
                 SelectFilter::make('type')
                     ->label('Type')

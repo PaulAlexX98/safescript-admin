@@ -29,10 +29,9 @@ class RejectedOrderResource extends OrderResource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
-            ->with(['user'])
             ->where(function (Builder $q) {
-                $q->whereRaw('LOWER(status) = ?', ['rejected'])
-                ->orWhereRaw('LOWER(booking_status) = ?', ['rejected']);
+                $q->where('status', 'rejected')
+                    ->orWhere('booking_status', 'rejected');
             })
             ->orderByDesc('id');
     }

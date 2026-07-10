@@ -30,7 +30,7 @@ class CompletedOrderResource extends OrderResource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
-            ->whereRaw('LOWER(status) = ?', ['completed'])
+            ->where('status', 'completed')
             ->reorder()
             ->orderByRaw('COALESCE(completed_at, paid_at, approved_at, created_at) DESC')
             ->orderByDesc('id');

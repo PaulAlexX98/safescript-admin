@@ -147,6 +147,9 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
     {
         $q = parent::getEloquentQuery();
 
+        // Prevent one user query per visible table row.
+        $q->with('user');
+
         $baseTable = $q->getModel()->getTable();
         $outerTable = $baseTable;
         $q->orderByDesc($baseTable . '.created_at');
@@ -276,30 +279,40 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                 TextColumn::make('patient_priority_dot')
                     ->label('Priority')
                     ->getStateUsing(function ($record) {
-                        // 1) Try patient-level priority
                         $p = optional($record->user)->priority ?? null;
 
-                        // 2) Fall back to this pending order's meta.priority
-                        if (!is_string($p) || trim($p) === '') {
-                            $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                        if (! is_string($p) || trim($p) === '') {
+                            $meta = is_array($record->meta)
+                                ? $record->meta
+                                : (json_decode($record->meta ?? '[]', true) ?: []);
                             $p = data_get($meta, 'priority');
                         }
 
-                        // 3) Fall back to the real order's meta.priority by reference
-                        if (!is_string($p) || trim($p) === '') {
+                        if (! is_string($p) || trim($p) === '') {
                             try {
-                                $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                $order = Order::query()
+                                    ->select(['id', 'meta'])
+                                    ->where('reference', $record->reference)
+                                    ->latest('id')
+                                    ->first();
+
                                 if ($order) {
-                                    $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
-                                    $p = data_get($om, 'priority');
+                                    $orderMeta = is_array($order->meta)
+                                        ? $order->meta
+                                        : (json_decode($order->meta ?? '[]', true) ?: []);
+                                    $p = data_get($orderMeta, 'priority');
                                 }
-                            } catch (\Throwable $e) {
-                                // ignore
+                            } catch (Throwable $e) {
+                                // Preserve the existing green fallback.
                             }
                         }
 
                         $p = is_string($p) ? strtolower(trim($p)) : null;
-                        return in_array($p, ['red','yellow','green'], true) ? $p : 'green';
+                        $resolved = in_array($p, ['red', 'yellow', 'green'], true) ? $p : 'green';
+
+                        $record->setAttribute('resolved_patient_priority', $resolved);
+
+                        return $resolved;
                     })
                     ->formatStateUsing(function ($state) {
                         // Render a small coloured dot instead of emoji for cleaner UI
@@ -313,23 +326,13 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                         return '<span title="' . e($label) . '" style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:' . $colour . ';"></span>';
                     })
                     ->tooltip(function ($record) {
-                        $p = optional($record->user)->priority;
-                        if (!is_string($p) || trim($p) === '') {
-                            $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                            $p = data_get($meta, 'priority');
+                        $priority = $record->getAttribute('resolved_patient_priority');
+
+                        if (! is_string($priority) || $priority === '') {
+                            $priority = 'green';
                         }
-                        if (!is_string($p) || trim($p) === '') {
-                            try {
-                                $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
-                                if ($order) {
-                                    $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
-                                    $p = data_get($om, 'priority');
-                                }
-                            } catch (\Throwable $e) {}
-                        }
-                        $p = is_string($p) ? strtolower(trim($p)) : null;
-                        $p = in_array($p, ['red','yellow','green'], true) ? $p : 'green';
-                        return ucfirst($p);
+
+                        return ucfirst($priority);
                     })
                     ->html()
                     ->extraAttributes(['style' => 'text-align:center; width:5rem']),
@@ -382,25 +385,26 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                             ?: data_get($meta, 'treatment')
                             ?: data_get($meta, 'title');
 
-                        // fallback or override from consultation session slug
-                        $sid = data_get($meta, 'consultation_session_id')
-                            ?? data_get($meta, 'consultation.sessionId');
+                        // Only query the consultation session when the metadata does
+                        // not already contain a useful service name.
+                        $looksGeneric = ! $name || strtolower(trim((string) $name)) === 'service';
 
-                        if ($sid) {
-                            try {
-                                $slug = DB::table('consultation_sessions')
-                                    ->where('id', $sid)
-                                    ->value('service_slug');
+                        if ($looksGeneric) {
+                            $sid = data_get($meta, 'consultation_session_id')
+                                ?? data_get($meta, 'consultation.sessionId');
 
-                                if ($slug) {
-                                    $fromSlug = ucwords(str_replace(['-', '_'], ' ', $slug));
-                                    $looksGeneric = !$name || strtolower(trim((string)$name)) === 'service';
-                                    if ($looksGeneric) {
-                                        $name = $fromSlug;
+                            if ($sid) {
+                                try {
+                                    $slug = DB::table('consultation_sessions')
+                                        ->where('id', $sid)
+                                        ->value('service_slug');
+
+                                    if ($slug) {
+                                        $name = ucwords(str_replace(['-', '_'], ' ', $slug));
                                     }
+                                } catch (Throwable $e) {
+                                    // Preserve the existing metadata fallback.
                                 }
-                            } catch (Throwable $e) {
-                                // ignore
                             }
                         }
 
@@ -712,6 +716,8 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                     })
                     ->toggleable(),
             ])
+            ->defaultPaginationPageOption(25)
+            ->paginationPageOptions([25, 50, 100])
             ->filters([
                 SelectFilter::make('type')
                     ->label('Type')
@@ -2544,338 +2550,152 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                                 }
                             }),
 
-                        Action::make('approve')
-                            ->label('Approve')
+                        Action::make('moveToPending')
+                            ->label('Move to Pending')
                             ->color('success')
-                            ->icon('heroicon-o-check')
+                            ->icon('heroicon-o-arrow-right-circle')
+                            ->requiresConfirmation()
+                            ->modalHeading('Move order to pending approval?')
+                            ->modalDescription('This will mark the order as paid and move it into Pending Approval. It will not approve the order or send an approval email.')
+                            ->modalSubmitActionLabel('Move to Pending')
                             ->action(function (PendingOrder $record, Action $action) {
-                                // Gate approval for Weight Management NEW orders: require both SCR and ID choices
-                                // Flip unpaid -> paid on approve (pending record + linked Order by reference)
                                 try {
-                                    $now = now();
+                                    DB::transaction(function () use ($record) {
+                                        $now = now();
+                                        $pendingTable = $record->getTable();
 
-                                    // 1) Update the pending record itself (if it has payment_status / paid_at)
-                                    try {
-                                        $table = $record->getTable();
+                                        $pendingMeta = is_array($record->meta)
+                                            ? $record->meta
+                                            : (json_decode($record->meta ?? '[]', true) ?: []);
 
-                                        if (\Illuminate\Support\Facades\Schema::hasColumn($table, 'payment_status')) {
-                                            if (strtolower((string) ($record->payment_status ?? '')) !== 'paid') {
-                                                $record->payment_status = 'paid';
-                                            }
+                                        data_set($pendingMeta, 'payment_status', 'paid');
+                                        data_set($pendingMeta, 'payment_status_label', 'Paid');
+                                        data_set($pendingMeta, 'paid_at', $now->toIso8601String());
+
+                                        data_forget($pendingMeta, 'approved_at');
+                                        data_forget($pendingMeta, 'rejected_at');
+                                        data_forget($pendingMeta, 'completed_at');
+
+                                        $pendingUpdates = [
+                                            'meta' => $pendingMeta,
+                                        ];
+
+                                        if (DBSchema::hasColumn($pendingTable, 'status')) {
+                                            $pendingUpdates['status'] = 'pending';
                                         }
 
-                                        if (\Illuminate\Support\Facades\Schema::hasColumn($table, 'paid_at')) {
-                                            if (empty($record->paid_at)) {
-                                                $record->paid_at = $now;
-                                            }
+                                        if (DBSchema::hasColumn($pendingTable, 'booking_status')) {
+                                            $pendingUpdates['booking_status'] = 'pending';
                                         }
 
-                                        // Meta flags (if meta exists)
-                                        $pm = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        if (is_array($pm)) {
-                                            data_set($pm, 'payment_status', 'paid');
-                                            data_set($pm, 'payment_status_label', 'Paid');
-                                            data_set($pm, 'paid_at', $now->toIso8601String());
-                                            $record->meta = $pm;
+                                        if (DBSchema::hasColumn($pendingTable, 'payment_status')) {
+                                            $pendingUpdates['payment_status'] = 'paid';
                                         }
 
-                                        $record->save();
-                                    } catch (\Throwable $e) {
-                                        // ignore
-                                    }
-
-                                    // 2) Update the real Order row by reference
-                                    try {
-                                        $ref = (string) ($record->reference ?? '');
-                                        if ($ref !== '') {
-                                            $order = \App\Models\Order::query()->where('reference', $ref)->latest('id')->first();
-                                            if ($order) {
-                                                if (\Illuminate\Support\Facades\Schema::hasColumn($order->getTable(), 'payment_status')) {
-                                                    $order->payment_status = 'paid';
-                                                }
-                                                if (\Illuminate\Support\Facades\Schema::hasColumn($order->getTable(), 'paid_at')) {
-                                                    $order->paid_at = $order->paid_at ?: $now;
-                                                }
-
-                                                $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
-                                                if (!is_array($om)) $om = [];
-                                                data_set($om, 'payment_status', 'paid');
-                                                data_set($om, 'payment_status_label', 'Paid');
-                                                data_set($om, 'paid_at', $now->toIso8601String());
-                                                $order->meta = $om;
-
-                                                $order->save();
-                                            }
-                                        }
-                                    } catch (\Throwable $e) {
-                                        // ignore
-                                    }
-                                } catch (\Throwable $e) {
-                                    // ignore
-                                }
-                                try {
-                                    /** @var \App\Models\PendingOrder $record */
-                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-
-                                    $slug = data_get($meta, 'service_slug')
-                                        ?? data_get($meta, 'service.slug')
-                                        ?? data_get($meta, 'consultation.service_slug');
-
-                                    $rawType = strtolower((string) (data_get($meta, 'type') ?? data_get($meta, 'mode') ?? data_get($meta, 'flow') ?? ''));
-                                    $path    = strtolower((string) (data_get($meta, 'path') ?? data_get($meta, 'source_url') ?? data_get($meta, 'referer') ?? ''));
-                                    $ref     = strtoupper((string) ($record->reference ?? ''));
-
-                                    $isReorder = in_array($rawType, ['reorder','repeat','re-order','repeat-order'], true)
-                                        || str_contains($path, '/reorder')
-                                        || preg_match('/^PTC[A-Z]*R\d{6}$/', $ref);
-                                    $isNew = ($rawType === 'new') || preg_match('/^PTC[A-Z]*N\d{6}$/', $ref);
-
-                                    if (is_string($slug) && strtolower($slug) === 'weight-management' && $isNew && !$isReorder) {
-                                        $norm = function ($v) {
-                                            if (in_array($v, [true, 1, '1', 'true', 'yes', 'YES', 'Yes'], true)) return 'yes';
-                                            if (in_array($v, [false, 0, '0', 'false', 'no', 'NO', 'No'], true)) return 'no';
-                                            return null;
-                                        };
-
-                                        // Resolve SCR
-                                        $scr = $norm(data_get($meta, 'scr_verified'));
-                                        if ($scr === null) {
-                                            try {
-                                                $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
-                                                if ($ord) {
-                                                    $om = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
-                                                    $scr = $norm(data_get($om, 'scr_verified'));
-                                                }
-                                            } catch (\Throwable $e) { /* ignore */ }
-                                        }
-                                        if ($scr === null && $record->user) {
-                                            try {
-                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
-                                                    $um = is_array($record->user->meta) ? $record->user->meta : (json_decode($record->user->meta ?? '[]', true) ?: []);
-                                                    $scr = $norm(data_get($um, 'scr_verified'));
-                                                }
-                                                if ($scr === null && \Illuminate\Support\Facades\Schema::hasColumn('users', 'scr_verified')) {
-                                                    $scr = $norm($record->user->scr_verified ?? null);
-                                                }
-                                            } catch (\Throwable $e) { /* ignore */ }
+                                        if (DBSchema::hasColumn($pendingTable, 'paid_at')) {
+                                            $pendingUpdates['paid_at'] = $record->paid_at ?: $now;
                                         }
 
-                                        // Resolve ID
-                                        $idv = $norm(data_get($meta, 'id_verified'));
-                                        if ($idv === null) {
-                                            try {
-                                                $ord2 = \App\Models\Order::where('reference', $record->reference)->latest()->first();
-                                                if ($ord2) {
-                                                    $om2 = is_array($ord2->meta) ? $ord2->meta : (json_decode($ord2->meta ?? '[]', true) ?: []);
-                                                    $idv = $norm(data_get($om2, 'id_verified'));
-                                                }
-                                            } catch (\Throwable $e) { /* ignore */ }
-                                        }
-                                        if ($idv === null && $record->user) {
-                                            try {
-                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
-                                                    $um2 = is_array($record->user->meta) ? $record->user->meta : (json_decode($record->user->meta ?? '[]', true) ?: []);
-                                                    $idv = $norm(data_get($um2, 'id_verified'));
-                                                }
-                                                if ($idv === null && \Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified')) {
-                                                    $idv = $norm($record->user->id_verified ?? null);
-                                                }
-                                            } catch (\Throwable $e) { /* ignore */ }
+                                        if (DBSchema::hasColumn($pendingTable, 'approved_at')) {
+                                            $pendingUpdates['approved_at'] = null;
                                         }
 
-                                        $missing = [];
-                                        if ($scr === null) $missing[] = 'SCR Verified';
-                                        if ($idv === null) $missing[] = 'ID Verified';
-
-                                        if (!empty($missing)) {
-                                            \Filament\Notifications\Notification::make()
-                                                ->danger()
-                                                ->title('Please choose Yes or No for ' . implode(' and ', $missing) . ' before approving this order.')
-                                                ->send();
-                                            try { $action->getLivewire()->dispatch('$refresh'); $action->getLivewire()->dispatch('refreshTable'); } catch (\Throwable $e) {}
-                                            return; // stop approval
+                                        if (DBSchema::hasColumn($pendingTable, 'rejected_at')) {
+                                            $pendingUpdates['rejected_at'] = null;
                                         }
-                                    }
-                                } catch (\Throwable $e) {
-                                    \Filament\Notifications\Notification::make()
-                                        ->danger()
-                                        ->title('Verification check failed')
-                                        ->body('Could not confirm SCR or ID selection. Please choose Yes or No and try again.')
+
+                                        if (DBSchema::hasColumn($pendingTable, 'decision_at')) {
+                                            $pendingUpdates['decision_at'] = null;
+                                        }
+
+                                        if (DBSchema::hasColumn($pendingTable, 'completed_at')) {
+                                            $pendingUpdates['completed_at'] = null;
+                                        }
+
+                                        $record->forceFill($pendingUpdates)->save();
+
+                                        $reference = trim((string) ($record->reference ?? ''));
+
+                                        if ($reference === '') {
+                                            return;
+                                        }
+
+                                        $order = Order::query()
+                                            ->where('reference', $reference)
+                                            ->latest('id')
+                                            ->first();
+
+                                        if (! $order) {
+                                            return;
+                                        }
+
+                                        $orderTable = $order->getTable();
+
+                                        $orderMeta = is_array($order->meta)
+                                            ? $order->meta
+                                            : (json_decode($order->meta ?? '[]', true) ?: []);
+
+                                        $orderMeta = array_replace_recursive($orderMeta, $pendingMeta);
+
+                                        data_set($orderMeta, 'payment_status', 'paid');
+                                        data_set($orderMeta, 'payment_status_label', 'Paid');
+                                        data_set($orderMeta, 'paid_at', $now->toIso8601String());
+
+                                        data_forget($orderMeta, 'approved_at');
+                                        data_forget($orderMeta, 'rejected_at');
+                                        data_forget($orderMeta, 'completed_at');
+
+                                        $orderUpdates = [
+                                            'meta' => $orderMeta,
+                                        ];
+
+                                        if (DBSchema::hasColumn($orderTable, 'status')) {
+                                            $orderUpdates['status'] = 'pending';
+                                        }
+
+                                        if (DBSchema::hasColumn($orderTable, 'booking_status')) {
+                                            $orderUpdates['booking_status'] = 'pending';
+                                        }
+
+                                        if (DBSchema::hasColumn($orderTable, 'payment_status')) {
+                                            $orderUpdates['payment_status'] = 'paid';
+                                        }
+
+                                        if (DBSchema::hasColumn($orderTable, 'paid_at')) {
+                                            $orderUpdates['paid_at'] = $order->paid_at ?: $now;
+                                        }
+
+                                        if (DBSchema::hasColumn($orderTable, 'approved_at')) {
+                                            $orderUpdates['approved_at'] = null;
+                                        }
+
+                                        if (DBSchema::hasColumn($orderTable, 'rejected_at')) {
+                                            $orderUpdates['rejected_at'] = null;
+                                        }
+
+                                        if (DBSchema::hasColumn($orderTable, 'completed_at')) {
+                                            $orderUpdates['completed_at'] = null;
+                                        }
+
+                                        $order->forceFill($orderUpdates)->save();
+                                    });
+
+                                    Notification::make()
+                                        ->title('Order moved to Pending Approval')
+                                        ->success()
                                         ->send();
-                                    try { $action->getLivewire()->dispatch('$refresh'); $action->getLivewire()->dispatch('refreshTable'); } catch (\Throwable $ex) {}
-                                    return;
-                                }
 
-                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                data_set($meta, 'approved_at', now()->toISOString());
-                                $record->status = 'approved';
-                                $record->meta = $meta;
-                                $record->booking_status = 'approved';
-                                $record->save();
-                                // Also sync the real Order by reference so the frontend reflects the change
-                                try {
-                                    $order = Order::where('reference', $record->reference)->first();
-                                    if ($order) {
-                                        $orderMeta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
-                                        // carry approved_at into order meta as well
-                                        data_set($orderMeta, 'approved_at', now()->toISOString());
+                                    $action->getLivewire()->dispatch('$refresh');
+                                    $action->getLivewire()->dispatch('refreshTable');
 
-                                        $order->forceFill([
-                                            'status'         => 'approved',
-                                            'booking_status' => 'approved',
-                                            'approved_at'    => now(),
-                                            'meta'           => $orderMeta,
-                                        ])->save();
-                                    }
+                                    return redirect(ListUnpaidOrders::getUrl());
                                 } catch (Throwable $e) {
-                                    // swallow to avoid breaking the UI; consider logging if needed
+                                    Notification::make()
+                                        ->title('Failed to move order to Pending Approval')
+                                        ->body($e->getMessage())
+                                        ->danger()
+                                        ->send();
                                 }
-                                // Email the patient that the order is approved once
-                                try {
-                                    $metaForEmail = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                    if (!data_get($metaForEmail, 'emailed.order_approved_at')) {
-                                        // Find the related Order row
-                                        $orderForEmail = \App\Models\Order::where('reference', $record->reference)->latest()->first();
-
-                                        // Resolve recipient email from Order first, then meta, then user
-                                        $orderMetaArr = [];
-                                        if ($orderForEmail) {
-                                            $orderMetaArr = is_array($orderForEmail->meta) ? $orderForEmail->meta : (json_decode($orderForEmail->meta ?? '[]', true) ?: []);
-                                        }
-
-                                        $to = $orderForEmail->email
-                                            ?? data_get($orderMetaArr, 'customer.email')
-                                            ?? data_get($metaForEmail, 'email')
-                                            ?? data_get($metaForEmail, 'customer.email')
-                                            ?? optional($record->user)->email;
-
-                                        if ($to && $orderForEmail) {
-                                            Mail::to($to)->send(new OrderApprovedMail($orderForEmail));
-
-                                            // Flag on both PendingOrder and Order to prevent duplicate sends
-                                            data_set($metaForEmail, 'emailed.order_approved_at', now()->toIso8601String());
-                                            $record->meta = $metaForEmail;
-                                            $record->save();
-
-                                            $om = $orderMetaArr;
-                                            data_set($om, 'emailed.order_approved_at', now()->toIso8601String());
-                                            $orderForEmail->meta = $om;
-                                            $orderForEmail->save();
-                                        }
-                                    }
-                                } catch (Throwable $e) {
-                                    // swallow
-                                }
-                                // After syncing the Order, approve or create the matching appointment so it only shows once approved
-                                try {
-                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-
-                                    // Extract appointment window from meta
-                                    $start = data_get($meta, 'appointment_start_at')
-                                        ?? data_get($meta, 'appointment.start_at')
-                                        ?? data_get($meta, 'appointment_at')
-                                        ?? data_get($meta, 'booking.start_at');
-
-                                    $end = data_get($meta, 'appointment_end_at')
-                                        ?? data_get($meta, 'appointment.end_at')
-                                        ?? data_get($meta, 'booking.end_at');
-
-                                    // Build candidate service slugs
-                                    $serviceCandidates = [];
-                                    $sid = data_get($meta, 'consultation_session_id')
-                                        ?? data_get($meta, 'consultation.sessionId');
-                                    if ($sid) {
-                                        $slug = DB::table('consultation_sessions')
-                                            ->where('id', $sid)
-                                            ->value('service_slug');
-                                        if (is_string($slug) && $slug !== '') {
-                                            $serviceCandidates[] = $slug;
-                                        }
-                                    }
-                                    foreach (['service_slug','service','serviceName','title','treatment'] as $k) {
-                                        $v = data_get($meta, $k);
-                                        if (is_string($v) && $v !== '') {
-                                            $serviceCandidates[] = \Illuminate\Support\Str::slug($v);
-                                        }
-                                    }
-                                    $serviceCandidates = array_values(array_unique(array_filter($serviceCandidates)));
-
-                                    $startAt = null;
-                                    $endAt = null;
-                                    try { if ($start) { $startAt = Carbon::parse($start); } } catch (Throwable $e) { $startAt = null; }
-                                    try { if ($end)   { $endAt   = Carbon::parse($end);   } } catch (Throwable $e) { $endAt = null; }
-
-                                    // First try a direct match via order_reference if the column exists
-                                    $updatedAny = false;
-                                    if (DBSchema::hasColumn('appointments', 'order_reference')) {
-                                        $rows = DB::table('appointments')->where('order_reference', $record->reference)->get();
-                                        if ($rows->count() > 0) {
-                                            $update = [];
-                                            if (DBSchema::hasColumn('appointments', 'status'))         $update['status'] = 'approved';
-                                            if (DBSchema::hasColumn('appointments', 'booking_status')) $update['booking_status'] = 'approved';
-                                            if (DBSchema::hasColumn('appointments', 'is_visible'))     $update['is_visible'] = 1;
-                                            if (DBSchema::hasColumn('appointments', 'visible'))        $update['visible'] = 1;
-                                            if (DBSchema::hasColumn('appointments', 'updated_at'))     $update['updated_at'] = now();
-
-                                            DB::table('appointments')->where('order_reference', $record->reference)->update($update);
-                                            $updatedAny = true;
-                                        }
-                                    }
-
-                                    // Otherwise, match by service and near start time
-                                    if (!$updatedAny && !empty($serviceCandidates) && $startAt) {
-                                        $q = DB::table('appointments')->whereIn('service', $serviceCandidates);
-                                        // Match a 30-minute window to be resilient to seconds
-                                        $q->whereBetween('start_at', [
-                                            $startAt->copy()->subMinutes(30),
-                                            $startAt->copy()->addMinutes(30),
-                                        ]);
-                                        $rows = $q->get();
-                                        if ($rows->count() > 0) {
-                                            $update = [];
-                                            if (DBSchema::hasColumn('appointments', 'status'))         $update['status'] = 'approved';
-                                            if (DBSchema::hasColumn('appointments', 'booking_status')) $update['booking_status'] = 'approved';
-                                            if (DBSchema::hasColumn('appointments', 'is_visible'))     $update['is_visible'] = 1;
-                                            if (DBSchema::hasColumn('appointments', 'visible'))        $update['visible'] = 1;
-                                            if (DBSchema::hasColumn('appointments', 'order_reference')) $update['order_reference'] = $record->reference;
-                                            if (DBSchema::hasColumn('appointments', 'user_id') && isset($record->user_id)) $update['user_id'] = $record->user_id;
-                                            if (DBSchema::hasColumn('appointments', 'updated_at'))     $update['updated_at'] = now();
-
-                                            DB::table('appointments')
-                                                ->whereIn('service', $serviceCandidates)
-                                                ->whereBetween('start_at', [
-                                                    $startAt->copy()->subMinutes(30),
-                                                    $startAt->copy()->addMinutes(30),
-                                                ])
-                                                ->update($update);
-                                            $updatedAny = true;
-                                        }
-                                    }
-
-                                    // If nothing matched, create a row so it appears only post-approval
-                                    if (!$updatedAny && ($startAt || !empty($serviceCandidates))) {
-                                        $insert = [];
-                                        $insert['service']  = $serviceCandidates[0] ?? (\Illuminate\Support\Str::slug((string) (data_get($meta, 'service') ?? data_get($meta, 'serviceName') ?? data_get($meta, 'title') ?? data_get($meta, 'treatment') ?? 'service')));
-                                        if ($startAt) $insert['start_at'] = $startAt->toDateTimeString();
-                                        if ($endAt)   $insert['end_at']   = $endAt->toDateTimeString();
-                                        if (DBSchema::hasColumn('appointments', 'status'))         $insert['status'] = 'approved';
-                                        if (DBSchema::hasColumn('appointments', 'booking_status')) $insert['booking_status'] = 'approved';
-                                        if (DBSchema::hasColumn('appointments', 'is_visible'))     $insert['is_visible'] = 1;
-                                        if (DBSchema::hasColumn('appointments', 'visible'))        $insert['visible'] = 1;
-                                        if (DBSchema::hasColumn('appointments', 'order_reference')) $insert['order_reference'] = $record->reference;
-                                        if (DBSchema::hasColumn('appointments', 'user_id') && isset($record->user_id)) $insert['user_id'] = $record->user_id;
-                                        if (DBSchema::hasColumn('appointments', 'created_at'))     $insert['created_at'] = now();
-                                        if (DBSchema::hasColumn('appointments', 'updated_at'))     $insert['updated_at'] = now();
-
-                                        DB::table('appointments')->insert($insert);
-                                    }
-                                } catch (Throwable $e) {
-                                    // swallow
-                                }
-                                $action->success();
-                                $action->getLivewire()->dispatch('$refresh');
-                                $action->getLivewire()->dispatch('refreshTable');
-                                return redirect(ListUnpaidOrders::getUrl());
                             }),
                         Action::make('reject')
                             ->label('Reject')

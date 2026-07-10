@@ -406,6 +406,9 @@ class PendingOrderResource extends Resource
     {
         $q = parent::getEloquentQuery();
 
+        // Prevent one user query per visible table row.
+        $q->with('user');
+
         // Only show records that are still pending.
         // Be defensive because deployments may have slightly different column names.
         try {
@@ -520,30 +523,42 @@ class PendingOrderResource extends Resource
                 TextColumn::make('patient_priority_dot')
                     ->label('Priority')
                     ->getStateUsing(function ($record) {
-                        // 1) Try patient-level priority
                         $p = optional($record->user)->priority ?? null;
 
-                        // 2) Fall back to this pending order's meta.priority
-                        if (!is_string($p) || trim($p) === '') {
-                            $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                        if (! is_string($p) || trim($p) === '') {
+                            $meta = is_array($record->meta)
+                                ? $record->meta
+                                : (json_decode($record->meta ?? '[]', true) ?: []);
                             $p = data_get($meta, 'priority');
                         }
 
-                        // 3) Fall back to the real order's meta.priority by reference
-                        if (!is_string($p) || trim($p) === '') {
+                        // Preserve the existing fallback without issuing the same
+                        // order lookup again in the tooltip callback.
+                        if (! is_string($p) || trim($p) === '') {
                             try {
-                                $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                $order = Order::query()
+                                    ->select(['id', 'meta'])
+                                    ->where('reference', $record->reference)
+                                    ->latest('id')
+                                    ->first();
+
                                 if ($order) {
-                                    $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
-                                    $p = data_get($om, 'priority');
+                                    $orderMeta = is_array($order->meta)
+                                        ? $order->meta
+                                        : (json_decode($order->meta ?? '[]', true) ?: []);
+                                    $p = data_get($orderMeta, 'priority');
                                 }
-                            } catch (\Throwable $e) {
-                                // ignore
+                            } catch (Throwable $e) {
+                                // Preserve the current green fallback if the lookup fails.
                             }
                         }
 
                         $p = is_string($p) ? strtolower(trim($p)) : null;
-                        return in_array($p, ['red','yellow','green'], true) ? $p : 'green';
+                        $resolved = in_array($p, ['red', 'yellow', 'green'], true) ? $p : 'green';
+
+                        $record->setAttribute('resolved_patient_priority', $resolved);
+
+                        return $resolved;
                     })
                     ->formatStateUsing(function ($state) {
                         // Render a small coloured dot instead of emoji for cleaner UI
@@ -557,23 +572,13 @@ class PendingOrderResource extends Resource
                         return '<span title="' . e($label) . '" style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:' . $colour . ';"></span>';
                     })
                     ->tooltip(function ($record) {
-                        $p = optional($record->user)->priority;
-                        if (!is_string($p) || trim($p) === '') {
-                            $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                            $p = data_get($meta, 'priority');
+                        $priority = $record->getAttribute('resolved_patient_priority');
+
+                        if (! is_string($priority) || $priority === '') {
+                            $priority = 'green';
                         }
-                        if (!is_string($p) || trim($p) === '') {
-                            try {
-                                $order = \App\Models\Order::where('reference', $record->reference)->latest()->first();
-                                if ($order) {
-                                    $om = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
-                                    $p = data_get($om, 'priority');
-                                }
-                            } catch (\Throwable $e) {}
-                        }
-                        $p = is_string($p) ? strtolower(trim($p)) : null;
-                        $p = in_array($p, ['red','yellow','green'], true) ? $p : 'green';
-                        return ucfirst($p);
+
+                        return ucfirst($priority);
                     })
                     ->html()
                     ->extraAttributes(['style' => 'text-align:center; width:5rem']),
@@ -620,25 +625,24 @@ class PendingOrderResource extends Resource
                             ?: data_get($meta, 'treatment')
                             ?: data_get($meta, 'title');
 
-                        // fallback or override from consultation session slug
-                        $sid = data_get($meta, 'consultation_session_id')
-                            ?? data_get($meta, 'consultation.sessionId');
+                        // Only perform the fallback lookup when the metadata does not
+                        // already contain a useful service name.
+                        if (! $name || stripos((string) $name, 'weight management') !== false || stripos((string) $name, 'service') !== false) {
+                            $sid = data_get($meta, 'consultation_session_id')
+                                ?? data_get($meta, 'consultation.sessionId');
 
-                        if ($sid) {
-                            try {
-                                $slug = DB::table('consultation_sessions')
-                                    ->where('id', $sid)
-                                    ->value('service_slug');
+                            if ($sid) {
+                                try {
+                                    $slug = DB::table('consultation_sessions')
+                                        ->where('id', $sid)
+                                        ->value('service_slug');
 
-                                if ($slug) {
-                                    $fromSlug = ucwords(str_replace(['-', '_'], ' ', $slug));
-                                    // prefer the slug source if meta name is missing or looks generic
-                                    if (!$name || stripos($name, 'weight management') !== false || stripos($name, 'service') !== false) {
-                                        $name = $fromSlug;
+                                    if ($slug) {
+                                        $name = ucwords(str_replace(['-', '_'], ' ', $slug));
                                     }
+                                } catch (Throwable $e) {
+                                    // Preserve the existing metadata fallback.
                                 }
-                            } catch (Throwable $e) {
-                                // ignore
                             }
                         }
 
@@ -987,7 +991,7 @@ class PendingOrderResource extends Resource
 
                             if (! $appointmentAt) {
                                 try {
-                                    $appointment = Appointment::query()
+                                    $appointmentAt = Appointment::query()
                                         ->where(function ($query) use ($record) {
                                             if (! empty($record->id)) {
                                                 $query->orWhere('order_id', $record->id);
@@ -997,14 +1001,10 @@ class PendingOrderResource extends Resource
                                                 $query->orWhere('order_reference', $record->reference);
                                             }
                                         })
-                                        ->orderByDesc('id')
-                                        ->first();
-
-                                    if ($appointment?->start_at) {
-                                        $appointmentAt = $appointment->getRawOriginal('start_at') ?: $appointment->start_at;
-                                    }
+                                        ->latest('id')
+                                        ->value('start_at');
                                 } catch (Throwable $e) {
-                                    // ignore
+                                    // Preserve the empty appointment fallback.
                                 }
                             }
 
@@ -1024,6 +1024,8 @@ class PendingOrderResource extends Resource
                         ->sortable(false)
                         ->toggleable(),
             ])
+            ->defaultPaginationPageOption(25)
+            ->paginationPageOptions([25, 50, 100])
             ->filters([
                 SelectFilter::make('type')
                     ->label('Type')
