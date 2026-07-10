@@ -4,6 +4,9 @@ namespace App\Providers;
 
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\View;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -18,6 +21,15 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        DB::listen(function (QueryExecuted $query): void {
+            if ($query->time >= 200) {
+                Log::warning('Slow SQL query', [
+                    'time_ms' => $query->time,
+                    'sql' => $query->toRawSql(),
+                ]);
+            }
+        });
+
         View::composer([
             'consultations.*',  // your risk-assessment, reorder, etc.
             'pdf.*',            // your record-of-supply / declaration PDFs
