@@ -3983,6 +3983,15 @@ class PendingOrderResource extends Resource
                                 $reference = trim((string) ($record->reference ?? ''));
                                 $subject = 'Your six-month weight management review – Pharmacy Express';
 
+                                $frontendUrl = rtrim((string) (
+                                    config('app.frontend_url')
+                                    ?: env('FRONTEND_URL')
+                                    ?: 'https://www.pharmacy-express.co.uk'
+                                ), '/');
+
+                                $bookingUrl = $frontendUrl . '/appointment/book'
+                                    . ($reference !== '' ? '?reference=' . urlencode($reference) : '');
+
                                 $body = implode("\n", [
                                     'Dear ' . $name . ',',
                                     '',
@@ -3990,9 +3999,14 @@ class PendingOrderResource extends Resource
                                     '',
                                     'As part of our ongoing clinical monitoring and prescribing requirements, we need to verify your current weight to ensure your treatment remains safe and appropriate.',
                                     '',
-                                    'As part of your review, we will also arrange a short Zoom video consultation. Please let us know your availability between 9.30 am and 5:00 pm, Monday to Friday, and we will arrange a suitable appointment. The Zoom link will be sent to you once your appointment has been confirmed.',
+                                    'As part of your review, you will need to book a short Zoom video consultation. Please use the link below to choose an available appointment.',
                                     '',
-                                    'Please reply to this email or contact Pharmacy Express so that we can complete your review.',
+                                    'Book your six-month review appointment:',
+                                    $bookingUrl,
+                                    '',
+                                    'Your Zoom link will be sent to you once your appointment has been booked.',
+                                    '',
+                                    'Please contact Pharmacy Express if you have any difficulty booking your appointment.',
                                     '',
                                     $reference !== '' ? 'Order reference: ' . $reference : '',
                                     '',
