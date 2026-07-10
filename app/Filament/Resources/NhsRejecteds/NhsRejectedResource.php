@@ -41,10 +41,6 @@ class NhsRejectedResource extends Resource
             $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_pending_status'))) = 'rejected'")
               ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_status'))) = 'rejected'")
               ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.status'))) = 'rejected'");
-
-            $w->orWhereRaw('LOWER(meta) LIKE ?', ['%\"nhs_pending_status\":\"rejected\"%'])
-              ->orWhereRaw('LOWER(meta) LIKE ?', ['%\"nhs_status\":\"rejected\"%'])
-              ->orWhereRaw('LOWER(meta) LIKE ?', ['%\"status\":\"rejected\"%']);
         });
 
         return $q;

@@ -30,6 +30,8 @@ class ServicesPerformance extends Base
 
     public string $period = 'monthly';
 
+    private array $totalRevenueCache = [];
+
     protected function getTableHeaderActions(): array
     {
         return [
@@ -94,13 +96,21 @@ class ServicesPerformance extends Base
 
         $sumExpr = $this->sumRevenueExpr();
 
-        $serviceExpr = 'COALESCE(
-            NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.service")), ""),
-            NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.service_name")), ""),
-            NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.treatment")), ""),
-            NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.treatment_name")), ""),
-            "Unknown"
-        )';
+        if (Schema::hasColumn('orders', 'service_slug')) {
+            $serviceExpr = 'COALESCE(NULLIF(orders.service_slug, ""), "Unknown")';
+        } elseif (Schema::hasColumn('orders', 'service_name')) {
+            $serviceExpr = 'COALESCE(NULLIF(orders.service_name, ""), "Unknown")';
+        } elseif (Schema::hasColumn('orders', 'service')) {
+            $serviceExpr = 'COALESCE(NULLIF(orders.service, ""), "Unknown")';
+        } else {
+            $serviceExpr = 'COALESCE(
+                NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.service_slug")), ""),
+                NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.service")), ""),
+                NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.service_name")), ""),
+                NULLIF(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.treatment")), ""),
+                "Unknown"
+            )';
+        }
 
         [$start, $end] = $this->getCurrentRange();
 
@@ -145,22 +155,32 @@ class ServicesPerformance extends Base
 
     private function applyPaidOnlyFilter(Builder $q): Builder
     {
-        return $q->where(function ($w) {
-            $w->whereRaw('1=0');
+        $hasPaymentStatus = Schema::hasColumn('orders', 'payment_status');
+        $hasPaidAt = Schema::hasColumn('orders', 'paid_at');
 
-            if (Schema::hasColumn('orders', 'payment_status')) {
-                $w->orWhere('orders.payment_status', 'paid');
-            }
+        if ($hasPaymentStatus && $hasPaidAt) {
+            return $q->where(function (Builder $w) {
+                $w->where('orders.payment_status', 'paid')
+                    ->orWhereNotNull('orders.paid_at');
+            });
+        }
 
-            if (Schema::hasColumn('orders', 'paid_at')) {
-                $w->orWhereNotNull('orders.paid_at');
-            }
+        if ($hasPaymentStatus) {
+            return $q->where('orders.payment_status', 'paid');
+        }
 
-            if (Schema::hasColumn('orders', 'meta')) {
-                $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))) = ?", ['paid']);
-                $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))) = ?", ['paid']);
-            }
-        });
+        if ($hasPaidAt) {
+            return $q->whereNotNull('orders.paid_at');
+        }
+
+        if (Schema::hasColumn('orders', 'meta')) {
+            return $q->where(function (Builder $w) {
+                $w->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))) = ?", ['paid'])
+                    ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))) = ?", ['paid']);
+            });
+        }
+
+        return $q->whereRaw('1 = 0');
     }
 
     private function applyPeriodFilter(Builder $q, Carbon $start, Carbon $end): Builder
@@ -179,10 +199,12 @@ class ServicesPerformance extends Base
 
     private function sumRevenueExpr(): string
     {
-        $t = 'orders';
-        $parts = [];
+        $table = 'orders';
 
-        // common numeric columns
+        if (Schema::hasColumn($table, 'products_total_minor')) {
+            return 'SUM(COALESCE(orders.products_total_minor, 0)) / 100';
+        }
+
         foreach ([
             'total',
             'grand_total',
@@ -191,48 +213,48 @@ class ServicesPerformance extends Base
             'total_gbp',
             'total_inc_vat',
             'net_total',
-        ] as $col) {
-            if (Schema::hasColumn($t, $col)) {
-                $parts[] = $col;
+        ] as $column) {
+            if (Schema::hasColumn($table, $column)) {
+                return 'SUM(COALESCE(orders.' . $column . ', 0))';
             }
         }
 
-        // JSON meta fallbacks including minor units
-        if (Schema::hasColumn($t, 'meta')) {
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total")) AS DECIMAL(12,2))';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.grand_total")) AS DECIMAL(12,2))';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount")) AS DECIMAL(12,2))';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_gbp")) AS DECIMAL(12,2))';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_amount")) AS DECIMAL(12,2))';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.selectedProduct.totalMinor")) AS DECIMAL(12,2)) / 100';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_pence")) AS DECIMAL(12,2)) / 100';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount_pence")) AS DECIMAL(12,2)) / 100';
-        }
-
-        if (empty($parts)) {
+        if (! Schema::hasColumn($table, 'meta')) {
             return 'SUM(0)';
         }
 
-        $coalesce = 'COALESCE(' . implode(', ', $parts) . ', 0)';
-        return 'SUM(' . $coalesce . ')';
+        return 'SUM(COALESCE(
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total")) AS DECIMAL(12,2)),
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.grand_total")) AS DECIMAL(12,2)),
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount")) AS DECIMAL(12,2)),
+            0
+        ))';
     }
 
     private function totalRevenueSum(): float
     {
-        $t = 'orders';
-        if (! Schema::hasTable($t)) return 0.0;
+        $cacheKey = $this->period ?? 'daily';
+
+        if (array_key_exists($cacheKey, $this->totalRevenueCache)) {
+            return $this->totalRevenueCache[$cacheKey];
+        }
+
+        if (! Schema::hasTable('orders')) {
+            return $this->totalRevenueCache[$cacheKey] = 0.0;
+        }
 
         [$start, $end] = $this->getCurrentRange();
         $expr = $this->sumRevenueExpr() . ' as t';
 
-        $q = Order::query()->selectRaw($expr);
+        $q = Order::query()->withoutGlobalScopes()->selectRaw($expr);
         $this->applyPaidOnlyFilter($q);
+
         if ($start && $end) {
             $this->applyPeriodFilter($q, $start, $end);
         }
 
-        return (float) ($q->value('t') ?? 0);
+        return $this->totalRevenueCache[$cacheKey] = (float) ($q->value('t') ?? 0);
     }
 
     public function getTableRecordKey(mixed $record): string

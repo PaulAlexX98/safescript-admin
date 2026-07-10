@@ -12,6 +12,7 @@ class RevenueBookingsChart extends ChartWidget
 {
     protected ?string $heading = 'Revenue and Bookings Analysis';
     protected int|string|array $columnSpan = 'full';
+    protected ?string $pollingInterval = null;
 
     protected function getFilters(): array
     {
@@ -103,29 +104,25 @@ class RevenueBookingsChart extends ChartWidget
             $dateExpr = 'paid_at';
         }
 
-        // Build the numeric revenue expression (covers both columns and JSON meta fallbacks).
-        $sumExpr = null;
-        if (Schema::hasColumn($t, 'total')) {
-            $sumExpr = 'SUM(total)';
+        // Prefer the dedicated minor-unit total column. JSON is only a final fallback.
+        if (Schema::hasColumn($t, 'products_total_minor')) {
+            $sumExpr = 'SUM(COALESCE(' . $t . '.products_total_minor, 0)) / 100';
+        } elseif (Schema::hasColumn($t, 'total')) {
+            $sumExpr = 'SUM(COALESCE(' . $t . '.total, 0))';
         } elseif (Schema::hasColumn($t, 'grand_total')) {
-            $sumExpr = 'SUM(grand_total)';
+            $sumExpr = 'SUM(COALESCE(' . $t . '.grand_total, 0))';
         } elseif (Schema::hasColumn($t, 'total_amount')) {
-            $sumExpr = 'SUM(total_amount)';
+            $sumExpr = 'SUM(COALESCE(' . $t . '.total_amount, 0))';
         } elseif (Schema::hasColumn($t, 'amount')) {
-            $sumExpr = 'SUM(amount)';
+            $sumExpr = 'SUM(COALESCE(' . $t . '.amount, 0))';
         } elseif (Schema::hasColumn($t, 'total_gbp')) {
-            $sumExpr = 'SUM(total_gbp)';
+            $sumExpr = 'SUM(COALESCE(' . $t . '.total_gbp, 0))';
         } elseif (Schema::hasColumn($t, 'meta')) {
             $sumExpr = 'SUM(COALESCE(
+                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
                 CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total")) AS DECIMAL(12,2)),
                 CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.grand_total")) AS DECIMAL(12,2)),
                 CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_gbp")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_amount")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_pence")) AS DECIMAL(12,2)) / 100,
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount_pence")) AS DECIMAL(12,2)) / 100,
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.selectedProduct.totalMinor")) AS DECIMAL(12,2)) / 100,
                 0
             ))';
         } else {
@@ -197,22 +194,15 @@ class RevenueBookingsChart extends ChartWidget
             ->selectRaw("{$keyExpr} as k, COUNT(*) as bookings, {$sumExpr} as revenue")
             ->whereBetween(DB::raw($dateExpr), [$rangeStart, $rangeEnd]);
 
-        // Paid-only: chart revenue/bookings by paid date.
-        $q->where(function ($w) use ($t) {
-            $w->whereRaw('1=0');
-
-            if (Schema::hasColumn($t, 'payment_status')) {
-                $w->orWhereRaw('LOWER(' . $t . '.payment_status) = ?', ['paid']);
-            }
-
-            if (Schema::hasColumn($t, 'paid_at')) {
-                $w->orWhereNotNull($t . '.paid_at');
-            }
-
-            if (Schema::hasColumn($t, 'meta')) {
-                $w->orWhereRaw('LOWER(JSON_UNQUOTE(JSON_EXTRACT(' . $t . '.meta, "$.payment_status"))) = ?', ['paid']);
-            }
-        });
+        // paid_at is already the chart anchor, so no JSON payment-status scan is needed.
+        if (Schema::hasColumn($t, 'payment_status')) {
+            $q->where(function ($w) use ($t) {
+                $w->where($t . '.payment_status', 'paid')
+                    ->orWhereNotNull($t . '.paid_at');
+            });
+        } else {
+            $q->whereNotNull($t . '.paid_at');
+        }
 
         // Soft deletes.
         if (Schema::hasColumn($t, 'deleted_at')) {
@@ -426,132 +416,70 @@ class RevenueBookingsChart extends ChartWidget
     private function revenueSumForRange(Carbon $start, Carbon $end): float
     {
         $t = 'orders';
-        if (! Schema::hasTable($t)) {
-            return 0;
+
+        if (! Schema::hasTable($t) || ! Schema::hasColumn($t, 'paid_at')) {
+            return 0.0;
         }
 
-        // Use paid_at only so revenue matches paid activity
-        $dateCols = [];
-        foreach (['paid_at'] as $c) {
-            if (Schema::hasColumn($t, $c)) {
-                $dateCols[] = $c;
+        $q = DB::table($t)
+            ->whereBetween($t . '.paid_at', [$start, $end])
+            ->whereNotNull($t . '.paid_at');
+
+        if (Schema::hasColumn($t, 'payment_status')) {
+            $q->where(function ($w) use ($t) {
+                $w->where($t . '.payment_status', 'paid')
+                    ->orWhereNotNull($t . '.paid_at');
+            });
+        }
+
+        if (Schema::hasColumn($t, 'deleted_at')) {
+            $q->whereNull($t . '.deleted_at');
+        }
+
+        if (Schema::hasColumn($t, 'products_total_minor')) {
+            return (float) $q->sum(DB::raw('COALESCE(' . $t . '.products_total_minor, 0)')) / 100;
+        }
+
+        foreach (['total', 'grand_total', 'total_amount', 'amount', 'total_gbp'] as $column) {
+            if (Schema::hasColumn($t, $column)) {
+                return (float) $q->sum($column);
             }
         }
 
-        $dateExpr = null;
-        if (! empty($dateCols)) {
-            $dateExpr = count($dateCols) === 1
-                ? $dateCols[0]
-                : 'COALESCE(' . implode(', ', $dateCols) . ')';
+        if (! Schema::hasColumn($t, 'meta')) {
+            return 0.0;
         }
 
-        $q = DB::table($t);
-
-        if ($dateExpr) {
-            $q->whereBetween(DB::raw($dateExpr), [$start, $end]);
-        }
-
-        // Paid-only for realised revenue.
-        $q->where(function ($w) use ($t) {
-            $w->whereRaw('1=0');
-
-            if (Schema::hasColumn($t, 'payment_status')) {
-                $w->orWhereRaw('LOWER(' . $t . '.payment_status) = ?', ['paid']);
-            }
-
-            if (Schema::hasColumn($t, 'paid_at')) {
-                $w->orWhereNotNull($t . '.paid_at');
-            }
-
-            if (Schema::hasColumn($t, 'meta')) {
-                $w->orWhereRaw('LOWER(JSON_UNQUOTE(JSON_EXTRACT(' . $t . '.meta, "$.payment_status"))) = ?', ['paid']);
-            }
-        });
-
-        if (Schema::hasColumn($t, 'total')) {
-            return (float) $q->sum('total');
-        }
-        if (Schema::hasColumn($t, 'grand_total')) {
-            return (float) $q->sum('grand_total');
-        }
-        if (Schema::hasColumn($t, 'total_amount')) {
-            return (float) $q->sum('total_amount');
-        }
-        if (Schema::hasColumn($t, 'amount')) {
-            return (float) $q->sum('amount');
-        }
-        if (Schema::hasColumn($t, 'total_gbp')) {
-            return (float) $q->sum('total_gbp');
-        }
-
-        if (Schema::hasColumn($t, 'meta')) {
-            $expr = 'SUM(COALESCE(
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.grand_total")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_gbp")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_amount")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_pence")) AS DECIMAL(12,2)) / 100,
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount_pence")) AS DECIMAL(12,2)) / 100,
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.selectedProduct.totalMinor")) AS DECIMAL(12,2)) / 100,
-                0
-            )) as t';
-
-            return (float) $q->selectRaw($expr)->value('t');
-        }
-
-        return 0;
+        return (float) ($q->selectRaw('SUM(COALESCE(
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total")) AS DECIMAL(12,2)),
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.grand_total")) AS DECIMAL(12,2)),
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount")) AS DECIMAL(12,2)),
+            0
+        )) as t')->value('t') ?? 0);
     }
 
     private function bookingsCountForRange(Carbon $start, Carbon $end): int
     {
         $t = 'orders';
-        if (! Schema::hasTable($t)) {
+
+        if (! Schema::hasTable($t) || ! Schema::hasColumn($t, 'paid_at')) {
             return 0;
         }
 
-        // Use paid_at only so booking counts align with paid orders
-        $dateCols = [];
-        foreach (['paid_at'] as $c) {
-            if (Schema::hasColumn($t, $c)) {
-                $dateCols[] = $c;
-            }
+        $q = DB::table($t)
+            ->whereBetween($t . '.paid_at', [$start, $end])
+            ->whereNotNull($t . '.paid_at');
+
+        if (Schema::hasColumn($t, 'payment_status')) {
+            $q->where(function ($w) use ($t) {
+                $w->where($t . '.payment_status', 'paid')
+                    ->orWhereNotNull($t . '.paid_at');
+            });
         }
 
-        $dateExpr = null;
-        if (! empty($dateCols)) {
-            $dateExpr = count($dateCols) === 1
-                ? $dateCols[0]
-                : 'COALESCE(' . implode(', ', $dateCols) . ')';
-        }
-
-        $q = DB::table($t);
-
-        if ($dateExpr) {
-            $q->whereBetween(DB::raw($dateExpr), [$start, $end]);
-        }
-
-        // Paid-only so booking counts match paid orders.
-        $q->where(function ($w) use ($t) {
-            $w->whereRaw('1=0');
-
-            if (Schema::hasColumn($t, 'payment_status')) {
-                $w->orWhereRaw('LOWER(' . $t . '.payment_status) = ?', ['paid']);
-            }
-
-            if (Schema::hasColumn($t, 'paid_at')) {
-                $w->orWhereNotNull($t . '.paid_at');
-            }
-
-            if (Schema::hasColumn($t, 'meta')) {
-                $w->orWhereRaw('LOWER(JSON_UNQUOTE(JSON_EXTRACT(' . $t . '.meta, "$.payment_status"))) = ?', ['paid']);
-            }
-        });
-
-        // Soft deletes
         if (Schema::hasColumn($t, 'deleted_at')) {
-            $q->whereNull('deleted_at');
+            $q->whereNull($t . '.deleted_at');
         }
 
         return (int) $q->count();

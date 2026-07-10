@@ -22,6 +22,8 @@ class BookingStatusTable extends Base
 
     protected int|string|array $columnSpan = 'full'; // make the widget full-width below the calendar
 
+    protected ?string $pollingInterval = null;
+
     public string $period = 'monthly';
 
     private function getCurrentRange(): array
@@ -90,25 +92,30 @@ class BookingStatusTable extends Base
         }
 
         if ($statusKey === 'unpaid') {
-            // Match Unpaid Orders queue: only payment not taken yet.
-            // Do NOT treat pending approval as unpaid.
-            $q->where(function ($w) {
-                $w->whereRaw('1=0');
+            // Match Unpaid Orders using direct columns first.
+            if (Schema::hasColumn('orders', 'payment_status')) {
+                $q->where('orders.payment_status', 'unpaid');
+            } elseif (Schema::hasColumn('orders', 'booking_status')) {
+                $q->where('orders.booking_status', 'unpaid');
+            } elseif (Schema::hasColumn('orders', 'status')) {
+                $q->where('orders.status', 'unpaid');
+            } elseif (Schema::hasColumn('orders', 'meta')) {
+                $q->where(function ($w) {
+                    $w->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))) = ?", ['unpaid'])
+                        ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))) = ?", ['unpaid']);
+                });
+            }
 
-                if (Schema::hasColumn('orders', 'payment_status')) {
-                    $w->orWhere('orders.payment_status', 'unpaid');
-                }
-
-                // Legacy fallback: meta.payment_status / payment_status_label
-                if (Schema::hasColumn('orders', 'meta')) {
-                    $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))) = ?", ['unpaid']);
-                    $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))) = ?", ['unpaid']);
-                }
-            });
-
-            // Exclude completed/rejected buckets explicitly to prevent overlap
             if (Schema::hasColumn('orders', 'status')) {
-                $q->whereNotIn('orders.status', ['completed', 'approved', 'paid', 'rejected', 'cancelled', 'canceled', 'declined']);
+                $q->whereNotIn('orders.status', [
+                    'completed',
+                    'approved',
+                    'paid',
+                    'rejected',
+                    'cancelled',
+                    'canceled',
+                    'declined',
+                ]);
             }
 
             return;
@@ -249,54 +256,47 @@ class BookingStatusTable extends Base
 
     private function sumOrdersRevenue(?Carbon $start = null, ?Carbon $end = null, ?string $statusKey = null): float
     {
-        $t = 'orders';
-        if (! Schema::hasTable($t)) {
+        $table = 'orders';
+
+        if (! Schema::hasTable($table)) {
             return 0.0;
         }
 
-        // direct numeric columns if present
-        foreach (['total','grand_total','total_amount','amount','total_gbp'] as $col) {
-            if (Schema::hasColumn($t, $col)) {
-                $q = DB::table($t);
-                $dateCol = $statusKey ? $this->dateColumnForStatus($statusKey) : (Schema::hasColumn($t, 'created_at') ? 'orders.created_at' : null);
-                if ($start && $end && $dateCol) {
-                    $q->whereBetween($dateCol, [$start, $end]);
-                }
-                if ($statusKey !== null) {
-                    $this->applyOrderStatusFilter($q, $statusKey);
-                }
-                return (float) $q->sum($col);
+        $q = DB::table($table);
+
+        $dateColumn = $statusKey
+            ? $this->dateColumnForStatus($statusKey)
+            : (Schema::hasColumn($table, 'created_at') ? 'orders.created_at' : null);
+
+        if ($start && $end && $dateColumn) {
+            $q->whereBetween($dateColumn, [$start, $end]);
+        }
+
+        if ($statusKey !== null) {
+            $this->applyOrderStatusFilter($q, $statusKey);
+        }
+
+        if (Schema::hasColumn($table, 'products_total_minor')) {
+            return (float) $q->sum(DB::raw('COALESCE(orders.products_total_minor, 0)')) / 100;
+        }
+
+        foreach (['total', 'grand_total', 'total_amount', 'amount', 'total_gbp'] as $column) {
+            if (Schema::hasColumn($table, $column)) {
+                return (float) $q->sum($column);
             }
         }
 
-        // JSON meta fallback including minor-unit totals
-        if (Schema::hasColumn($t, 'meta')) {
-            $expr = 'SUM(COALESCE(
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.grand_total")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_amount")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_gbp")) AS DECIMAL(12,2)),
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.selectedProduct.totalMinor")) AS DECIMAL(12,2)) / 100,
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_pence")) AS DECIMAL(12,2)) / 100,
-                CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount_pence")) AS DECIMAL(12,2)) / 100,
-                0
-            )) as t';
-
-            $q = DB::table($t);
-            $dateCol = $statusKey ? $this->dateColumnForStatus($statusKey) : (Schema::hasColumn($t, 'created_at') ? 'orders.created_at' : null);
-            if ($start && $end && $dateCol) {
-                $q->whereBetween($dateCol, [$start, $end]);
-            }
-            if ($statusKey !== null) {
-                $this->applyOrderStatusFilter($q, $statusKey);
-            }
-
-            return (float) $q->selectRaw($expr)->value('t');
+        if (! Schema::hasColumn($table, 'meta')) {
+            return 0.0;
         }
 
-        return 0.0;
+        return (float) ($q->selectRaw('SUM(COALESCE(
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total")) AS DECIMAL(12,2)),
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.grand_total")) AS DECIMAL(12,2)),
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount")) AS DECIMAL(12,2)),
+            0
+        )) as t')->value('t') ?? 0);
     }
     public function getTableRecordKey(mixed $record): string
     {

@@ -57,86 +57,88 @@ class AppointmentsCalendarWidget extends CalendarWidget
 
         // 1) appointments table counts (match the Appointments list filters)
         if (Schema::hasTable('appointments') && Schema::hasColumn('appointments', 'start_at')) {
-            $q = DB::table('appointments')
-                ->selectRaw('DATE(appointments.start_at) as d, COUNT(*) as c')
-                ->whereNotNull('appointments.start_at')
-                ->whereBetween('appointments.start_at', [$start, $end]);
+            $hasOrderId = Schema::hasColumn('appointments', 'order_id')
+                && Schema::hasTable('orders')
+                && Schema::hasColumn('orders', 'id');
 
-            // Exclude orphan appointments (match the Appointments list behaviour)
-            if (Schema::hasColumn('appointments', 'order_id') || Schema::hasColumn('appointments', 'order_reference')) {
-                $q->where(function ($qq) {
-                    $has = false;
+            $hasOrderReference = Schema::hasColumn('appointments', 'order_reference')
+                && Schema::hasTable('orders')
+                && Schema::hasColumn('orders', 'reference');
 
-                    if (Schema::hasColumn('appointments', 'order_id')) {
-                        $qq->orWhereNotNull('order_id');
-                        $has = true;
-                    }
+            $applyCommonAppointmentFilters = function ($q) use ($start, $end) {
+                $q->whereNotNull('appointments.start_at')
+                    ->whereBetween('appointments.start_at', [$start, $end]);
 
-                    if (Schema::hasColumn('appointments', 'order_reference')) {
-                        $qq->orWhereNotNull('order_reference');
-                        $has = true;
-                    }
+                if (Schema::hasColumn('appointments', 'deleted_at')) {
+                    $q->whereNull('appointments.deleted_at');
+                }
 
-                    // If neither column exists (shouldn't happen due to outer check), keep query unchanged.
-                    if (! $has) {
-                        $qq->whereRaw('1=1');
-                    }
-                });
-            }
+                return $q;
+            };
 
-            // Exclude appointments linked to unpaid orders.
-            if (Schema::hasTable('orders')) {
-                $hasAppointmentsOrderId = Schema::hasColumn('appointments', 'order_id');
-                $hasAppointmentsOrderRef = Schema::hasColumn('appointments', 'order_reference');
-                $hasOrdersId = Schema::hasColumn('orders', 'id');
-                $hasOrdersReference = Schema::hasColumn('orders', 'reference');
-
-                if (($hasAppointmentsOrderId && $hasOrdersId) || ($hasAppointmentsOrderRef && $hasOrdersReference)) {
-                    $q->leftJoin('orders', function ($join) use ($hasAppointmentsOrderId, $hasAppointmentsOrderRef, $hasOrdersId, $hasOrdersReference) {
-                        if ($hasAppointmentsOrderId && $hasOrdersId) {
-                            $join->on('appointments.order_id', '=', 'orders.id');
-                        }
-
-                        if ($hasAppointmentsOrderRef && $hasOrdersReference) {
-                            if ($hasAppointmentsOrderId && $hasOrdersId) {
-                                $join->orOn('appointments.order_reference', '=', 'orders.reference');
-                            } else {
-                                $join->on('appointments.order_reference', '=', 'orders.reference');
-                            }
-                        }
-                    });
-
-                    $q->whereNotNull('orders.id');
-
+            $applyPaidOrderFilter = function ($q) {
+                if (Schema::hasColumn('orders', 'payment_status')) {
                     $q->where(function ($paid) {
-                        if (Schema::hasColumn('orders', 'payment_status')) {
-                            $paid->whereRaw("LOWER(COALESCE(orders.payment_status, '')) <> ?", ['unpaid']);
-                        } else {
-                            $paid->whereRaw('1=1');
-                        }
-
-                        $paid->whereRaw(
-                            "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))), '') <> ?",
-                            ['unpaid']
-                        )->whereRaw(
-                            "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))), '') <> ?",
-                            ['unpaid']
-                        );
+                        $paid->whereNull('orders.payment_status')
+                            ->orWhere('orders.payment_status', '<>', 'unpaid');
                     });
+                } elseif (Schema::hasColumn('orders', 'meta')) {
+                    $q->whereRaw(
+                        "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))), '') <> ?",
+                        ['unpaid']
+                    )->whereRaw(
+                        "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))), '') <> ?",
+                        ['unpaid']
+                    );
                 }
+
+                return $q;
+            };
+
+            $collectRows = function ($query) use ($addCount) {
+                $rows = $query
+                    ->selectRaw('DATE(appointments.start_at) as d, COUNT(*) as c')
+                    ->groupBy(DB::raw('DATE(appointments.start_at)'))
+                    ->get();
+
+                foreach ($rows as $row) {
+                    if (! empty($row->d)) {
+                        $addCount($row->d, (int) $row->c);
+                    }
+                }
+            };
+
+            if ($hasOrderId) {
+                $q = DB::table('appointments')
+                    ->join('orders', 'appointments.order_id', '=', 'orders.id')
+                    ->whereNotNull('appointments.order_id');
+
+                $applyCommonAppointmentFilters($q);
+                $applyPaidOrderFilter($q);
+                $collectRows($q);
             }
 
-            // Soft deletes (match Resource default)
-            if (Schema::hasColumn('appointments', 'deleted_at')) {
-                $q->whereNull('deleted_at');
+            if ($hasOrderReference) {
+                $q = DB::table('appointments')
+                    ->join('orders', 'appointments.order_reference', '=', 'orders.reference')
+                    ->whereNotNull('appointments.order_reference');
+
+                // Avoid double-counting appointments already matched by order_id.
+                if ($hasOrderId) {
+                    $q->whereNull('appointments.order_id');
+                }
+
+                $applyCommonAppointmentFilters($q);
+                $applyPaidOrderFilter($q);
+                $collectRows($q);
             }
 
-            $rows = $q->groupBy(DB::raw('DATE(appointments.start_at)'))->get();
-
-            foreach ($rows as $r) {
-                if (! empty($r->d)) {
-                    $addCount($r->d, (int) $r->c);
-                }
+            // If appointments cannot be linked to orders in this deployment,
+            // retain the calendar by counting visible appointment rows directly.
+            if (! $hasOrderId && ! $hasOrderReference) {
+                $q = DB::table('appointments');
+                $applyCommonAppointmentFilters($q);
+                $collectRows($q);
             }
         }
 

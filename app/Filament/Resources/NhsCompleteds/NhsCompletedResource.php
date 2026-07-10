@@ -46,11 +46,6 @@ class NhsCompletedResource extends Resource
             $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_pending_status'))) = 'completed'")
               ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_status'))) = 'completed'")
               ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.status'))) = 'completed'");
-
-            // last-resort string search (handles TEXT meta / non-JSON content)
-            $w->orWhereRaw('LOWER(meta) LIKE ?', ['%"nhs_pending_status":"completed"%'])
-              ->orWhereRaw('LOWER(meta) LIKE ?', ['%"nhs_status":"completed"%'])
-              ->orWhereRaw('LOWER(meta) LIKE ?', ['%"status":"completed"%']);
         });
 
         return $q;

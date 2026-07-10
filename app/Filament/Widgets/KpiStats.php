@@ -12,6 +12,7 @@ class KpiStats extends Base
 {
     protected static ?int $sort = 10;
     protected int|string|array $columnSpan = 'full';
+    protected ?string $pollingInterval = null;
 
     protected function getFilters(): array
     {
@@ -58,8 +59,26 @@ class KpiStats extends Base
 
     private function sumOrdersRevenue(?Carbon $start = null, ?Carbon $end = null): float
     {
-        $t = 'orders';
-        $parts = [];
+        if (! Schema::hasTable('orders')) {
+            return 0.0;
+        }
+
+        $q = DB::table('orders');
+
+        $dateCol = $this->completedDateColumn();
+        if ($start && $end && $dateCol) {
+            $q->whereBetween($dateCol, [$start, $end]);
+        }
+
+        if (Schema::hasColumn('orders', 'status')) {
+            $q->where('status', 'completed');
+        } elseif (Schema::hasColumn('orders', 'booking_status')) {
+            $q->where('booking_status', 'completed');
+        }
+
+        if (Schema::hasColumn('orders', 'products_total_minor')) {
+            return (float) $q->sum(DB::raw('COALESCE(products_total_minor, 0)')) / 100;
+        }
 
         foreach ([
             'total',
@@ -69,45 +88,23 @@ class KpiStats extends Base
             'total_gbp',
             'total_inc_vat',
             'net_total',
-        ] as $col) {
-            if (Schema::hasColumn($t, $col)) {
-                $parts[] = $col;
+        ] as $column) {
+            if (Schema::hasColumn('orders', $column)) {
+                return (float) $q->sum($column);
             }
         }
 
-        if (Schema::hasColumn($t, 'meta')) {
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total")) AS DECIMAL(12,2))';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.grand_total")) AS DECIMAL(12,2))';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount")) AS DECIMAL(12,2))';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_gbp")) AS DECIMAL(12,2))';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_amount")) AS DECIMAL(12,2))';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.selectedProduct.totalMinor")) AS DECIMAL(12,2)) / 100';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total_pence")) AS DECIMAL(12,2)) / 100';
-            $parts[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount_pence")) AS DECIMAL(12,2)) / 100';
-        }
-
-        if (empty($parts)) {
+        if (! Schema::hasColumn('orders', 'meta')) {
             return 0.0;
         }
 
-        $coalesce = 'COALESCE(' . implode(', ', $parts) . ', 0)';
-        $q = DB::table($t)->selectRaw('SUM(' . $coalesce . ') as t');
-
-        // Use the same date anchor as Completed KPI (approved_at/paid_at fallback)
-        $dateCol = $this->completedDateColumn();
-        if ($start && $end && $dateCol) {
-            $q->whereBetween($dateCol, [$start, $end]);
-        }
-
-        // Only include realised revenue from Completed orders
-        if (Schema::hasColumn($t, 'status')) {
-            $q->where('status', 'completed');
-        } elseif (Schema::hasColumn($t, 'booking_status')) {
-            $q->where('booking_status', 'completed');
-        }
-
-        return (float) ($q->value('t') ?? 0);
+        return (float) ($q->selectRaw('SUM(COALESCE(
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total")) AS DECIMAL(12,2)),
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.grand_total")) AS DECIMAL(12,2)),
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount")) AS DECIMAL(12,2)),
+            0
+        )) as t')->value('t') ?? 0);
     }
 
     private function countUnpaidOrders(?Carbon $start = null, ?Carbon $end = null): int
@@ -122,7 +119,6 @@ class KpiStats extends Base
             $q->whereBetween('created_at', [$start, $end]);
         }
 
-        // Exclude other buckets so counts don’t overlap
         if (Schema::hasColumn('orders', 'status')) {
             $q->whereNotIn('status', [
                 'completed',
@@ -135,36 +131,25 @@ class KpiStats extends Base
             ]);
         }
 
-        // Define "unpaid" as payment not taken yet (with fallbacks)
-        $q->where(function ($w) {
-            // Seed false so OR conditions behave consistently
-            $w->whereRaw('1=0');
-
-            if (Schema::hasColumn('orders', 'payment_status')) {
-                $w->orWhere('payment_status', 'unpaid');
-            }
-
-            if (Schema::hasColumn('orders', 'booking_status')) {
-                // Legacy/edge: some rows may store unpaid here
-                $w->orWhere('booking_status', 'unpaid');
-            }
-
-            if (Schema::hasColumn('orders', 'status')) {
-                // Legacy/edge: some rows may store unpaid as status
-                $w->orWhere('status', 'unpaid');
-            }
-
-            if (Schema::hasColumn('orders', 'meta')) {
-                $w->orWhereRaw(
+        if (Schema::hasColumn('orders', 'payment_status')) {
+            $q->where('payment_status', 'unpaid');
+        } elseif (Schema::hasColumn('orders', 'booking_status')) {
+            $q->where('booking_status', 'unpaid');
+        } elseif (Schema::hasColumn('orders', 'status')) {
+            $q->where('status', 'unpaid');
+        } elseif (Schema::hasColumn('orders', 'meta')) {
+            $q->where(function ($w) {
+                $w->whereRaw(
                     "LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status'))) = ?",
                     ['unpaid']
-                );
-                $w->orWhereRaw(
+                )->orWhereRaw(
                     "LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status_label'))) = ?",
                     ['unpaid']
                 );
-            }
-        });
+            });
+        } else {
+            return 0;
+        }
 
         return (int) $q->count();
     }
@@ -236,20 +221,24 @@ class KpiStats extends Base
 
     private function countNewOrders(?Carbon $start = null, ?Carbon $end = null): int
     {
-        if (!Schema::hasTable('orders')) {
+        if (! Schema::hasTable('orders')) {
             return 0;
         }
 
         $q = DB::table('orders');
 
-        // New orders are anchored to creation time
         if ($start && $end && Schema::hasColumn('orders', 'created_at')) {
             $q->whereBetween('created_at', [$start, $end]);
         }
 
-        // Prefer meta.type == 'new'
-        if (Schema::hasColumn('orders', 'meta')) {
+        if (Schema::hasColumn('orders', 'type')) {
+            $q->whereRaw('LOWER(type) = ?', ['new']);
+        } elseif (Schema::hasColumn('orders', 'reference')) {
+            $q->where('reference', 'REGEXP', '^PTC[A-Z]*N[0-9]{6}$');
+        } elseif (Schema::hasColumn('orders', 'meta')) {
             $q->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.type'))) = ?", ['new']);
+        } else {
+            return 0;
         }
 
         return (int) $q->count();
