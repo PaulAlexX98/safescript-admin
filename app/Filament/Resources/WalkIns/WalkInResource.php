@@ -39,18 +39,12 @@ class WalkInResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        try {
-            $count = static::getEloquentQuery()->count();
-        } catch (\Throwable $e) {
-            $count = 0;
-        }
-
-        return $count > 0 ? (string) $count : null;
+        return null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        return 'success';
+        return null;
     }
 
     public static function getEloquentQuery(): Builder

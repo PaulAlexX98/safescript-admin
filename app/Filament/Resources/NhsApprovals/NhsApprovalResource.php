@@ -22,6 +22,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 
 class NhsApprovalResource extends Resource
 {
@@ -34,11 +35,15 @@ class NhsApprovalResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        $count = \App\Models\NhsApplication::query()
-            ->where('status', 'pending')
-            ->count();
+        $count = Cache::remember(
+            'filament:navigation:nhs-approvals-count',
+            now()->addMinutes(2),
+            fn (): int => NhsApplication::query()
+                ->where('status', 'pending')
+                ->count()
+        );
 
-        return $count ? (string) $count : null;
+        return $count > 0 ? (string) $count : null;
     }
 
     public static function getNavigationBadgeColor(): ?string
@@ -48,11 +53,12 @@ class NhsApprovalResource extends Resource
 
     public static function getNavigationBadgeTooltip(): ?string
     {
-        $count = \App\Models\NhsApplication::query()
-            ->where('status', 'pending')
-            ->count();
+        $count = (int) Cache::get(
+            'filament:navigation:nhs-approvals-count',
+            0
+        );
 
-        return $count ? ($count . ' pending approval') : null;
+        return $count > 0 ? ($count . ' pending approval') : null;
     }
 
     public static function table(Table $table): Table

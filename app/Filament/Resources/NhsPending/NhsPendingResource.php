@@ -10,6 +10,7 @@ use Illuminate\Support\HtmlString;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\ViewEntry;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\View;
 use Log;
 use Filament\Forms\Components\Textarea;
@@ -56,6 +57,7 @@ class NhsPendingResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery();
+        $query->with('user');
 
         // 1) Only show pending rows for the NHS Pending list
         try {
@@ -1496,25 +1498,33 @@ class NhsPendingResource extends Resource
 
     
 
-    public static function getNavigationBadge(): ?string
+   public static function getNavigationBadge(): ?string
     {
-        try {
-            $count = static::getEloquentQuery()->count();
-        } catch (Throwable $e) {
-            $count = 0;
-        }
+        $count = Cache::remember(
+            'filament:navigation:nhs-pending-count',
+            now()->addMinutes(2),
+            function (): int {
+                try {
+                    return static::getEloquentQuery()->count();
+                } catch (Throwable $e) {
+                    return 0;
+                }
+            }
+        );
+
         return $count > 0 ? (string) $count : null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        try {
-            $count = static::getEloquentQuery()->count();
-        } catch (Throwable $e) {
-            $count = 0;
-        }
-        return $count > 0 ? 'primary' : 'gray';
+        $count = (int) Cache::get(
+            'filament:navigation:nhs-pending-count',
+            0
+        );
+
+        return $count > 0 ? 'warning' : 'gray';
     }
+
     public function startConsultationAction($record)
     {
         // Normalise meta

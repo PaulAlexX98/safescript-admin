@@ -43,6 +43,7 @@ use Illuminate\Support\Arr;
 use Filament\Tables\Columns\BadgeColumn;
 use Filament\Tables\Columns\ViewColumn;
 use Filament\Notifications\Notification;
+use Illuminate\Support\Facades\Cache;
 
 
 class UnpaidOrderResource extends Resource
@@ -1793,14 +1794,31 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
 
    
 
-    public static function getNavigationBadge(): ?string
+   public static function getNavigationBadge(): ?string
     {
-        return null;
+        $count = Cache::remember(
+            'filament:navigation:unpaid-orders-count',
+            now()->addMinutes(2),
+            function (): int {
+                try {
+                    return static::getEloquentQuery()->count();
+                } catch (Throwable $e) {
+                    return 0;
+                }
+            }
+        );
+
+        return $count > 0 ? (string) $count : null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        return null;
+        $count = (int) Cache::get(
+            'filament:navigation:unpaid-orders-count',
+            0
+        );
+
+        return $count > 0 ? 'warning' : 'gray';
     }
 
     public static function canCreate(): bool

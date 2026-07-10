@@ -40,6 +40,7 @@ use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\ToggleButtons;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Forms\Components\Select;
+use Illuminate\Support\Facades\Cache;
 
 class ApprovedOrderResource extends Resource
 {
@@ -2938,22 +2939,29 @@ class ApprovedOrderResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        try {
-            $count = static::getEloquentQuery()->count();
-        } catch (Throwable $e) {
-            $count = 0;
-        }
+        $count = Cache::remember(
+            'filament:navigation:approved-orders-count',
+            now()->addMinutes(2),
+            function (): int {
+                try {
+                    return static::getEloquentQuery()->count();
+                } catch (Throwable $e) {
+                    return 0;
+                }
+            }
+        );
+
         return $count > 0 ? (string) $count : null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        try {
-            $count = static::getEloquentQuery()->count();
-        } catch (Throwable $e) {
-            $count = 0;
-        }
-        return $count > 0 ? 'primary' : 'gray';
+        $count = (int) Cache::get(
+            'filament:navigation:approved-orders-count',
+            0
+        );
+
+        return $count > 0 ? 'success' : 'gray';
     }
 
     protected static function sixMonthReviewHistoryForPending($record): string

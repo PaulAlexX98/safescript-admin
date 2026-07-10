@@ -32,6 +32,7 @@ use Illuminate\Support\Facades\Schema as SchemaFacade;
 use App\Models\Order;
 use App\Models\PendingOrder;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Cache;
 
 class AppointmentResource extends Resource
 {
@@ -2470,6 +2471,8 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                             'zoom_join_url' => $joinUrl,
                         ]);
 
+                        Cache::forget('filament:navigation:appointments-count');
+
                         Notification::make()
                             ->success()
                             ->title('Appointment rescheduled')
@@ -2680,196 +2683,14 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
             });
     }
 
-    public static function getNavigationBadge(): ?string
-    {
-        $pendingRefCol = null;
-        try {
-            $pendingRefCol = \Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'reference')
-                ? 'reference'
-                : (\Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'order_reference')
-                    ? 'order_reference'
-                    : (\Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'ref')
-                        ? 'ref'
-                        : null));
-        } catch (\Throwable $e) {
-            $pendingRefCol = null;
-        }
-        $hasApptReference = false;
-        try {
-            $hasApptReference = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'reference');
-        } catch (\Throwable $e) {
-            $hasApptReference = false;
-        }
-        $hasPendingOrderId = false;
-        try {
-            $hasPendingOrderId = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'pending_order_id');
-        } catch (\Throwable $e) {
-            $hasPendingOrderId = false;
-        }
-        $hasStatusCol = false;
-        try {
-            $hasStatusCol = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'status');
-        } catch (\Throwable $e) {
-            $hasStatusCol = false;
-        }
-        $hasOrderPaymentStatusCol = false;
-        try {
-            $hasOrderPaymentStatusCol = \Illuminate\Support\Facades\Schema::hasColumn('orders', 'payment_status');
-        } catch (\Throwable $e) {
-            $hasOrderPaymentStatusCol = false;
-        }
-        $count = Appointment::query()
-            ->whereNotNull('start_at')
-            ->where('start_at', '>=', now('Europe/London')->startOfDay()->utc())
-            ->when($hasStatusCol, function (Builder $q) {
-                $q->where(function (Builder $qq) {
-                    $qq->whereNull('status')
-                       ->orWhere('status', '')
-                       ->orWhereNotIn('status', ['completed', 'complete', 'done', 'cancelled', 'canceled', 'rejected']);
-                });
-            })
-            ->where(function (Builder $q) use ($pendingRefCol, $hasApptReference, $hasPendingOrderId, $hasOrderPaymentStatusCol) {
-                $q->orWhereExists(function ($sub) use ($hasOrderPaymentStatusCol) {
-                    $sub->select(\DB::raw('1'))
-                        ->from('orders')
-                        ->whereColumn('orders.id', 'appointments.order_id')
-                        ->where(function ($qq) {
-                            $qq->where('orders.status', 'pending')
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
-                        })
-                        ->whereRaw("COALESCE(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')), '') != 'unpaid'")
-                        ->when($hasOrderPaymentStatusCol, function ($qqq) {
-                            $qqq->where(function ($q3) {
-                                $q3->whereNull('orders.payment_status')
-                                   ->orWhere('orders.payment_status', '!=', 'unpaid');
-                            });
-                        });
-                });
-
-                $q->orWhereExists(function ($sub) use ($hasApptReference, $hasOrderPaymentStatusCol) {
-                    $sub->select(\DB::raw('1'))
-                        ->from('orders')
-                        ->where(function ($qq) use ($hasApptReference) {
-                            $qq->whereColumn('orders.reference', 'appointments.order_reference');
-
-                            if ($hasApptReference) {
-                                $qq->orWhereColumn('orders.reference', 'appointments.reference');
-                            }
-                        })
-                        ->where(function ($qq) {
-                            $qq->where('orders.status', 'pending')
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
-                        })
-                        ->whereRaw("COALESCE(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')), '') != 'unpaid'")
-                        ->when($hasOrderPaymentStatusCol, function ($qqq) {
-                            $qqq->where(function ($q3) {
-                                $q3->whereNull('orders.payment_status')
-                                   ->orWhere('orders.payment_status', '!=', 'unpaid');
-                            });
-                        });
-                });
-            })
-            ->count();
-
-        return $count > 0 ? (string) $count : null;
-    }
-
     public static function getNavigationBadgeColor(): ?string
     {
-        $pendingRefCol = null;
-        try {
-            $pendingRefCol = \Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'reference')
-                ? 'reference'
-                : (\Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'order_reference')
-                    ? 'order_reference'
-                    : (\Illuminate\Support\Facades\Schema::hasColumn('pending_orders', 'ref')
-                        ? 'ref'
-                        : null));
-        } catch (\Throwable $e) {
-            $pendingRefCol = null;
-        }
-        $hasApptReference = false;
-        try {
-            $hasApptReference = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'reference');
-        } catch (\Throwable $e) {
-            $hasApptReference = false;
-        }
-        $hasPendingOrderId = false;
-        try {
-            $hasPendingOrderId = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'pending_order_id');
-        } catch (\Throwable $e) {
-            $hasPendingOrderId = false;
-        }
-        $hasStatusCol = false;
-        try {
-            $hasStatusCol = \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'status');
-        } catch (\Throwable $e) {
-            $hasStatusCol = false;
-        }
-        $hasOrderPaymentStatusCol = false;
-        try {
-            $hasOrderPaymentStatusCol = \Illuminate\Support\Facades\Schema::hasColumn('orders', 'payment_status');
-        } catch (\Throwable $e) {
-            $hasOrderPaymentStatusCol = false;
-        }
-        $hasWaiting = Appointment::query()
-            ->whereNotNull('start_at')
-            ->where('start_at', '>=', now('Europe/London')->startOfDay()->utc())
-            ->when($hasStatusCol, function (Builder $q) {
-                $q->where(function (Builder $qq) {
-                    $qq->whereNull('status')
-                       ->orWhere('status', '')
-                       ->orWhereNotIn('status', ['completed', 'complete', 'done', 'cancelled', 'canceled', 'rejected']);
-                });
-            })
-            ->where(function (Builder $q) use ($pendingRefCol, $hasApptReference, $hasPendingOrderId, $hasOrderPaymentStatusCol) {
-                $q->orWhereExists(function ($sub) use ($hasOrderPaymentStatusCol) {
-                    $sub->select(\DB::raw('1'))
-                        ->from('orders')
-                        ->whereColumn('orders.id', 'appointments.order_id')
-                        ->where(function ($qq) {
-                            $qq->where('orders.status', 'pending')
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
-                        })
-                        ->whereRaw("COALESCE(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')), '') != 'unpaid'")
-                        ->when($hasOrderPaymentStatusCol, function ($qqq) {
-                            $qqq->where(function ($q3) {
-                                $q3->whereNull('orders.payment_status')
-                                   ->orWhere('orders.payment_status', '!=', 'unpaid');
-                            });
-                        });
-                });
+        $count = (int) Cache::get(
+            'filament:navigation:appointments-count',
+            0
+        );
 
-                $q->orWhereExists(function ($sub) use ($hasApptReference, $hasOrderPaymentStatusCol) {
-                    $sub->select(\DB::raw('1'))
-                        ->from('orders')
-                        ->where(function ($qq) use ($hasApptReference) {
-                            $qq->whereColumn('orders.reference', 'appointments.order_reference');
-
-                            if ($hasApptReference) {
-                                $qq->orWhereColumn('orders.reference', 'appointments.reference');
-                            }
-                        })
-                        ->where(function ($qq) {
-                            $qq->where('orders.status', 'pending')
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')) = 'pending'")
-                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label')) = 'Pending'");
-                        })
-                        ->whereRaw("COALESCE(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status')), '') != 'unpaid'")
-                        ->when($hasOrderPaymentStatusCol, function ($qqq) {
-                            $qqq->where(function ($q3) {
-                                $q3->whereNull('orders.payment_status')
-                                   ->orWhere('orders.payment_status', '!=', 'unpaid');
-                            });
-                        });
-                });
-            })
-            ->exists();
-
-        return $hasWaiting ? 'success' : 'gray';
+        return $count > 0 ? 'success' : 'gray';
     }
 
     public static function getNavigationBadgeTooltip(): ?string
