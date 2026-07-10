@@ -12,71 +12,49 @@ use Filament\Navigation\NavigationGroup;
 use Filament\Navigation\NavigationItem;
 use App\Filament\Resources\Appointments\AppointmentResource as AppointmentsAppointmentResource;
 use App\Filament\Resources\WalkIns\WalkInResource;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Route;
-use App\Filament\Widgets\AppointmentsCalendarWidget;
 use Guava\Calendar\CalendarPlugin;
 use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
 use App\Filament\Pages\Auth\EditProfile;
 use Filament\Enums\ThemeMode;
-use App\Filament\Widgets\ClockWidget;
-
-
 
 class AdminPanelProvider extends PanelProvider
 {
     public function panel(Panel $panel): Panel
     {
-        // Guard if tables don’t exist yet and compute counts up front
-        $hasOrders = Schema::hasTable('orders');
-        $hasAppointments = Schema::hasTable('appointments');
-
-        $pendingNhs = 0;
-        if ($hasOrders && Schema::hasColumn('orders', 'meta') && Schema::hasColumn('orders', 'status')) {
-            $pendingNhs = DB::table('orders')
-                ->where('meta->type', 'nhs')
-                ->where('status', 'pending')
-                ->count();
-        }
-
-        $pendingApproval = 0;
-        if ($hasOrders && Schema::hasColumn('orders', 'status')) {
-            $pendingApproval = DB::table('orders')
-                ->where('status', 'pending')
-                ->count();
-        }
-
-        $upcoming = 0;
-        if ($hasAppointments
-            && Schema::hasColumn('appointments', 'start_at')
-            && Schema::hasColumn('appointments', 'status')) {
-            $upcoming = DB::table('appointments')
-                ->where('start_at', '>=', now())
-                ->where('status', 'booked')
-                ->count();
-        }
-
         return $panel
-            
             ->id('admin')
             ->default()
             ->path('admin')
             ->homeUrl(fn () => Dashboard::getUrl())
-            ->middleware([\Illuminate\Cookie\Middleware\EncryptCookies::class, \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class, \Illuminate\Session\Middleware\StartSession::class, \Illuminate\View\Middleware\ShareErrorsFromSession::class, \Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class, \Illuminate\Routing\Middleware\SubstituteBindings::class,])
+            ->middleware([
+                \Illuminate\Cookie\Middleware\EncryptCookies::class,
+                \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+                \Illuminate\Session\Middleware\StartSession::class,
+                \Illuminate\View\Middleware\ShareErrorsFromSession::class,
+                \Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class,
+                \Illuminate\Routing\Middleware\SubstituteBindings::class,
+            ])
             ->topbar(false)
             ->login()
             ->registration()
             ->passwordReset()
             ->emailVerification()
             ->emailChangeVerification()
-            ->renderHook('panels::body.end', fn () => view('components.layout.app'))
-            ->renderHook('panels::body.end', fn () => view('vendor.filament.components.global-shortcuts'))
-            ->renderHook('panels::scripts.after', fn () => view('partials.dictation-worker'))
-            
-            
+            ->renderHook(
+                'panels::body.end',
+                fn () => view('components.layout.app')
+            )
+            ->renderHook(
+                'panels::body.end',
+                fn () => view('vendor.filament.components.global-shortcuts')
+            )
+            ->renderHook(
+                'panels::scripts.after',
+                fn () => view('partials.dictation-worker')
+            )
             ->plugins([
-                \Guava\Calendar\CalendarPlugin::make(),
+                CalendarPlugin::make(),
             ])
             ->widgets([
                 \App\Filament\Widgets\ClockWidget::class,
@@ -90,86 +68,125 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->authGuard('web')
             ->authMiddleware([
-                FilamentAuthenticate::class, // require login for /admin
+                FilamentAuthenticate::class,
             ])
             ->profile(EditProfile::class)
-            ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
+            ->discoverResources(
+                in: app_path('Filament/Resources'),
+                for: 'App\\Filament\\Resources'
+            )
             ->pages([
                 Dashboard::class,
                 ConsultationRunner::class,
             ])
-            ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
-
+            ->discoverWidgets(
+                in: app_path('Filament/Widgets'),
+                for: 'App\\Filament\\Widgets'
+            )
             ->routes(function () {
-                // These are scoped under the panel path "admin" and the admin auth guard
-                Route::get('/consultations/{session}', ConsultationRunner::class)
-                    ->name('filament.admin.consultations.session');
-                Route::get('/consultations/{session}/{tab}', ConsultationRunner::class)
-                    ->name('filament.admin.consultations.session.tab');
+                Route::get(
+                    '/consultations/{session}',
+                    ConsultationRunner::class
+                )->name('filament.admin.consultations.session');
+
+                Route::get(
+                    '/consultations/{session}/{tab}',
+                    ConsultationRunner::class
+                )->name('filament.admin.consultations.session.tab');
             })
-
-            
-
             ->renderHook('panels::head.end', function () {
-                if (!request()->boolean('inline')) return '';
+                if (! request()->boolean('inline')) {
+                    return '';
+                }
+
                 $style = <<<HTML
 <style>
-  /* Hide Filament chrome when viewing inside inline modal iframe */
   .fi-sidebar,
   .fi-topbar,
   .fi-header,
   aside,
-  nav { display: none !important; }
-  .fi-main { margin-left: 0 !important; }
-  body { background: transparent !important; padding: 16px !important; }
-  html, body { overflow-x: hidden; }
+  nav {
+    display: none !important;
+  }
+
+  .fi-main {
+    margin-left: 0 !important;
+  }
+
+  body {
+    background: transparent !important;
+    padding: 16px !important;
+  }
+
+  html,
+  body {
+    overflow-x: hidden;
+  }
 </style>
 HTML;
+
                 return HtmlString::from($style);
             })
-
             ->navigationGroups([
-                NavigationGroup::make('Private Services')->collapsed(false),
-                NavigationGroup::make('NHS Services')->collapsed(false),
+                NavigationGroup::make('Private Services')
+                    ->collapsed(false),
+
+                NavigationGroup::make('NHS Services')
+                    ->collapsed(false),
 
                 NavigationGroup::make('Notifications')
                     ->collapsed(false)
                     ->items([
                         NavigationItem::make('Pending NHS')
                             ->icon('heroicon-o-clipboard-document-check')
-                            ->badge($pendingNhs ?: null)
-                            ->url(fn () => AppointmentsAppointmentResource::getUrl('index'))
-                            ->visible($hasOrders),
+                            ->url(
+                                fn () => AppointmentsAppointmentResource::getUrl('index')
+                            )
+                            ->visible(true),
 
                         NavigationItem::make('Appointments')
                             ->icon('heroicon-o-calendar')
-                            ->url(fn () => AppointmentsAppointmentResource::getUrl('index'))
+                            ->url(
+                                fn () => AppointmentsAppointmentResource::getUrl('index')
+                            )
                             ->visible(true),
 
                         NavigationItem::make('Walk In')
                             ->icon('heroicon-o-user-plus')
-                            ->url(fn () => WalkInResource::getUrl('index'))
+                            ->url(
+                                fn () => WalkInResource::getUrl('index')
+                            )
                             ->visible(true),
 
                         NavigationItem::make('Pending Approval')
                             ->icon('heroicon-o-clock')
-                            ->badge($pendingApproval ?: null)
-                            ->url(fn () => AppointmentsAppointmentResource::getUrl('index'))
-                            ->visible($hasOrders),
+                            ->url(
+                                fn () => AppointmentsAppointmentResource::getUrl('index')
+                            )
+                            ->visible(true),
 
                         NavigationItem::make('Upcoming Appointments')
                             ->icon('heroicon-o-calendar-days')
-                            ->badge($upcoming ?: null)
-                            ->url(fn () => AppointmentsAppointmentResource::getUrl('index', ['filter' => 'upcoming']))
-                            ->visible($hasAppointments),
+                            ->url(
+                                fn () => AppointmentsAppointmentResource::getUrl(
+                                    'index',
+                                    ['filter' => 'upcoming']
+                                )
+                            )
+                            ->visible(true),
                     ]),
 
-                // Orders directly below the Notifications/Appointments section
-                NavigationGroup::make('Orders')->collapsed(false),
+                NavigationGroup::make('Orders')
+                    ->collapsed(false),
 
-                NavigationGroup::make('People')->collapsed(false),
-                NavigationGroup::make('Operations')->collapsed(false),
-                NavigationGroup::make('Logs')->collapsed(false),
+                NavigationGroup::make('People')
+                    ->collapsed(false),
+
+                NavigationGroup::make('Operations')
+                    ->collapsed(false),
+
+                NavigationGroup::make('Logs')
+                    ->collapsed(false),
 
                 NavigationGroup::make('Scheduling')
                     ->collapsed(false)
@@ -178,19 +195,20 @@ HTML;
                             ->icon('heroicon-o-clock')
                             ->url(function () {
                                 $class = ScheduleResource::class;
-                                return class_exists($class) ? $class::getUrl('index') : '/admin';
+
+                                return class_exists($class)
+                                    ? $class::getUrl('index')
+                                    : '/admin';
                             })
                             ->visible(true),
                     ]),
 
-                NavigationGroup::make('Front')->collapsed(false),
-                NavigationGroup::make('Forms')->collapsed(true),
+                NavigationGroup::make('Front')
+                    ->collapsed(false),
+
+                NavigationGroup::make('Forms')
+                    ->collapsed(true),
             ])
-            /*->viteTheme([
-                'resources/css/filament/admin/theme.css',
-                'resources/css/filament/inline-clean.css',
-            ])*/
-            
             ->darkMode(true)
             ->defaultThemeMode(ThemeMode::Dark)
             ->colors([
