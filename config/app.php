@@ -53,6 +53,10 @@ return [
     */
 
     'url' => env('APP_URL', 'http://localhost'),
+    'frontend_url' => env(
+        'FRONTEND_URL',
+        'https://www.pharmacy-express.co.uk'
+    ),
 
     /*
     |--------------------------------------------------------------------------
