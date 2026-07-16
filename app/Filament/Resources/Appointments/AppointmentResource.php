@@ -2620,7 +2620,7 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
     {
         return $base
             ->whereNotNull('appointments.start_at')
-            ->when(SchemaFacade::hasColumn('appointments', 'status'), function (Builder $query): void {
+            ->where(function (Builder $query): void {
                 $query->where(function (Builder $statusQuery): void {
                     $statusQuery
                         ->whereNull('appointments.status')
@@ -2831,6 +2831,8 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
     {
         if (! $record) return null;
 
+        $cacheKey = $record->getKey();
+
         if (method_exists($record, 'relationLoaded') && $record->relationLoaded('order') && $record->order) {
             $order = $record->order;
 
@@ -2838,16 +2840,15 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                 $order->loadMissing('user');
             }
 
+            static::$relatedOrderCache[$cacheKey] = $order;
             return $order;
         }
-
-        $cacheKey = $record->getKey();
         if (array_key_exists($cacheKey, static::$relatedOrderCache)) {
             return static::$relatedOrderCache[$cacheKey];
         }
         // 1) Direct link first
         try {
-            if (\Illuminate\Support\Facades\Schema::hasColumn('appointments', 'order_id') && !empty($record->order_id)) {
+            if (! empty($record->order_id)) {
                 $o = \App\Models\Order::query()
                     ->with('user')
                     ->find($record->order_id);
@@ -2884,56 +2885,6 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
 
                 if ($o) {
                     return $o;
-                }
-            }
-        } catch (\Throwable $e) {}
-
-        // 2) Heuristic by matching appointment time stored in order meta
-        try {
-            if (!empty($record->start_at)) {
-                $s = \Carbon\Carbon::parse($record->start_at);
-
-                $utc = $s->copy()->setTimezone('UTC');
-                $lon = $s->copy()->setTimezone('Europe/London');
-
-                $candidates = array_values(array_unique(array_filter([
-                    // ISO variants
-                    $utc->toIso8601String(),
-                    $lon->toIso8601String(),
-
-                    // MySQL-ish variants
-                    $utc->format('Y-m-d H:i:s'),
-                    $lon->format('Y-m-d H:i:s'),
-                    $utc->format('Y-m-d H:i'),
-                    $lon->format('Y-m-d H:i'),
-
-                    // Explicit Zulu format (often used in JS)
-                    $utc->format('Y-m-d\\TH:i:s\\Z'),
-                ], fn ($v) => is_string($v) && trim($v) !== '')));
-
-                $keysToTry = [
-                    'appointment_start_at',
-                    'appointment_at',
-                    'appointment_start',
-                    'appointment_datetime',
-                    'appointmentDateTime',
-                ];
-
-                foreach ($keysToTry as $key) {
-                    $placeholders = implode(',', array_fill(0, count($candidates), '?'));
-
-                    $ord = \App\Models\Order::query()
-                        ->whereRaw(
-                            "JSON_UNQUOTE(JSON_EXTRACT(meta, '$.$key')) in ($placeholders)",
-                            $candidates
-                        )
-                        ->orderByDesc('id')
-                        ->first();
-
-                    if ($ord) {
-                        static::$relatedOrderCache[$cacheKey] = $ord;
-                        return $ord;
-                    }
                 }
             }
         } catch (\Throwable $e) {}
@@ -3491,6 +3442,11 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
             return null;
         }
 
+        $cacheKey = $record->getKey();
+        if ($cacheKey && array_key_exists($cacheKey, static::$relatedPendingCache)) {
+            return static::$relatedPendingCache[$cacheKey];
+        }
+
         // 1) Match by a reference value saved on the appointment row
         try {
             $ref = '';
@@ -3509,6 +3465,9 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                     ->where('reference', $ref)
                     ->orderByDesc('id')
                     ->first();
+                if ($cacheKey) {
+                    static::$relatedPendingCache[$cacheKey] = $p;
+                }
                 if ($p) {
                     return $p;
                 }
@@ -3516,49 +3475,8 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
         } catch (\Throwable $e) {
         }
 
-        // 2) Heuristic by matching appointment time stored in pending order meta
-        try {
-            if (! empty($record->start_at)) {
-                $s = \Carbon\Carbon::parse($record->start_at);
-
-                $utc = $s->copy()->setTimezone('UTC');
-                $lon = $s->copy()->setTimezone('Europe/London');
-
-                $candidates = array_values(array_unique(array_filter([
-                    $utc->toIso8601String(),
-                    $lon->toIso8601String(),
-                    $utc->format('Y-m-d H:i:s'),
-                    $lon->format('Y-m-d H:i:s'),
-                    $utc->format('Y-m-d H:i'),
-                    $lon->format('Y-m-d H:i'),
-                    $utc->format('Y-m-d\\TH:i:s\\Z'),
-                ], fn ($v) => is_string($v) && trim($v) !== '')));
-
-                $keysToTry = [
-                    'appointment_start_at',
-                    'appointment_at',
-                    'appointment_start',
-                    'appointment_datetime',
-                    'appointmentDateTime',
-                ];
-
-                foreach ($keysToTry as $key) {
-                    $placeholders = implode(',', array_fill(0, count($candidates), '?'));
-
-                    $p = \App\Models\PendingOrder::query()
-                        ->whereRaw(
-                            "JSON_UNQUOTE(JSON_EXTRACT(meta, '$.$key')) in ($placeholders)",
-                            $candidates
-                        )
-                        ->orderByDesc('id')
-                        ->first();
-
-                    if ($p) {
-                        return $p;
-                    }
-                }
-            }
-        } catch (\Throwable $e) {
+        if ($cacheKey) {
+            static::$relatedPendingCache[$cacheKey] = null;
         }
 
         return null;
