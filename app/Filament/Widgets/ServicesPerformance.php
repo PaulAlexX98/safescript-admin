@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\Relation;
 
-use Illuminate\Support\Facades\Schema;
+use App\Support\DatabaseSchema as Schema;
 use App\Models\Order;
 use Carbon\Carbon;
 
@@ -139,11 +139,6 @@ class ServicesPerformance extends Base
             ->orderByDesc('sp.revenue')
             ->orderBy('sp.id')
             ->limit(10);
-
-        \Log::debug('ServicesPerformance SQL', [
-            'sql'      => $outer->toSql(),
-            'bindings' => $outer->getBindings(),
-        ]);
 
         return $outer;
     }

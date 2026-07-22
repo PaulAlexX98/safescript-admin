@@ -6,7 +6,7 @@ use App\Models\Order;
 use Filament\Tables;
 use Filament\Widgets\TableWidget as Base;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Schema;
+use App\Support\DatabaseSchema as Schema;
 use Illuminate\Support\Facades\DB;
 
 class DailyRevenueTable extends Base
@@ -20,7 +20,7 @@ class DailyRevenueTable extends Base
         $sumExpr = $this->sumRevenueExpr();
 
         // Prefer payments if present and carrying amounts
-        $hasPayments = \Illuminate\Support\Facades\Schema::hasTable('payments');
+        $hasPayments = Schema::hasTable('payments');
         $usePayments = false;
         $paymentAmountExpr = null;
         if ($hasPayments) {
@@ -76,11 +76,11 @@ class DailyRevenueTable extends Base
 
         // If we can't find any usable total on orders, fall back to summing order_items
         $useItems = $sumExpr === 'SUM(0)'
-            && \Illuminate\Support\Facades\Schema::hasTable('order_items')
-            && (\Illuminate\Support\Facades\Schema::hasColumn('order_items', 'total')
-                || \Illuminate\Support\Facades\Schema::hasColumn('order_items', 'line_total')
-                || (\Illuminate\Support\Facades\Schema::hasColumn('order_items', 'price')
-                    && \Illuminate\Support\Facades\Schema::hasColumn('order_items', 'quantity')));
+            && Schema::hasTable('order_items')
+            && (Schema::hasColumn('order_items', 'total')
+                || Schema::hasColumn('order_items', 'line_total')
+                || (Schema::hasColumn('order_items', 'price')
+                    && Schema::hasColumn('order_items', 'quantity')));
 
         if ($useItems) {
             // Build an expression for item totals

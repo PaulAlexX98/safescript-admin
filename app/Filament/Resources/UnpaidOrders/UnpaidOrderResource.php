@@ -16,7 +16,7 @@ use App\Models\PendingOrder;
 use App\Models\Appointment;
 use App\Models\Order;
 use App\Models\User;
-use Illuminate\Support\Facades\Schema as DBSchema;
+use App\Support\DatabaseSchema as DBSchema;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use BackedEnum;
@@ -49,6 +49,36 @@ use Illuminate\Support\Facades\Cache;
 class UnpaidOrderResource extends Resource
 {
     protected static ?string $model = PendingOrder::class;
+
+    /** @var \WeakMap<object, array{value: ?Order}>|null */
+    protected static ?\WeakMap $latestOrderCache = null;
+
+    protected static function latestOrderForRecord($record): ?Order
+    {
+        if (! is_object($record)) {
+            return null;
+        }
+
+        static::$latestOrderCache ??= new \WeakMap();
+
+        if (isset(static::$latestOrderCache[$record])) {
+            return static::$latestOrderCache[$record]['value'];
+        }
+
+        $order = static::resolveLatestOrderForRecord($record);
+
+        static::$latestOrderCache[$record] = ['value' => $order];
+
+        return $order;
+    }
+
+    protected static function resolveLatestOrderForRecord($record): ?Order
+    {
+        return Order::query()
+            ->where('reference', $record->reference)
+            ->latest()
+            ->first();
+    }
 
     protected static function normEmail($v): string
     {
@@ -209,7 +239,7 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
             $q->where(function (Builder $w) use ($table) {
                 $hasCol = false;
                 try {
-                    $hasCol = \Illuminate\Support\Facades\Schema::hasColumn($table, 'payment_status');
+                    $hasCol = DBSchema::hasColumn($table, 'payment_status');
                 } catch (\Throwable $e) {
                     $hasCol = false;
                 }
@@ -1094,12 +1124,12 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                                                         try {
                                                             $u = $record->user ?? null;
                                                             if ($u) {
-                                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                                                if (DBSchema::hasColumn('users', 'meta')) {
                                                                     $um = is_array($u->meta) ? $u->meta : (json_decode($u->meta ?? '[]', true) ?: []);
                                                                     $uv = $norm(data_get($um, 'scr_verified'));
                                                                     if ($uv !== null) return $uv;
                                                                 }
-                                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'scr_verified')) {
+                                                                if (DBSchema::hasColumn('users', 'scr_verified')) {
                                                                     $flat = $norm($u->scr_verified ?? null);
                                                                     if ($flat !== null) return $flat;
                                                                 }
@@ -1108,7 +1138,7 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
 
                                                         // 3) Linked order by reference
                                                         try {
-                                                            $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                                            $ord = static::latestOrderForRecord($record);
                                                             if ($ord) {
                                                                 $om = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
                                                                 $ov = $norm(data_get($om, 'scr_verified'));
@@ -1157,12 +1187,12 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                                                         try {
                                                             $u = $record->user ?? null;
                                                             if ($u) {
-                                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'meta')) {
+                                                                if (DBSchema::hasColumn('users', 'meta')) {
                                                                     $um = is_array($u->meta) ? $u->meta : (json_decode($u->meta ?? '[]', true) ?: []);
                                                                     $uv = $norm(data_get($um, 'id_verified'));
                                                                     if ($uv !== null) return $uv;
                                                                 }
-                                                                if (\Illuminate\Support\Facades\Schema::hasColumn('users', 'id_verified')) {
+                                                                if (DBSchema::hasColumn('users', 'id_verified')) {
                                                                     $flat = $norm($u->id_verified ?? null);
                                                                     if ($flat !== null) return $flat;
                                                                 }
@@ -1171,7 +1201,7 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
 
                                                         // 3) Linked order by reference
                                                         try {
-                                                            $ord = \App\Models\Order::where('reference', $record->reference)->latest()->first();
+                                                            $ord = static::latestOrderForRecord($record);
                                                             if ($ord) {
                                                                 $om = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
                                                                 $ov = $norm(data_get($om, 'id_verified'));
@@ -1831,5 +1861,3 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
         return ['reference'];
     }
 }
-
-    

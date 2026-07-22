@@ -7,7 +7,7 @@ use Filament\Widgets\Widget;
 use Illuminate\Notifications\DatabaseNotification;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Schema;
+use App\Support\DatabaseSchema as Schema;
 use Illuminate\Support\Carbon;
 use App\Models\Order;
 use Illuminate\Support\Facades\URL;
@@ -24,7 +24,10 @@ class WeightManagementAlertsWidget extends Widget
         if (Schema::hasTable('wm_alerts')) {
             return WmAlert::query()
                 ->orderByDesc('created_at')
-                ->get()
+                // Stream in the existing sort order so PHP stops reading as soon
+                // as ten non-dismissed alerts have been found. This preserves the
+                // result while avoiding hydration of the entire alerts table.
+                ->cursor()
                 ->reject(function ($a) {
                     $key = (string) ($a->key ?? '');
                     return $key !== '' && Cache::has('wm_alert_dismissed_' . $key);
@@ -97,7 +100,8 @@ class WeightManagementAlertsWidget extends Widget
                         'kind' => $a->kind,
                         'created_at' => $a->created_at,
                     ];
-                });
+                })
+                ->collect();
         }
 
         // If database notifications table exists, read the latest matching notifications

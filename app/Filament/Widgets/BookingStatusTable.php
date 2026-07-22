@@ -5,7 +5,7 @@ namespace App\Filament\Widgets;
 use Filament\Tables;
 use Filament\Widgets\TableWidget as Base;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
+use App\Support\DatabaseSchema as Schema;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Str;

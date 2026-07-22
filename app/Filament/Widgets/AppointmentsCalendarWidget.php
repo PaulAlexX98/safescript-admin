@@ -8,7 +8,7 @@ use Guava\Calendar\ValueObjects\FetchInfo;
 use Illuminate\Support\Carbon;
 use Guava\Calendar\Enums\CalendarViewType;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
+use App\Support\DatabaseSchema as Schema;
 use Illuminate\Support\Collection;
 use Illuminate\Database\Eloquent\Builder;
 

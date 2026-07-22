@@ -53,6 +53,15 @@ class PendingOrderResource extends Resource
 {
     protected static ?string $model = PendingOrder::class;
 
+    /**
+     * Avoid resolving the same review banner twice while Filament builds one
+     * order modal (description + footer action visibility).
+     *
+     * WeakMap keeps the cache tied to the in-memory model instance only, so it
+     * cannot leak into the database or keep records alive between requests.
+     */
+    protected static ?\WeakMap $sixMonthReviewBannerCache = null;
+
     protected static function normEmail($v): string
     {
         return strtolower(trim((string) ($v ?? '')));
@@ -262,6 +271,24 @@ class PendingOrderResource extends Resource
     }
 
     protected static function sixMonthReviewBannerForPending($record): ?string
+    {
+        if (! is_object($record)) {
+            return null;
+        }
+
+        static::$sixMonthReviewBannerCache ??= new \WeakMap();
+
+        if (isset(static::$sixMonthReviewBannerCache[$record])) {
+            return static::$sixMonthReviewBannerCache[$record]['value'];
+        }
+
+        $value = static::resolveSixMonthReviewBannerForPending($record);
+        static::$sixMonthReviewBannerCache[$record] = ['value' => $value];
+
+        return $value;
+    }
+
+    protected static function resolveSixMonthReviewBannerForPending($record): ?string
     {
         if (! $record || ! static::isWeightManagementRecord($record)) {
             return null;

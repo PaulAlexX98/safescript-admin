@@ -393,6 +393,8 @@ class OrderResource extends Resource
 
                 // (Payment status and Order status columns removed)
             ])
+            ->defaultPaginationPageOption(25)
+            ->paginationPageOptions([25, 50, 100])
             ->filters([
                 // No filters by default for generic Orders resource
             ])

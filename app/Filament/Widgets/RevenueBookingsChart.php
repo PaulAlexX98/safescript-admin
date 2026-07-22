@@ -6,7 +6,7 @@ use Carbon\CarbonPeriod;
 use Carbon\Carbon;
 use Filament\Widgets\ChartWidget;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
+use App\Support\DatabaseSchema as Schema;
 
 class RevenueBookingsChart extends ChartWidget
 {
