@@ -451,22 +451,61 @@
     $assessmentSchema = [];
     $reorderSchema = [];
     $activeSchema = [];
-    if ($serviceSlug) {
+
+    // Prefer the schema snapshot saved with the order. This avoids any network
+    // request for orders that already contain everything needed to render.
+    $assessmentSchema = $arr(
+        data_get($formsQA, 'assessment.schema')
+        ?? data_get($formsQA, 'assessment_form.schema')
+        ?? data_get($formsQA, 'consultation.assessment_form.schema')
+        ?? data_get($formsQA, 'risk_assessment.schema')
+        ?? []
+    );
+    $rafSchema = $arr(
+        data_get($formsQA, 'raf.schema')
+        ?? data_get($formsQA, 'raf_form.schema')
+        ?? []
+    );
+    $reorderSchema = $arr(
+        data_get($formsQA, 'reorder.schema')
+        ?? data_get($formsQA, 'reorder_form.schema')
+        ?? data_get($formsQA, 'rerorder.schema')
+        ?? []
+    );
+
+    $needsRemoteSchema = match ($qaKeyUsed) {
+        'assessment', 'risk_assessment' => empty($assessmentSchema) && empty($rafSchema),
+        'reorder' => empty($reorderSchema) && empty($rafSchema),
+        default => empty($rafSchema) && empty($assessmentSchema) && empty($reorderSchema),
+    };
+
+    if ($serviceSlug && $needsRemoteSchema) {
         try {
-            $resp = Http::timeout(8)
-                ->acceptJson()
-                ->get($apiBase . "/services/{$serviceSlug}/forms");
+            $schemaUrl = $apiBase . '/services/' . rawurlencode((string) $serviceSlug) . '/forms';
+            $cacheKey = 'admin:service-form-schema:v1:' . sha1($schemaUrl);
 
-            if ($resp->ok()) {
-                $json = $resp->json();
+            $json = \Illuminate\Support\Facades\Cache::remember(
+                $cacheKey,
+                now()->addHours(6),
+                function () use ($schemaUrl) {
+                    $response = Http::connectTimeout(1)->timeout(3)
+                        ->acceptJson()
+                        ->get($schemaUrl);
 
-                $rafSchema = $arr(
+                    return $response->ok() && is_array($response->json())
+                        ? $response->json()
+                        : null;
+                }
+            );
+
+            if (is_array($json)) {
+                $rafSchema = $rafSchema ?: $arr(
                     data_get($json, 'raf_form.schema')
                     ?? data_get($json, 'raf.schema')
                     ?? []
                 );
 
-                $reorderSchema = $arr(
+                $reorderSchema = $reorderSchema ?: $arr(
                     data_get($json, 'reorder_form.schema')
                     ?? data_get($json, 'reorder.schema')
                     // common typo safeguard
@@ -474,7 +513,7 @@
                     ?? []
                 );
 
-                $assessmentSchema = $arr(
+                $assessmentSchema = $assessmentSchema ?: $arr(
                     // primary ClinicFormForm assessment schema
                     data_get($json, 'assessment_form.schema')
                     // legacy copy stored as schema3
@@ -490,43 +529,7 @@
                 );
             }
         } catch (\Throwable $e) {
-            $rafSchema = [];
-            $assessmentSchema = [];
-        }
-    }
-
-    // Fallbacks from stored meta if API returned none
-    if (empty($assessmentSchema)) {
-        $tmp = $arr(
-            data_get($formsQA, 'assessment.schema')
-            ?? data_get($formsQA, 'assessment_form.schema')
-            ?? data_get($formsQA, 'consultation.assessment_form.schema')
-            ?? data_get($formsQA, 'risk_assessment.schema')
-        );
-        if (!empty($tmp)) {
-            $assessmentSchema = $tmp;
-        }
-    }
-
-    if (empty($rafSchema)) {
-        $tmp = $arr(
-            data_get($formsQA, 'raf.schema')
-            ?? data_get($formsQA, 'raf_form.schema')
-        );
-        if (!empty($tmp)) {
-            $rafSchema = $tmp;
-        }
-    }
-
-    if (empty($reorderSchema)) {
-        $tmp = $arr(
-            data_get($formsQA, 'reorder.schema')
-            ?? data_get($formsQA, 'reorder_form.schema')
-            // tolerate the historical misspelling
-            ?? data_get($formsQA, 'rerorder.schema')
-        );
-        if (!empty($tmp)) {
-            $reorderSchema = $tmp;
+            // Keep using any stored schema or the existing human-readable fallback.
         }
     }
 
