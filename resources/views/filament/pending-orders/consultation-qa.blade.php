@@ -441,10 +441,7 @@
         ?: (isset($record) ? data_get($record, 'meta.consultation.slug') : null);
 
     // Normalise API base so we call .../api/services/{slug}/forms exactly once
-    $rawApi = config('services.pharmacy_api.base')
-        ?? env('API_BASE')
-        ?? env('NEXT_PUBLIC_API_BASE')
-        ?? config('app.url');
+    $rawApi = config('services.pharmacy_api.base');
 
     $rawApi = rtrim((string) $rawApi, '/');
     // If someone already gave us .../api, keep it, otherwise append it

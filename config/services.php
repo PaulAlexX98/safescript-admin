@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'pharmacy_api' => [
+        'base' => env('API_BASE', env('FRONTEND_URL', 'https://www.pharmacy-express.co.uk')),
+    ],
+
 ];
