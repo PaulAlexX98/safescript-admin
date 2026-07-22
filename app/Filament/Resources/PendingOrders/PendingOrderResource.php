@@ -1713,14 +1713,10 @@ class PendingOrderResource extends Resource
                                             ->where('status', 'completed')
                                             ->where(function ($w) use ($uid, $pid) {
                                                 if ($uid) {
-                                                    $w->orWhere('user_id', $uid)
-                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.user_id') = ?", [$uid])
-                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.user.id') = ?", [$uid]);
+                                                    $w->orWhere('user_id', $uid);
                                                 }
                                                 if ($pid && \Schema::hasColumn('orders', 'patient_id')) {
-                                                    $w->orWhere('patient_id', $pid)
-                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.patient_id') = ?", [$pid])
-                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.patient.id') = ?", [$pid]);
+                                                    $w->orWhere('patient_id', $pid);
                                                 }
                                             });
 

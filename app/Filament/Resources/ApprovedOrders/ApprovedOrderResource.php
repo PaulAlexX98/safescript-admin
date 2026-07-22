@@ -1285,14 +1285,10 @@ class ApprovedOrderResource extends Resource
                                             ->where('status', 'completed')
                                             ->where(function ($w) use ($uid, $pid) {
                                                 if ($uid) {
-                                                    $w->orWhere('user_id', $uid)
-                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.user_id') = ?", [$uid])
-                                                    ->orWhereRaw("JSON_EXTRACT(meta, '$.user.id') = ?", [$uid]);
+                                                    $w->orWhere('user_id', $uid);
                                                 }
                                             if ($pid && \SchemaFacade::hasColumn('orders', 'patient_id')) {
-                                                $w->orWhere('patient_id', $pid)
-                                                ->orWhereRaw("JSON_EXTRACT(meta, '$.patient_id') = ?", [$pid])
-                                                ->orWhereRaw("JSON_EXTRACT(meta, '$.patient.id') = ?", [$pid]);
+                                                $w->orWhere('patient_id', $pid);
                                             }
                                             });
 
@@ -3166,27 +3162,18 @@ class ApprovedOrderResource extends Resource
             }
         }
 
-        if ($recordEmail !== '') {
+        // Avoid full-table JSON email scans when indexed identity links exist.
+        if ($recordEmail !== '' && $userId <= 0 && $recordReference === '') {
             try {
                 Order::query()
-                    ->whereNotNull('meta')
-                    ->where(function ($query) use ($recordEmail) {
-                        $query->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email'))) = ?", [$recordEmail])
-                            ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.email'))) = ?", [$recordEmail])
-                            ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.email'))) = ?", [$recordEmail]);
-                    })
+                    ->where('email', $recordEmail)
                     ->latest('id')
                     ->limit(100)
                     ->get()
                     ->each(fn ($order) => $collectFromRecord($order, 'order'));
 
                 PendingOrder::query()
-                    ->whereNotNull('meta')
-                    ->where(function ($query) use ($recordEmail) {
-                        $query->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email'))) = ?", [$recordEmail])
-                            ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.patient.email'))) = ?", [$recordEmail])
-                            ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.customer.email'))) = ?", [$recordEmail]);
-                    })
+                    ->where('email', $recordEmail)
                     ->latest('id')
                     ->limit(100)
                     ->get()

@@ -21,14 +21,19 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        DB::listen(function (QueryExecuted $query): void {
-            if ($query->time >= 200) {
+        if (config('admin_performance.enabled')) {
+            DB::listen(function (QueryExecuted $query): void {
+                if ($query->time < config('admin_performance.slow_query_ms', 200)) {
+                    return;
+                }
+
                 Log::warning('Slow SQL query', [
                     'time_ms' => $query->time,
-                    'sql' => $query->toRawSql(),
+                    // Keep placeholders so logs never contain patient values.
+                    'sql' => $query->sql,
                 ]);
-            }
-        });
+            });
+        }
 
         View::composer([
             'consultations.*',  // your risk-assessment, reorder, etc.

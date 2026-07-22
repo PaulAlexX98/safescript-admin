@@ -5,6 +5,7 @@ namespace App\Filament\Widgets;
 use Filament\Widgets\StatsOverviewWidget as Base;
 use Filament\Widgets\StatsOverviewWidget\Stat;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use App\Support\DatabaseSchema as Schema;
 use Carbon\Carbon;
 
@@ -35,14 +36,21 @@ class KpiStats extends Base
 
         [$start, $end] = $range;
 
-        $totalRevenue   = $this->sumOrdersRevenue($start, $end);
+        $metrics = Cache::remember('admin:kpi-stats:v2:' . $filter, now()->addMinutes(5), function () use ($start, $end) {
+            return [
+                'revenue' => $this->sumOrdersRevenue($start, $end),
+                'completed' => $this->countCompletedOrders($start, $end),
+                'rejected' => $this->countRejectedOrders($start, $end),
+                'unpaid' => $this->countUnpaidOrders($start, $end),
+                'new' => $this->countNewOrders($start, $end),
+            ];
+        });
 
-        // Completed / Rejected / Unpaid counts within range
-        $completed = $this->countCompletedOrders($start, $end);
-        $rejected  = $this->countRejectedOrders($start, $end);
-        $unpaid    = $this->countUnpaidOrders($start, $end);
-
-        $newOrders = $this->countNewOrders($start, $end);
+        $totalRevenue = (float) ($metrics['revenue'] ?? 0);
+        $completed = (int) ($metrics['completed'] ?? 0);
+        $rejected = (int) ($metrics['rejected'] ?? 0);
+        $unpaid = (int) ($metrics['unpaid'] ?? 0);
+        $newOrders = (int) ($metrics['new'] ?? 0);
 
         // Total bookings = sum of these non-overlapping buckets
         $totalBookings = $completed + $rejected + $unpaid;

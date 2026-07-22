@@ -6,6 +6,7 @@ use Carbon\CarbonPeriod;
 use Carbon\Carbon;
 use Filament\Widgets\ChartWidget;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use App\Support\DatabaseSchema as Schema;
 
 class RevenueBookingsChart extends ChartWidget
@@ -28,12 +29,14 @@ class RevenueBookingsChart extends ChartWidget
     {
         $filter = $this->filter ?? 'daily';
 
-        return match ($filter) {
-            'weekly'  => $this->aggregateByPeriod('week', 12),
-            'monthly' => $this->aggregateByPeriod('month', 12),
-            'yearly'  => $this->aggregateByPeriod('year', 5),
-            default   => $this->aggregateByPeriod('day', 7),
-        };
+        return Cache::remember('admin:revenue-bookings-chart:v2:' . $filter, now()->addMinutes(5), function () use ($filter) {
+            return match ($filter) {
+                'weekly'  => $this->aggregateByPeriod('week', 12),
+                'monthly' => $this->aggregateByPeriod('month', 12),
+                'yearly'  => $this->aggregateByPeriod('year', 5),
+                default   => $this->aggregateByPeriod('day', 7),
+            };
+        });
     }
 
     protected function getType(): string

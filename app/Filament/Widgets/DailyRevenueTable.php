@@ -114,6 +114,10 @@ class DailyRevenueTable extends Base
         // Default path: sum from orders table
         $inner = Order::query()->withoutGlobalScopes()
             ->tap(fn (Builder $q) => $this->applyPaidOnlyFilter($q))
+            ->when(
+                Schema::hasColumn('orders', 'paid_at'),
+                fn (Builder $q) => $q->whereBetween('orders.paid_at', [now()->subDays(6)->startOfDay(), now()->endOfDay()])
+            )
             ->selectRaw('DATE(orders.paid_at) as day')
             ->selectRaw("$sumExpr as revenue")
             ->selectRaw('COUNT(*) as bookings')
