@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Orders;
 use App\Filament\Resources\Orders\Pages\CompletedOrderDetails;
 use App\Filament\Resources\Orders\Pages\ListCompletedOrders;
 use App\Models\Order;
+use App\Support\AdminNavigationCounts;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Enums\PaginationMode;
 use Filament\Tables\Table;
@@ -30,6 +31,16 @@ class CompletedOrderResource extends OrderResource
     public static function shouldRegisterNavigation(): bool
     {
         return true;
+    }
+
+    public static function getNavigationBadge(): ?string
+    {
+        return (string) AdminNavigationCounts::all()['completed'];
+    }
+
+    public static function getNavigationBadgeColor(): ?string
+    {
+        return AdminNavigationCounts::all()['completed'] > 0 ? 'success' : 'gray';
     }
 
     public static function getEloquentQuery(): Builder

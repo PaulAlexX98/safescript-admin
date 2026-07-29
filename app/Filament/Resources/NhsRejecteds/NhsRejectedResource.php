@@ -8,8 +8,10 @@ use BackedEnum;
 use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Enums\PaginationMode;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use App\Support\DatabaseSchema;
 
 class NhsRejectedResource extends Resource
 {
@@ -33,22 +35,49 @@ class NhsRejectedResource extends Resource
     {
         $q = parent::getEloquentQuery();
 
-        $q->where(function (Builder $w) {
-            if (\Schema::hasColumn('nhs_pendings', 'status')) {
-                $w->orWhere('status', 'rejected');
-            }
+        $table = (new NhsPending)->getTable();
 
-            $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_pending_status'))) = 'rejected'")
-              ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_status'))) = 'rejected'")
-              ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.status'))) = 'rejected'");
-        });
+        if (DatabaseSchema::hasColumn($table, 'status')) {
+            $q->where(function (Builder $status) {
+                $status->where('status', 'rejected')
+                    ->orWhere(function (Builder $legacy) {
+                        $legacy->whereNull('status')
+                            ->where(function (Builder $meta) {
+                                $meta->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_pending_status'))) = 'rejected'")
+                                    ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_status'))) = 'rejected'")
+                                    ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.status'))) = 'rejected'");
+                            });
+                    });
+            });
+        } else {
+            $q->where(function (Builder $meta) {
+                $meta->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_pending_status'))) = 'rejected'")
+                    ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_status'))) = 'rejected'")
+                    ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.status'))) = 'rejected'");
+            });
+        }
+
+        static::scopeToNhsOrders($q);
 
         return $q;
+    }
+
+    private static function scopeToNhsOrders(Builder $query): void
+    {
+        $query->where(function (Builder $nhs) {
+            $nhs->where('reference', 'like', 'PNHS%')
+                ->orWhere('reference', 'REGEXP', '^PTC[A-Z]*H[0-9]{6}$')
+                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.type'))) = 'nhs'")
+                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service_slug'))) = 'pharmacy-first'");
+        });
     }
 
     public static function table(Table $table): Table
     {
         return $table
+            ->paginationMode(PaginationMode::Simple)
+            ->searchDebounce('900ms')
+            ->splitSearchTerms(false)
             ->defaultSort('created_at', 'desc')
             ->columns([
                 TextColumn::make('created_at')

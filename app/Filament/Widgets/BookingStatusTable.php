@@ -141,10 +141,11 @@ class BookingStatusTable extends Base
             ['label' => 'Unpaid',    'key' => 'unpaid'],
         ];
 
-        $metrics = Cache::remember(
+        $metrics = Cache::flexible(
             'admin:booking-status:v3:'.($this->period ?? 'monthly'),
-            now()->addMinutes(5),
-            fn (): array => $this->loadStatusMetrics()
+            [300, 86400],
+            fn (): array => $this->loadStatusMetrics(),
+            ['seconds' => 30]
         );
 
         $counts = collect($statusMap)->mapWithKeys(
@@ -169,13 +170,12 @@ class BookingStatusTable extends Base
         return collect($rows);
     }
 
+    public function warmCache(): void
+    {
+        $this->getTableRecords();
+    }
+
     /**
-     * Load every booking-status count and revenue total in one orders scan.
-     *
-     * Previously this widget issued six separate aggregate queries: one count
-     * and one revenue sum for each status. Conditional aggregation preserves
-     * each status's date and normalisation rules while reducing that to one.
-     *
      * @return array<string, array{count: int, revenue: float}>
      */
     protected function loadStatusMetrics(): array
@@ -192,9 +192,6 @@ class BookingStatusTable extends Base
 
         [$start, $end] = $this->getCurrentRange();
         $revenue = $this->revenueValueExpression();
-        $selects = [];
-        $bindings = [];
-
         foreach (array_keys($empty) as $status) {
             [$predicate, $predicateBindings] = $this->statusMetricPredicate(
                 $status,
@@ -202,25 +199,16 @@ class BookingStatusTable extends Base
                 $end
             );
 
-            $selects[] = "SUM(CASE WHEN {$predicate} THEN 1 ELSE 0 END) AS {$status}_count";
-            array_push($bindings, ...$predicateBindings);
+            // Keep each status predicate in WHERE so MySQL can use its
+            // status/date index instead of scanning every order.
+            $row = DB::table('orders')
+                ->whereRaw($predicate, $predicateBindings)
+                ->selectRaw("COUNT(*) AS aggregate_count, SUM({$revenue}) AS aggregate_revenue")
+                ->first();
 
-            $selects[] = "SUM(CASE WHEN {$predicate} THEN {$revenue} ELSE 0 END) AS {$status}_revenue";
-            array_push($bindings, ...$predicateBindings);
-        }
-
-        $row = DB::table('orders')
-            ->selectRaw(implode(",\n", $selects), $bindings)
-            ->first();
-
-        if (! $row) {
-            return $empty;
-        }
-
-        foreach (array_keys($empty) as $status) {
             $empty[$status] = [
-                'count' => (int) ($row->{"{$status}_count"} ?? 0),
-                'revenue' => (float) ($row->{"{$status}_revenue"} ?? 0),
+                'count' => (int) ($row->aggregate_count ?? 0),
+                'revenue' => (float) ($row->aggregate_revenue ?? 0),
             ];
         }
 

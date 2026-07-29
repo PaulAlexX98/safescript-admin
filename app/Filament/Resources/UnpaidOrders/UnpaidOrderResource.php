@@ -26,6 +26,7 @@ use Filament\Schemas\Schema as FilamentSchema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Filament\Tables;
+use Filament\Tables\Enums\PaginationMode;
 use Filament\Tables\Columns\TextColumn;
 use Illuminate\Support\HtmlString;
 use Filament\Infolists\Components\TextEntry;
@@ -245,16 +246,30 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                 }
 
                 if ($hasCol) {
-                    $w->orWhereRaw('LOWER(payment_status) = ?', ['unpaid']);
+                    $w->where('payment_status', 'unpaid')
+                        ->orWhere(function (Builder $legacy) {
+                            $legacy->where(function (Builder $missing) {
+                                $missing->whereNull('payment_status')
+                                    ->orWhere('payment_status', '');
+                            })->where(function (Builder $meta) {
+                                $meta->whereRaw(
+                                    "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status'))), '') = ?",
+                                    ['unpaid']
+                                )->orWhereRaw(
+                                    "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status_label'))), '') = ?",
+                                    ['unpaid']
+                                );
+                            });
+                        });
+
+                    return;
                 }
 
                 // Fall back to meta values (covers deployments where payment status is stored in JSON).
-                $w->orWhereRaw(
+                $w->whereRaw(
                     "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status'))), '') = ?",
                     ['unpaid']
-                );
-
-                $w->orWhereRaw(
+                )->orWhereRaw(
                     "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status_label'))), '') = ?",
                     ['unpaid']
                 );
@@ -277,16 +292,22 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
                           ->whereRaw("paid_orders.created_at >= {$outerTable}.created_at")
                           ->whereRaw("paid_orders.created_at <= DATE_ADD({$outerTable}.created_at, INTERVAL 7 DAY)")
                           ->where(function ($paid) {
-                              $paid->whereRaw("LOWER(COALESCE(paid_orders.payment_status, '')) = ?", ['paid'])
-                                  ->orWhereRaw("LOWER(COALESCE(paid_orders.status, '')) = ?", ['completed'])
-                                  ->orWhereRaw(
-                                      "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.payment_status'))), '') = ?",
-                                      ['paid']
-                                  )
-                                  ->orWhereRaw(
-                                      "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.payment_status_label'))), '') = ?",
-                                      ['paid']
-                                  );
+                              $paid->where('paid_orders.payment_status', 'paid')
+                                  ->orWhere('paid_orders.status', 'completed')
+                                  ->orWhere(function ($legacy) {
+                                      $legacy->where(function ($missing) {
+                                          $missing->whereNull('paid_orders.payment_status')
+                                              ->orWhere('paid_orders.payment_status', '');
+                                      })->where(function ($meta) {
+                                          $meta->whereRaw(
+                                              "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.payment_status'))), '') = ?",
+                                              ['paid']
+                                          )->orWhereRaw(
+                                              "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(paid_orders.meta, '$.payment_status_label'))), '') = ?",
+                                              ['paid']
+                                          );
+                                      });
+                                  });
                           });
                   });
             });
@@ -305,6 +326,9 @@ protected static string|UnitEnum|null $navigationGroup = 'Private Services';
     public static function table(Table $table): Table
     {
         return $table
+            ->paginationMode(PaginationMode::Simple)
+            ->searchDebounce('900ms')
+            ->splitSearchTerms(false)
             ->columns([
 
                 TextColumn::make('patient_priority_dot')

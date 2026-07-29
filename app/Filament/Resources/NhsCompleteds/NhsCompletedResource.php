@@ -9,7 +9,9 @@ use Filament\Resources\Resource;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Enums\PaginationMode;
 use Illuminate\Database\Eloquent\Builder;
+use App\Support\DatabaseSchema;
 
 class NhsCompletedResource extends Resource
 {
@@ -35,25 +37,49 @@ class NhsCompletedResource extends Resource
     {
         $q = parent::getEloquentQuery();
 
-        // Completed marker stored on the pending row
-        $q->where(function (Builder $w) {
-            // status column if it exists
-            if (\Schema::hasColumn('nhs_pendings', 'status')) {
-                $w->orWhere('status', 'completed');
-            }
+        $table = (new NhsPending)->getTable();
 
-            // meta flags (JSON)
-            $w->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_pending_status'))) = 'completed'")
-              ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_status'))) = 'completed'")
-              ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.status'))) = 'completed'");
-        });
+        if (DatabaseSchema::hasColumn($table, 'status')) {
+            $q->where(function (Builder $status) {
+                $status->where('status', 'completed')
+                    ->orWhere(function (Builder $legacy) {
+                        $legacy->whereNull('status')
+                            ->where(function (Builder $meta) {
+                                $meta->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_pending_status'))) = 'completed'")
+                                    ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_status'))) = 'completed'")
+                                    ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.status'))) = 'completed'");
+                            });
+                    });
+            });
+        } else {
+            $q->where(function (Builder $meta) {
+                $meta->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_pending_status'))) = 'completed'")
+                    ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.nhs_status'))) = 'completed'")
+                    ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.status'))) = 'completed'");
+            });
+        }
+
+        static::scopeToNhsOrders($q);
 
         return $q;
+    }
+
+    private static function scopeToNhsOrders(Builder $query): void
+    {
+        $query->where(function (Builder $nhs) {
+            $nhs->where('reference', 'like', 'PNHS%')
+                ->orWhere('reference', 'REGEXP', '^PTC[A-Z]*H[0-9]{6}$')
+                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.type'))) = 'nhs'")
+                ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.service_slug'))) = 'pharmacy-first'");
+        });
     }
 
     public static function table(Table $table): Table
     {
         return $table
+            ->paginationMode(PaginationMode::Simple)
+            ->searchDebounce('900ms')
+            ->splitSearchTerms(false)
             ->defaultSort('created_at', 'desc')
             ->columns([
                 TextColumn::make('created_at')

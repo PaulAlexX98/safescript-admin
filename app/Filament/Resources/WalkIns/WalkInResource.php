@@ -16,6 +16,7 @@ use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
+use Filament\Tables\Enums\PaginationMode;
 use Illuminate\Database\Eloquent\Builder;
 use App\Support\DatabaseSchema as SchemaFacade;
 
@@ -100,6 +101,9 @@ class WalkInResource extends Resource
     public static function table(Table $table): Table
     {
         return WalkInsTable::configure($table)
+            ->paginationMode(PaginationMode::Simple)
+            ->searchDebounce('900ms')
+            ->splitSearchTerms(false)
             ->defaultSort('created_at', 'desc');
     }
 

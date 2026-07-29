@@ -9,6 +9,8 @@ use Filament\Forms\Components\Select;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 
 use App\Support\DatabaseSchema as Schema;
 use App\Models\Order;
@@ -143,6 +145,22 @@ class ServicesPerformance extends Base
         return $outer;
     }
 
+    public function getTableRecords(): Collection
+    {
+        return Cache::flexible(
+            'admin:services-performance:v2:'.($this->period ?? 'monthly'),
+            [300, 86400],
+            fn (): Collection => $this->getTableQuery()->get(),
+            ['seconds' => 30]
+        );
+    }
+
+    public function warmCache(): void
+    {
+        $this->getTableRecords();
+        $this->totalRevenueSum();
+    }
+
     protected function isTablePaginationEnabled(): bool
     {
         return false;
@@ -153,19 +171,12 @@ class ServicesPerformance extends Base
         $hasPaymentStatus = Schema::hasColumn('orders', 'payment_status');
         $hasPaidAt = Schema::hasColumn('orders', 'paid_at');
 
-        if ($hasPaymentStatus && $hasPaidAt) {
-            return $q->where(function (Builder $w) {
-                $w->where('orders.payment_status', 'paid')
-                    ->orWhereNotNull('orders.paid_at');
-            });
+        if ($hasPaidAt) {
+            return $q->whereNotNull('orders.paid_at');
         }
 
         if ($hasPaymentStatus) {
             return $q->where('orders.payment_status', 'paid');
-        }
-
-        if ($hasPaidAt) {
-            return $q->whereNotNull('orders.paid_at');
         }
 
         if (Schema::hasColumn('orders', 'meta')) {
@@ -227,7 +238,7 @@ class ServicesPerformance extends Base
         ))';
     }
 
-    private function totalRevenueSum(): float
+    protected function totalRevenueSum(): float
     {
         $cacheKey = $this->period ?? 'daily';
 
@@ -240,16 +251,22 @@ class ServicesPerformance extends Base
         }
 
         [$start, $end] = $this->getCurrentRange();
-        $expr = $this->sumRevenueExpr() . ' as t';
+        return $this->totalRevenueCache[$cacheKey] = Cache::flexible(
+            'admin:services-performance-total:v2:'.$cacheKey,
+            [300, 86400],
+            function () use ($start, $end): float {
+                $expr = $this->sumRevenueExpr() . ' as t';
+                $q = Order::query()->withoutGlobalScopes()->selectRaw($expr);
+                $this->applyPaidOnlyFilter($q);
 
-        $q = Order::query()->withoutGlobalScopes()->selectRaw($expr);
-        $this->applyPaidOnlyFilter($q);
+                if ($start && $end) {
+                    $this->applyPeriodFilter($q, $start, $end);
+                }
 
-        if ($start && $end) {
-            $this->applyPeriodFilter($q, $start, $end);
-        }
-
-        return $this->totalRevenueCache[$cacheKey] = (float) ($q->value('t') ?? 0);
+                return (float) ($q->value('t') ?? 0);
+            },
+            ['seconds' => 30]
+        );
     }
 
     public function getTableRecordKey(mixed $record): string

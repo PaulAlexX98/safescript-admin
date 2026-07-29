@@ -7,7 +7,8 @@ use Filament\Tables;
 use Filament\Widgets\TableWidget as Base;
 use Illuminate\Database\Eloquent\Builder;
 use App\Support\DatabaseSchema as Schema;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 
 class DailyRevenueTable extends Base
 {
@@ -133,6 +134,21 @@ class DailyRevenueTable extends Base
             ->limit(7);
     }
 
+    public function getTableRecords(): Collection
+    {
+        return Cache::flexible(
+            'admin:daily-revenue:v2',
+            [300, 86400],
+            fn (): Collection => $this->getTableQuery()->get(),
+            ['seconds' => 30]
+        );
+    }
+
+    public function warmCache(): void
+    {
+        $this->getTableRecords();
+    }
+
     protected function getTableDefaultSortColumn(): ?string
     {
         return null;
@@ -184,19 +200,12 @@ class DailyRevenueTable extends Base
         $hasPaymentStatus = Schema::hasColumn('orders', 'payment_status');
         $hasPaidAt = Schema::hasColumn('orders', 'paid_at');
 
-        if ($hasPaymentStatus && $hasPaidAt) {
-            return $q->where(function (Builder $w) {
-                $w->where('orders.payment_status', 'paid')
-                    ->orWhereNotNull('orders.paid_at');
-            });
+        if ($hasPaidAt) {
+            return $q->whereNotNull('orders.paid_at');
         }
 
         if ($hasPaymentStatus) {
             return $q->where('orders.payment_status', 'paid');
-        }
-
-        if ($hasPaidAt) {
-            return $q->whereNotNull('orders.paid_at');
         }
 
         if (Schema::hasColumn('orders', 'meta')) {

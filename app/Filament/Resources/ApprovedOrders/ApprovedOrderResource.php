@@ -32,6 +32,7 @@ use Filament\Notifications\Notification;
 use Filament\Tables;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Filament\Tables\Enums\PaginationMode;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Schema as SchemaFacade;
 use App\Services\Consultations\StartConsultation;
@@ -68,7 +69,9 @@ class ApprovedOrderResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            
+            ->paginationMode(PaginationMode::Simple)
+            ->searchDebounce('900ms')
+            ->splitSearchTerms(false)
             ->defaultSort('paid_at', 'desc')
             ->columns([
 

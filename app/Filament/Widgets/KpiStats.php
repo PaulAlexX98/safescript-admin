@@ -36,7 +36,7 @@ class KpiStats extends Base
 
         [$start, $end] = $range;
 
-        $metrics = Cache::remember('admin:kpi-stats:v2:' . $filter, now()->addMinutes(5), function () use ($start, $end) {
+        $metrics = Cache::flexible('admin:kpi-stats:v2:' . $filter, [300, 86400], function () use ($start, $end) {
             return [
                 'revenue' => $this->sumOrdersRevenue($start, $end),
                 'completed' => $this->countCompletedOrders($start, $end),
@@ -44,7 +44,7 @@ class KpiStats extends Base
                 'unpaid' => $this->countUnpaidOrders($start, $end),
                 'new' => $this->countNewOrders($start, $end),
             ];
-        });
+        }, ['seconds' => 30]);
 
         $totalRevenue = (float) ($metrics['revenue'] ?? 0);
         $completed = (int) ($metrics['completed'] ?? 0);
@@ -63,6 +63,11 @@ class KpiStats extends Base
             Stat::make('Rejected', number_format($rejected)),
             Stat::make('Unpaid', number_format($unpaid)),
         ];
+    }
+
+    public function warmCache(): void
+    {
+        $this->getStats();
     }
 
     private function sumOrdersRevenue(?Carbon $start = null, ?Carbon $end = null): float
@@ -164,6 +169,7 @@ class KpiStats extends Base
 
     private function completedDateColumn(): ?string
     {
+        if (Schema::hasColumn('orders', 'completed_at')) return 'orders.completed_at';
         if (Schema::hasColumn('orders', 'approved_at')) return 'orders.approved_at';
         if (Schema::hasColumn('orders', 'paid_at')) return 'orders.paid_at';
         return Schema::hasColumn('orders', 'created_at') ? 'orders.created_at' : null;

@@ -27,6 +27,7 @@ use Filament\Schemas\Schema as FilamentSchema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Filament\Tables;
+use Filament\Tables\Enums\PaginationMode;
 use Filament\Tables\Columns\TextColumn;
 use Illuminate\Support\HtmlString;
 use Filament\Infolists\Components\TextEntry;
@@ -517,16 +518,30 @@ class PendingOrderResource extends Resource
                 }
 
                 if ($hasCol) {
-                    $w->orWhereRaw('LOWER(payment_status) = ?', ['paid']);
+                    $w->where('payment_status', 'paid')
+                        ->orWhere(function (Builder $legacy) {
+                            $legacy->where(function (Builder $missing) {
+                                $missing->whereNull('payment_status')
+                                    ->orWhere('payment_status', '');
+                            })->where(function (Builder $meta) {
+                                $meta->whereRaw(
+                                    "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status'))), '') = ?",
+                                    ['paid']
+                                )->orWhereRaw(
+                                    "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status_label'))), '') = ?",
+                                    ['paid']
+                                );
+                            });
+                        });
+
+                    return;
                 }
 
                 // Fall back to meta values (covers deployments where payment status is stored in JSON).
-                $w->orWhereRaw(
+                $w->whereRaw(
                     "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status'))), '') = ?",
                     ['paid']
-                );
-
-                $w->orWhereRaw(
+                )->orWhereRaw(
                     "COALESCE(LOWER(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.payment_status_label'))), '') = ?",
                     ['paid']
                 );
@@ -546,6 +561,9 @@ class PendingOrderResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->paginationMode(PaginationMode::Simple)
+            ->searchDebounce('900ms')
+            ->splitSearchTerms(false)
             ->columns([
 
                 TextColumn::make('patient_priority_dot')

@@ -29,14 +29,19 @@ class RevenueBookingsChart extends ChartWidget
     {
         $filter = $this->filter ?? 'daily';
 
-        return Cache::remember('admin:revenue-bookings-chart:v2:' . $filter, now()->addMinutes(5), function () use ($filter) {
+        return Cache::flexible('admin:revenue-bookings-chart:v2:' . $filter, [300, 86400], function () use ($filter) {
             return match ($filter) {
                 'weekly'  => $this->aggregateByPeriod('week', 12),
                 'monthly' => $this->aggregateByPeriod('month', 12),
                 'yearly'  => $this->aggregateByPeriod('year', 5),
                 default   => $this->aggregateByPeriod('day', 7),
             };
-        });
+        }, ['seconds' => 30]);
+    }
+
+    public function warmCache(): void
+    {
+        $this->getData();
     }
 
     protected function getType(): string
@@ -197,15 +202,8 @@ class RevenueBookingsChart extends ChartWidget
             ->selectRaw("{$keyExpr} as k, COUNT(*) as bookings, {$sumExpr} as revenue")
             ->whereBetween(DB::raw($dateExpr), [$rangeStart, $rangeEnd]);
 
-        // paid_at is already the chart anchor, so no JSON payment-status scan is needed.
-        if (Schema::hasColumn($t, 'payment_status')) {
-            $q->where(function ($w) use ($t) {
-                $w->where($t . '.payment_status', 'paid')
-                    ->orWhereNotNull($t . '.paid_at');
-            });
-        } else {
-            $q->whereNotNull($t . '.paid_at');
-        }
+        // whereBetween(paid_at) already excludes unpaid/null rows. An extra
+        // OR payment predicate prevents an efficient paid_at range scan.
 
         // Soft deletes.
         if (Schema::hasColumn($t, 'deleted_at')) {
@@ -432,8 +430,8 @@ class RevenueBookingsChart extends ChartWidget
             $q->where(function ($w) use ($t) {
                 $w->where($t . '.payment_status', 'paid')
                     ->orWhereNotNull($t . '.paid_at');
-            });
-        }
+        });
+    }
 
         if (Schema::hasColumn($t, 'deleted_at')) {
             $q->whereNull($t . '.deleted_at');
