@@ -17,6 +17,7 @@ use App\Models\Appointment;
 use App\Models\Order;
 use App\Models\User;
 use App\Support\DatabaseSchema as DBSchema;
+use App\Support\AdminNavigationCounts;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use BackedEnum;
@@ -46,7 +47,6 @@ use Filament\Notifications\Notification;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\ToggleButtons;
 use Filament\Schemas\Components\Utilities\Get;
-use Illuminate\Support\Facades\Cache;
 
 
 class PendingOrderResource extends Resource
@@ -4482,12 +4482,14 @@ class PendingOrderResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        return null;
+        $count = AdminNavigationCounts::all()['pending'];
+
+        return $count > 0 ? (string) $count : null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        return null;
+        return AdminNavigationCounts::all()['pending'] > 0 ? 'warning' : 'gray';
     }
 
     public static function canCreate(): bool

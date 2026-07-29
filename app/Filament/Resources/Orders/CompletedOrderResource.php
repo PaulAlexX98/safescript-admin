@@ -46,6 +46,11 @@ class CompletedOrderResource extends OrderResource
     public static function table(Table $table): Table
     {
         return parent::table($table)
+            // OrderResource defaults to created_at, which appended a second sort
+            // and forced MySQL to filesort every completed order. The resource
+            // query is already ordered by the completed-orders composite index.
+            ->defaultSort(null)
+            ->defaultKeySort(false)
             // Avoid an expensive full filtered COUNT(*) before returning page one.
             // Users retain Previous/Next pagination and all search functionality.
             ->paginationMode(PaginationMode::Simple)

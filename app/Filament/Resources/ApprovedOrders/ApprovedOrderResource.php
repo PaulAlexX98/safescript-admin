@@ -35,12 +35,12 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Schema as SchemaFacade;
 use App\Services\Consultations\StartConsultation;
+use App\Support\AdminNavigationCounts;
 use App\Models\ConsultationSession;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\ToggleButtons;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Forms\Components\Select;
-use Illuminate\Support\Facades\Cache;
 
 class ApprovedOrderResource extends Resource
 {
@@ -2935,12 +2935,14 @@ class ApprovedOrderResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        return null;
+        $count = AdminNavigationCounts::all()['approved'];
+
+        return $count > 0 ? (string) $count : null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        return null;
+        return AdminNavigationCounts::all()['approved'] > 0 ? 'success' : 'gray';
     }
 
     protected static function sixMonthReviewHistoryForPending($record): string

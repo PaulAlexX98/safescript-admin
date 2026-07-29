@@ -17,8 +17,8 @@ final class DatabaseSchema
     /** @var array<string, bool> */
     private static array $tables = [];
 
-    /** @var array<string, bool> */
-    private static array $columns = [];
+    /** @var array<string, array<string, true>> */
+    private static array $columnListings = [];
 
     public static function hasTable(string $table): bool
     {
@@ -27,14 +27,24 @@ final class DatabaseSchema
 
     public static function hasColumn(string $table, string $column): bool
     {
-        $key = $table . '.' . $column;
+        $tableKey = strtolower($table);
 
-        return self::$columns[$key] ??= Schema::hasColumn($table, $column);
+        if (! array_key_exists($tableKey, self::$columnListings)) {
+            self::$columnListings[$tableKey] = array_fill_keys(
+                array_map(
+                    static fn (string $name): string => strtolower($name),
+                    Schema::getColumnListing($table)
+                ),
+                true
+            );
+        }
+
+        return isset(self::$columnListings[$tableKey][strtolower($column)]);
     }
 
     public static function flush(): void
     {
         self::$tables = [];
-        self::$columns = [];
+        self::$columnListings = [];
     }
 }
