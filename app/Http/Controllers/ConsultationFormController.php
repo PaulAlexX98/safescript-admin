@@ -2,25 +2,22 @@
 
 namespace App\Http\Controllers;
 
-use Log;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
-use Illuminate\Http\Request;
 use App\Models\ClinicForm;
 use App\Models\ConsultationFormResponse;
-use App\Models\User;
-use Illuminate\Support\Str;
-use Illuminate\Support\Arr;
-use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
-use Filament\Notifications\Notification;
-use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\HtmlString;
 use App\Models\ConsultationSession;
 use App\Models\Order;
-
+use App\Models\User;
+use Filament\Notifications\Notification;
+use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\HtmlString;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
+use Log;
 
 class ConsultationFormController extends Controller
 {
@@ -34,9 +31,9 @@ class ConsultationFormController extends Controller
         // Validate essentials; detailed field validation will run in save()
         $validated = $request->validate([
             'session_id' => ['required', 'integer'],
-            'form_type'  => ['nullable', 'string'], // allow deriving from __step_slug
-            'service'    => ['nullable', 'string'],
-            'treatment'  => ['nullable', 'string'],
+            'form_type' => ['nullable', 'string'], // allow deriving from __step_slug
+            'service' => ['nullable', 'string'],
+            'treatment' => ['nullable', 'string'],
         ]);
 
         // Resolve session
@@ -49,7 +46,7 @@ class ConsultationFormController extends Controller
         // Determine service/treatment scope, preferring posted over session, supporting both slug and plain values
         $service = \Illuminate\Support\Str::slug((string) ($validated['service']
             ?? ($session->service_slug ?? $session->service ?? '')));
-        $treat   = \Illuminate\Support\Str::slug((string) ($validated['treatment']
+        $treat = \Illuminate\Support\Str::slug((string) ($validated['treatment']
             ?? ($session->treatment_slug ?? $session->treatment ?? '')));
 
         // Try to find the most specific matching ClinicForm, then gracefully fall back
@@ -67,9 +64,9 @@ class ConsultationFormController extends Controller
         }
 
         $form = $q->orderByRaw('CASE WHEN service_slug IS NULL THEN 1 ELSE 0 END')
-                  ->orderByRaw('CASE WHEN treatment_slug IS NULL THEN 1 ELSE 0 END')
-                  ->orderByDesc('id')
-                  ->first();
+            ->orderByRaw('CASE WHEN treatment_slug IS NULL THEN 1 ELSE 0 END')
+            ->orderByDesc('id')
+            ->first();
 
         if (! $form) {
             // Last‑chance fallback to any form with this type
@@ -83,10 +80,10 @@ class ConsultationFormController extends Controller
         if (! $request->has('__step_slug')) {
             $step = match ($ft) {
                 'pharmacist_declaration' => 'pharmacist-declaration',
-                'pharmacist_advice'      => 'pharmacist-advice',
-                'record_of_supply'       => 'record-of-supply',
-                'risk_assessment'        => 'risk-assessment',
-                default                  => \Illuminate\Support\Str::slug($ft, '-'),
+                'pharmacist_advice' => 'pharmacist-advice',
+                'record_of_supply' => 'record-of-supply',
+                'risk_assessment' => 'risk-assessment',
+                default => \Illuminate\Support\Str::slug($ft, '-'),
             };
             $request->merge(['__step_slug' => $step]);
         }
@@ -97,11 +94,15 @@ class ConsultationFormController extends Controller
 
     private function coerceConsultationNoteText($raw): string
     {
-        if ($raw === null) return '';
+        if ($raw === null) {
+            return '';
+        }
 
         if (is_string($raw)) {
             $trim = trim($raw);
-            if ($trim === '') return '';
+            if ($trim === '') {
+                return '';
+            }
 
             $decoded = json_decode($trim, true);
             if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
@@ -112,14 +113,19 @@ class ConsultationFormController extends Controller
         }
 
         if (is_array($raw)) {
-            if (empty($raw)) return '';
+            if (empty($raw)) {
+                return '';
+            }
 
             $last = end($raw);
 
-            if (is_string($last)) return trim($last);
+            if (is_string($last)) {
+                return trim($last);
+            }
 
             if (is_array($last)) {
                 $t = $last['note'] ?? $last['text'] ?? $last['value'] ?? $last['content'] ?? null;
+
                 return is_scalar($t) ? trim((string) $t) : '';
             }
 
@@ -133,9 +139,13 @@ class ConsultationFormController extends Controller
     {
         try {
             $noteText = trim($noteText);
-            if ($noteText === '' || !$user) return;
+            if ($noteText === '' || ! $user) {
+                return;
+            }
 
-            if (!Schema::hasColumn('users', 'consultation_notes')) return;
+            if (! Schema::hasColumn('users', 'consultation_notes')) {
+                return;
+            }
 
             $existing = $user->consultation_notes ?? null;
 
@@ -144,14 +154,18 @@ class ConsultationFormController extends Controller
                 $existing = (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) ? $decoded : [];
             }
 
-            if (!is_array($existing)) $existing = [];
+            if (! is_array($existing)) {
+                $existing = [];
+            }
 
             $row = [
                 'note' => $noteText,
                 'at' => now('UTC')->toIso8601String(),
             ];
 
-            if ($reference) $row['reference'] = $reference;
+            if ($reference) {
+                $row['reference'] = $reference;
+            }
 
             $existing[] = $row;
 
@@ -159,16 +173,22 @@ class ConsultationFormController extends Controller
             $clean = [];
 
             foreach ($existing as $r) {
-                if (!is_array($r)) continue;
+                if (! is_array($r)) {
+                    continue;
+                }
 
-                $n = trim((string)($r['note'] ?? ''));
-                if ($n === '') continue;
+                $n = trim((string) ($r['note'] ?? ''));
+                if ($n === '') {
+                    continue;
+                }
 
-                $at = trim((string)($r['at'] ?? $r['created_at'] ?? $r['timestamp'] ?? ''));
-                $ref = trim((string)($r['reference'] ?? ''));
+                $at = trim((string) ($r['at'] ?? $r['created_at'] ?? $r['timestamp'] ?? ''));
+                $ref = trim((string) ($r['reference'] ?? ''));
 
-                $key = strtolower(preg_replace('/\s+/', ' ', $n)) . '|' . $at . '|' . $ref;
-                if (isset($seen[$key])) continue;
+                $key = strtolower(preg_replace('/\s+/', ' ', $n)).'|'.$at.'|'.$ref;
+                if (isset($seen[$key])) {
+                    continue;
+                }
 
                 $seen[$key] = true;
 
@@ -249,30 +269,31 @@ class ConsultationFormController extends Controller
         // 1) Basic validation
         try {
             $validated = $request->validate([
-                '__step_slug'     => ['required', 'string'],
+                '__step_slug' => ['required', 'string'],
                 '__mark_complete' => ['nullable', 'boolean'],
             ]);
         } catch (ValidationException $e) {
             $first = collect($e->errors())->flatten()->first() ?? 'Validation failed.';
             Notification::make()->title('Please fix the required fields')->body($first)->danger()->send();
+
             return back()->withErrors($e->errors())->withInput();
         }
 
-        $stepSlug     = $validated['__step_slug'];
-        $markComplete = (bool)($validated['__mark_complete'] ?? false);
-        $goNext       = (bool) $request->boolean('__go_next');
+        $stepSlug = $validated['__step_slug'];
+        $markComplete = (bool) ($validated['__mark_complete'] ?? false);
+        $goNext = (bool) $request->boolean('__go_next');
         \Log::info('consultation.flags', [
-            'session_id'    => $sessionId,
-            'step'          => $stepSlug,
+            'session_id' => $sessionId,
+            'step' => $stepSlug,
             'mark_complete' => $markComplete,
-            'ship_now'      => $request->boolean('__ship_now'),
-            'go_next'       => $goNext,
-            'form_id'       => $form->id ?? null,
-            'form_type'     => $form->form_type ?? null,
-            'method'        => $request->method(),
-            'url'           => $request->fullUrl(),
+            'ship_now' => $request->boolean('__ship_now'),
+            'go_next' => $goNext,
+            'form_id' => $form->id ?? null,
+            'form_type' => $form->form_type ?? null,
+            'method' => $request->method(),
+            'url' => $request->fullUrl(),
         ]);
-        $userId       = auth()->id();
+        $userId = auth()->id();
 
         // Normalise nested payloads to flat keys so schema mapping sees everything
         // Hoist answers[...] and data[...] into top-level keys only when a key does not already exist
@@ -281,7 +302,7 @@ class ConsultationFormController extends Controller
 
             if (isset($all['answers']) && is_array($all['answers'])) {
                 foreach ($all['answers'] as $k => $v) {
-                    if (!array_key_exists($k, $all)) {
+                    if (! array_key_exists($k, $all)) {
                         $request->merge([$k => $v]);
                     }
                 }
@@ -292,7 +313,7 @@ class ConsultationFormController extends Controller
 
             if (isset($all['data']) && is_array($all['data'])) {
                 foreach ($all['data'] as $k => $v) {
-                    if (!array_key_exists($k, $all)) {
+                    if (! array_key_exists($k, $all)) {
                         $request->merge([$k => $v]);
                     }
                 }
@@ -305,23 +326,23 @@ class ConsultationFormController extends Controller
         // Ensure the consultation session exists before using it
         $session = ConsultationSession::query()->findOrFail($sessionId);
         try {
-    \Log::info('consultation.save.hit', [
-        'session_id'      => $session->id,
-        'order_id'        => $session->order_id ?? null,
-        'service_slug'    => $session->service_slug ?? null,
-        'treatment_slug'  => $session->treatment_slug ?? null,
-        'step_slug'       => $stepSlug,
-        'request_keys'    => array_keys($request->except(['_token'])),
-        'has_answers'     => is_array($request->input('answers')),
-        'answers_keys'    => is_array($request->input('answers')) ? array_keys($request->input('answers')) : [],
-        'has_files'       => !empty($request->allFiles()),
-    ]);
-} catch (\Throwable $e) {
-    \Log::warning('consultation.save.hit_log_failed', ['message' => $e->getMessage()]);
-}
+            \Log::info('consultation.save.hit', [
+                'session_id' => $session->id,
+                'order_id' => $session->order_id ?? null,
+                'service_slug' => $session->service_slug ?? null,
+                'treatment_slug' => $session->treatment_slug ?? null,
+                'step_slug' => $stepSlug,
+                'request_keys' => array_keys($request->except(['_token'])),
+                'has_answers' => is_array($request->input('answers')),
+                'answers_keys' => is_array($request->input('answers')) ? array_keys($request->input('answers')) : [],
+                'has_files' => ! empty($request->allFiles()),
+            ]);
+        } catch (\Throwable $e) {
+            \Log::warning('consultation.save.hit_log_failed', ['message' => $e->getMessage()]);
+        }
         // Derive non-null identifiers for DB scope
         $derivedFormType = $form->form_type;
-        if (!$derivedFormType) {
+        if (! $derivedFormType) {
             // Prefer the current step slug, then infer from the form metadata, then fallback to 'form'
             $derivedFormType = Str::of((string) $stepSlug)->replace('-', '_')->__toString();
             if ($derivedFormType === '' || $derivedFormType === 'form') {
@@ -351,22 +372,22 @@ class ConsultationFormController extends Controller
         //    and the ClinicForm, aborting with 422 on mismatch. This caused valid flows
         //    to fail when generic forms were reused across services. We still compute
         //    the values for potential logging, but we no longer block the save here.
-        $sessionService    = Str::slug((string) (($session->service_slug ?? null) ?: ($session->service ?? '')));
-        $sessionTreatment  = Str::slug((string) (($session->treatment_slug ?? null) ?: ($session->treatment ?? '')));
-        $formService       = Str::slug((string) ($form->service_slug ?? ''));
-        $formTreatment     = Str::slug((string) ($form->treatment_slug ?? ''));
+        $sessionService = Str::slug((string) (($session->service_slug ?? null) ?: ($session->service ?? '')));
+        $sessionTreatment = Str::slug((string) (($session->treatment_slug ?? null) ?: ($session->treatment ?? '')));
+        $formService = Str::slug((string) ($form->service_slug ?? ''));
+        $formTreatment = Str::slug((string) ($form->treatment_slug ?? ''));
 
-        $serviceMismatch   = $sessionService   !== '' && $formService   !== '' && $formService   !== $sessionService;
+        $serviceMismatch = $sessionService !== '' && $formService !== '' && $formService !== $sessionService;
         $treatmentMismatch = $sessionTreatment !== '' && $formTreatment !== '' && $formTreatment !== $sessionTreatment;
 
         if ($serviceMismatch || $treatmentMismatch) {
             \Log::info('consultation.save.service_mismatch', [
-                'session_id'        => $session->id,
+                'session_id' => $session->id,
                 'derived_form_type' => $derivedFormType,
-                'session_service'   => $sessionService,
+                'session_service' => $sessionService,
                 'session_treatment' => $sessionTreatment,
-                'form_service'      => $formService,
-                'form_treatment'    => $formTreatment,
+                'form_service' => $formService,
+                'form_treatment' => $formTreatment,
             ]);
         }
 
@@ -375,41 +396,42 @@ class ConsultationFormController extends Controller
         $__fileFieldExisting = [];
         $rawSchema = is_array($form->schema) ? $form->schema : (json_decode($form->schema ?? '[]', true) ?: []);
 
-$flattenSchemaFields = function (array $schema): array {
-    $out = [];
+        $flattenSchemaFields = function (array $schema): array {
+            $out = [];
 
-    foreach ($schema as $sectionIdx => $node) {
-        if (! is_array($node)) {
-            continue;
-        }
-
-        if (isset($node['fields']) && is_array($node['fields'])) {
-            foreach ($node['fields'] as $fieldIdx => $field) {
-                if (! is_array($field)) {
+            foreach ($schema as $sectionIdx => $node) {
+                if (! is_array($node)) {
                     continue;
                 }
 
-                $out[] = $field + ['__schema_index' => $sectionIdx . '_' . $fieldIdx];
+                if (isset($node['fields']) && is_array($node['fields'])) {
+                    foreach ($node['fields'] as $fieldIdx => $field) {
+                        if (! is_array($field)) {
+                            continue;
+                        }
+
+                        $out[] = $field + ['__schema_index' => $sectionIdx.'_'.$fieldIdx];
+                    }
+
+                    continue;
+                }
+
+                if (($node['type'] ?? null) === 'section') {
+                    continue;
+                }
+
+                $out[] = $node + ['__schema_index' => $sectionIdx];
             }
-            continue;
-        }
 
-        if (($node['type'] ?? null) === 'section') {
-            continue;
-        }
+            return $out;
+        };
 
-        $out[] = $node + ['__schema_index' => $sectionIdx];
-    }
+        $flatSchemaFields = $flattenSchemaFields($rawSchema);
 
-    return $out;
-};
-
-$flatSchemaFields = $flattenSchemaFields($rawSchema);
-
-$rules = [];
-foreach ($flatSchemaFields as $idx => $fld) {
-    $type = strtolower($fld['type'] ?? 'text_input');
-    $cfg  = (array)($fld['data'] ?? $fld);
+        $rules = [];
+        foreach ($flatSchemaFields as $idx => $fld) {
+            $type = strtolower($fld['type'] ?? 'text_input');
+            $cfg = (array) ($fld['data'] ?? $fld);
 
             // Skip non-input blocks
             if ($type === 'text_block') {
@@ -418,12 +440,12 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
             // Resolve the posted field name. Different renderers may derive the name
             // from schema->name, from a slugged label, or fall back to field_{idx}.
-            $labelRaw   = $cfg['label'] ?? ($fld['label'] ?? null);
-            $slugLabelUnderscore  = $labelRaw ? Str::slug($labelRaw, '_') : null;
-            $slugLabelDash        = $labelRaw ? Str::slug($labelRaw, '-') : null;
+            $labelRaw = $cfg['label'] ?? ($fld['label'] ?? null);
+            $slugLabelUnderscore = $labelRaw ? Str::slug($labelRaw, '_') : null;
+            $slugLabelDash = $labelRaw ? Str::slug($labelRaw, '-') : null;
             // honour explicit keys from builder or importer
-            $schemaKey            = $cfg['key'] ?? ($fld['key'] ?? null);
-            $schemaKeyDash        = $schemaKey ? str_replace('_', '-', $schemaKey) : null;
+            $schemaKey = $cfg['key'] ?? ($fld['key'] ?? null);
+            $schemaKeyDash = $schemaKey ? str_replace('_', '-', $schemaKey) : null;
 
             $candidates = array_values(array_filter([
                 $fld['name'] ?? null,
@@ -445,18 +467,18 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     break;
                 }
             }
-            if (!$name) {
+            if (! $name) {
                 // Prefer explicit name in schema, then slug of label, then field_{idx}
                 $name = $candidates[0] ?? ('field_'.$idx);
             }
 
-            if (!empty($cfg['required'])) {
+            if (! empty($cfg['required'])) {
                 switch ($type) {
                     case 'checkbox':
                         $rules[$name] = 'accepted';
                         break;
                     case 'number':
-                        $numRules = ['required','numeric'];
+                        $numRules = ['required', 'numeric'];
                         if (isset($cfg['min']) && $cfg['min'] !== null && $cfg['min'] !== '') {
                             $numRules[] = 'min:'.$cfg['min'];
                         }
@@ -470,21 +492,25 @@ foreach ($flatSchemaFields as $idx => $fld) {
                         break;
                     case 'select':
                         // support single and multiple selections
-                        $options = (array)($cfg['options'] ?? ($fld['options'] ?? []));
+                        $options = (array) ($cfg['options'] ?? ($fld['options'] ?? []));
                         $values = [];
                         foreach ($options as $ov => $ol) {
                             $values[] = is_array($ol) ? ($ol['value'] ?? $ov) : $ov;
                         }
-                        $isMultiple = (bool)($cfg['multiple'] ?? ($fld['multiple'] ?? false));
+                        $isMultiple = (bool) ($cfg['multiple'] ?? ($fld['multiple'] ?? false));
 
                         $notAllowed = [];
-                        if (in_array('0', $values, true)) { $notAllowed[] = '0'; }
-                        if (in_array('',  $values, true)) { $notAllowed[] = ''; }
+                        if (in_array('0', $values, true)) {
+                            $notAllowed[] = '0';
+                        }
+                        if (in_array('', $values, true)) {
+                            $notAllowed[] = '';
+                        }
 
                         if ($isMultiple) {
                             $rules[$name] = ['required', 'array'];
-                            if (!empty($values)) {
-                                $rules[$name . '.*'] = array_filter([Rule::in($values), $notAllowed ? Rule::notIn($notAllowed) : null]);
+                            if (! empty($values)) {
+                                $rules[$name.'.*'] = array_filter([Rule::in($values), $notAllowed ? Rule::notIn($notAllowed) : null]);
                             }
                         } else {
                             $rules[$name] = empty($values)
@@ -495,18 +521,18 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     case 'file_upload':
                     case 'image':
                         // Build robust rules so existing paths satisfy required
-                        $accept = strtolower((string)($cfg['accept'] ?? ''));
+                        $accept = strtolower((string) ($cfg['accept'] ?? ''));
                         $r = ['nullable', 'sometimes', 'file'];
                         if ($type === 'image' || str_contains($accept, 'image')) {
                             $r[] = 'image';
                         }
                         // apply "required_without" only when schema marks the field required
-                        if (!empty($cfg['required'])) {
-                            $r[] = 'required_without:' . $name . '__existing';
+                        if (! empty($cfg['required'])) {
+                            $r[] = 'required_without:'.$name.'__existing';
                         }
                         $rules[$name] = $r;
                         // Validate the companion __existing payload as an array of strings if present
-                        $rules[$name . '__existing'] = ['nullable', 'array'];
+                        $rules[$name.'__existing'] = ['nullable', 'array'];
                         // track file input candidates for existing-path normalisation
                         $__fileFieldNames[] = $name;
                         break;
@@ -524,7 +550,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
         // Normalise __existing for all file inputs so required_without sees an array
         foreach ($__fileFieldNames as $fname) {
-            $raw = $request->input($fname . '__existing');
+            $raw = $request->input($fname.'__existing');
             $arr = [];
             if (is_array($raw)) {
                 $arr = array_values(array_filter($raw));
@@ -534,7 +560,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
             }
             $__fileFieldExisting[$fname] = $arr;
             // Merge back to the request in a canonical array form
-            $request->merge([$fname . '__existing' => $arr]);
+            $request->merge([$fname.'__existing' => $arr]);
         }
 
         // Strip any non-file payloads for file fields so "file" rule doesn't trip on strings/JSON
@@ -552,25 +578,25 @@ foreach ($flatSchemaFields as $idx => $fld) {
         //    This ensures fields are saved under explicit schema keys and that
         //    unchecked checkboxes/toggles are persisted as 0, and multi-selects
         //    round-trip as arrays.
-       $rawSchema = is_array($form->schema) ? $form->schema : (json_decode($form->schema ?? '[]', true) ?: []);
-$flatSchemaFields = isset($flattenSchemaFields) ? $flattenSchemaFields($rawSchema) : $rawSchema;
+        $rawSchema = is_array($form->schema) ? $form->schema : (json_decode($form->schema ?? '[]', true) ?: []);
+        $flatSchemaFields = isset($flattenSchemaFields) ? $flattenSchemaFields($rawSchema) : $rawSchema;
 
-// Build a field map of candidate post names -> single stable store key
-$fields = [];
-foreach ($flatSchemaFields as $idx => $fld) {
-    $type = strtolower($fld['type'] ?? 'text_input');
-    $cfg  = (array)($fld['data'] ?? $fld);
+        // Build a field map of candidate post names -> single stable store key
+        $fields = [];
+        foreach ($flatSchemaFields as $idx => $fld) {
+            $type = strtolower($fld['type'] ?? 'text_input');
+            $cfg = (array) ($fld['data'] ?? $fld);
 
             // Skip non-input content blocks
             if ($type === 'text_block') {
                 continue;
             }
 
-            $labelRaw   = $cfg['label'] ?? ($fld['label'] ?? null);
-            $slugLabelUnderscore  = $labelRaw ? Str::slug($labelRaw, '_') : null;
-            $slugLabelDash        = $labelRaw ? Str::slug($labelRaw, '-') : null;
-            $schemaKey            = $cfg['key'] ?? ($fld['key'] ?? null);
-            $schemaKeyDash        = $schemaKey ? str_replace('_', '-', $schemaKey) : null;
+            $labelRaw = $cfg['label'] ?? ($fld['label'] ?? null);
+            $slugLabelUnderscore = $labelRaw ? Str::slug($labelRaw, '_') : null;
+            $slugLabelDash = $labelRaw ? Str::slug($labelRaw, '-') : null;
+            $schemaKey = $cfg['key'] ?? ($fld['key'] ?? null);
+            $schemaKeyDash = $schemaKey ? str_replace('_', '-', $schemaKey) : null;
 
             // Posted name candidates as they may differ between renderers
             $candidates = array_values(array_filter([
@@ -586,10 +612,10 @@ foreach ($flatSchemaFields as $idx => $fld) {
             $storeKey = $schemaKey ?: ($fld['name'] ?? ($slugLabelUnderscore ?? ('field_'.$idx)));
 
             $fields[] = [
-                'type'       => $type,
-                'multiple'   => (bool)($cfg['multiple'] ?? ($fld['multiple'] ?? false)),
+                'type' => $type,
+                'multiple' => (bool) ($cfg['multiple'] ?? ($fld['multiple'] ?? false)),
                 'candidates' => $candidates,
-                'store'      => $storeKey,
+                'store' => $storeKey,
             ];
         }
 
@@ -609,12 +635,14 @@ foreach ($flatSchemaFields as $idx => $fld) {
             // Checkbox/toggle are omitted when unchecked: store 0 explicitly
             if (in_array($f['type'], ['checkbox', 'toggle', 'switch'], true)) {
                 $submitted[$f['store']] = $nameFound ? (int) $request->boolean($nameFound) : 0;
+
                 continue;
             }
 
             // Multi-select should always be an array
             if ($f['type'] === 'select' && $f['multiple']) {
                 $submitted[$f['store']] = $nameFound ? (array) $request->input($nameFound, []) : [];
+
                 continue;
             }
 
@@ -639,11 +667,13 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
                 if (is_array($file)) {
                     foreach ($file as $f) {
-                        if (!$f) continue;
+                        if (! $f) {
+                            continue;
+                        }
                         $p = $f->store('consultations', ['disk' => 'public']);
                         $objects[] = [
                             'name' => $f->getClientOriginalName(),
-                            'path' => '/storage/' . ltrim($p, '/'),
+                            'path' => '/storage/'.ltrim($p, '/'),
                             'type' => $f->getMimeType(),
                             'size' => $f->getSize(),
                         ];
@@ -653,7 +683,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                         $p = $file->store('consultations', ['disk' => 'public']);
                         $objects[] = [
                             'name' => $file->getClientOriginalName(),
-                            'path' => '/storage/' . ltrim($p, '/'),
+                            'path' => '/storage/'.ltrim($p, '/'),
                             'type' => $file->getMimeType(),
                             'size' => $file->getSize(),
                         ];
@@ -671,24 +701,26 @@ foreach ($flatSchemaFields as $idx => $fld) {
             }
         }
         // For any file fields with no upload this request, carry forward existing paths posted by the client preview
-        if (!empty($__fileFieldExisting)) {
+        if (! empty($__fileFieldExisting)) {
             foreach ($fields as $f) {
                 $storeKey = $f['store'] ?? null;
-                if (!$storeKey) continue;
+                if (! $storeKey) {
+                    continue;
+                }
                 // find any matching candidate that has an __existing payload
                 $existing = [];
-                foreach ((array)($f['candidates'] ?? []) as $cand) {
-                    if (!empty($__fileFieldExisting[$cand])) {
+                foreach ((array) ($f['candidates'] ?? []) as $cand) {
+                    if (! empty($__fileFieldExisting[$cand])) {
                         $existing = $__fileFieldExisting[$cand];
                         break;
                     }
                 }
-                if (!empty($existing) && !array_key_exists($storeKey, $submitted)) {
+                if (! empty($existing) && ! array_key_exists($storeKey, $submitted)) {
                     // Keep whatever shape the client sent the paths in; viewers handle strings or objects
                     $submitted[$storeKey] = $existing;
                 }
             }
-            
+
         }
         // 4aa) Fallback merge for blades that post nested answers[...] keys
         // Build a tolerant map of allowed storage keys so we can accept
@@ -696,7 +728,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
         $storeMap = [];
         foreach ($fields as $f) {
             $s = $f['store'] ?? null;
-            if (!$s) {
+            if (! $s) {
                 continue;
             }
             // Canonical
@@ -711,18 +743,24 @@ foreach ($flatSchemaFields as $idx => $fld) {
         // Helper to normalise scalar values
         $normaliseVal = function ($v) {
             if (is_string($v)) {
-                $vv  = trim($v);
+                $vv = trim($v);
                 $low = strtolower($vv);
-                if (in_array($low, ['on','true','yes','1'], true))  return 1;
-                if (in_array($low, ['off','false','no','0'], true)) return 0;
+                if (in_array($low, ['on', 'true', 'yes', '1'], true)) {
+                    return 1;
+                }
+                if (in_array($low, ['off', 'false', 'no', '0'], true)) {
+                    return 0;
+                }
+
                 return $vv === '' ? null : $vv;
             }
+
             return $v;
         };
 
         // Helper to place a value into the submitted payload only if not already present
         $putValue = function (string $storeKey, $value) use (&$submitted, $normaliseVal) {
-            if (!array_key_exists($storeKey, $submitted)) {
+            if (! array_key_exists($storeKey, $submitted)) {
                 $submitted[$storeKey] = $normaliseVal($value);
             }
         };
@@ -731,7 +769,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
         $answersArray = $request->input('answers', []);
         if (is_array($answersArray)) {
             foreach ($answersArray as $k => $v) {
-                $kStr   = is_string($k) ? $k : (string) $k;
+                $kStr = is_string($k) ? $k : (string) $k;
                 $target = $storeMap[$kStr]
                     ?? ($storeMap[\Illuminate\Support\Str::slug($kStr, '_')] ?? null)
                     ?? ($storeMap[\Illuminate\Support\Str::slug($kStr, '-')] ?? null);
@@ -747,16 +785,16 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
         // Merge any dot-style answers.foo inputs as well
         $reserved = [
-            '_token','_method','__step_slug','__mark_complete','__go_next',
-            'session_id','service','treatment','form_type'
+            '_token', '_method', '__step_slug', '__mark_complete', '__go_next',
+            'session_id', 'service', 'treatment', 'form_type',
         ];
         $dot = \Illuminate\Support\Arr::dot($request->except($reserved));
 
         foreach ($dot as $k => $v) {
-            if (!str_starts_with($k, 'answers.')) {
+            if (! str_starts_with($k, 'answers.')) {
                 continue;
             }
-            $raw    = substr($k, 8); // strip "answers."
+            $raw = substr($k, 8); // strip "answers."
             $target = $storeMap[$raw]
                 ?? ($storeMap[\Illuminate\Support\Str::slug($raw, '_')] ?? null)
                 ?? ($storeMap[\Illuminate\Support\Str::slug($raw, '-')] ?? null);
@@ -771,7 +809,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
         // Last-resort catch-all so we never drop a user's submission silently
         if (empty($submitted)) {
             $fallback = $answersArray;
-            if (!is_array($fallback) || empty($fallback)) {
+            if (! is_array($fallback) || empty($fallback)) {
                 $fallback = $request->except($reserved);
             }
             if (is_array($fallback)) {
@@ -796,17 +834,17 @@ foreach ($flatSchemaFields as $idx => $fld) {
         // 5) Upsert by unique scope (with robust fallbacks)
         $scope = [
             'consultation_session_id' => (int) $session->id,
-            'form_type'               => (string) $derivedFormType,
+            'form_type' => (string) $derivedFormType,
         ];
 
         /** @var ConsultationFormResponse|null $existing */
         $existing = ConsultationFormResponse::query()->where($scope)->first();
 
         // Preserve completion timestamp unless transitioning to complete
-        $isComplete  = $existing ? (bool)$existing->is_complete : false;
+        $isComplete = $existing ? (bool) $existing->is_complete : false;
         $completedAt = $existing ? $existing->completed_at : null;
-        if ($markComplete && !$isComplete) {
-            $isComplete  = true;
+        if ($markComplete && ! $isComplete) {
+            $isComplete = true;
             $completedAt = now();
             // Shipping is now triggered in the dedicated complete() endpoint.
         }
@@ -824,8 +862,10 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
         // 6a) Remove values for fields whose showIf conditions are not satisfied
         $evalShowIf = function (array $cond, array $data): bool {
-            $field = (string)($cond['field'] ?? '');
-            if ($field === '') return true; // no field -> treat as visible
+            $field = (string) ($cond['field'] ?? '');
+            if ($field === '') {
+                return true;
+            } // no field -> treat as visible
 
             $raw = null;
             foreach (array_values(array_unique(array_filter([
@@ -840,7 +880,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     break;
                 }
             }
-            $rawVals = is_array($raw) ? array_map('strval', $raw) : [ (string) $raw ];
+            $rawVals = is_array($raw) ? array_map('strval', $raw) : [(string) $raw];
             // Build slug-normalised versions to allow "Yes" vs "yes" vs "YES" etc.
             $normVals = array_map(function ($v) {
                 return \Illuminate\Support\Str::slug($v ?? '');
@@ -850,15 +890,17 @@ foreach ($flatSchemaFields as $idx => $fld) {
             if (array_key_exists('equals', $cond)) {
                 $eq = (string) $cond['equals'];
                 $eqNorm = \Illuminate\Support\Str::slug($eq);
+
                 return in_array($eq, $rawVals, true) || in_array($eqNorm, $normVals, true);
             }
 
             // in
-            if (!empty($cond['in']) && is_array($cond['in'])) {
-                $inRaw  = array_map('strval', $cond['in']);
+            if (! empty($cond['in']) && is_array($cond['in'])) {
+                $inRaw = array_map('strval', $cond['in']);
                 $inNorm = array_map(fn ($v) => \Illuminate\Support\Str::slug($v), $inRaw);
-                $hitRaw  = count(array_intersect($rawVals, $inRaw)) > 0;
+                $hitRaw = count(array_intersect($rawVals, $inRaw)) > 0;
                 $hitNorm = count(array_intersect($normVals, $inNorm)) > 0;
+
                 return $hitRaw || $hitNorm;
             }
 
@@ -867,50 +909,56 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 $neq = (string) $cond['notEquals'];
                 $neqNorm = \Illuminate\Support\Str::slug($neq);
                 $isEq = in_array($neq, $rawVals, true) || in_array($neqNorm, $normVals, true);
-                return !$isEq;
+
+                return ! $isEq;
             }
 
             // truthy
-            if (!empty($cond['truthy'])) {
+            if (! empty($cond['truthy'])) {
                 // Any non-empty raw value or any element in array counts as truthy
                 foreach ($rawVals as $v) {
-                    if (trim((string)$v) !== '') return true;
+                    if (trim((string) $v) !== '') {
+                        return true;
+                    }
                 }
+
                 return false;
             }
 
             return true; // unknown condition -> keep
         };
 
-       foreach ($flatSchemaFields as $idx => $fld) {
-        $type = $fld['type'] ?? 'text_input';
-        $cfg  = (array)($fld['data'] ?? $fld);
-            $cond = (array)($cfg['showIf'] ?? []);
-            if (empty($cond)) continue;
+        foreach ($flatSchemaFields as $idx => $fld) {
+            $type = $fld['type'] ?? 'text_input';
+            $cfg = (array) ($fld['data'] ?? $fld);
+            $cond = (array) ($cfg['showIf'] ?? []);
+            if (empty($cond)) {
+                continue;
+            }
 
-            $labelRaw  = $cfg['label'] ?? ($fld['label'] ?? null);
+            $labelRaw = $cfg['label'] ?? ($fld['label'] ?? null);
             $slugLabel = $labelRaw ? Str::slug($labelRaw, '_') : null;
             $schemaKey = $cfg['key'] ?? ($fld['key'] ?? null);
-            $name      = $fld['name'] ?? $schemaKey ?? $slugLabel ?? (($type === 'text_block') ? ('block_'.$idx) : ('field_'.$idx));
+            $name = $fld['name'] ?? $schemaKey ?? $slugLabel ?? (($type === 'text_block') ? ('block_'.$idx) : ('field_'.$idx));
 
             // If condition not met, drop the value so it doesn't display later
-            if ($name && array_key_exists($name, $persistData) && !$evalShowIf($cond, $persistData)) {
+            if ($name && array_key_exists($name, $persistData) && ! $evalShowIf($cond, $persistData)) {
                 unset($persistData[$name]);
             }
         }
 
         // Helpful debug for tracking saves
         \Log::info('consultation.save.persist', [
-    'session_id'    => $session->id,
-    'form_id'       => $form->id,
-    'form_type'     => $derivedFormType,
-    'step'          => $stepSlug,
-    'saved_keys'    => array_keys($persistData),
-    'count'         => count($persistData),
-    'go_next'       => $goNext,
-    'mark_complete' => $markComplete,
-    'redirect_to'   => $target ?? null,
-]);
+            'session_id' => $session->id,
+            'form_id' => $form->id,
+            'form_type' => $derivedFormType,
+            'step' => $stepSlug,
+            'saved_keys' => array_keys($persistData),
+            'count' => count($persistData),
+            'go_next' => $goNext,
+            'mark_complete' => $markComplete,
+            'redirect_to' => $target ?? null,
+        ]);
 
         $model = ConsultationFormResponse::firstOrNew($scope);
 
@@ -922,14 +970,14 @@ foreach ($flatSchemaFields as $idx => $fld) {
         }
 
         $model->clinic_form_id = $form->id;
-        $model->form_type      = $derivedFormType;
-        $model->service_slug   = $serviceSlugForForm;
+        $model->form_type = $derivedFormType;
+        $model->service_slug = $serviceSlugForForm;
         $model->treatment_slug = $treatmentSlugForForm;
-        $model->step_slug      = $stepSlug;
-        $model->form_version   = $formVersion;
-        $model->is_complete    = $isComplete;
-        $model->completed_at   = $completedAt;
-        $model->updated_by     = $userId;
+        $model->step_slug = $stepSlug;
+        $model->form_version = $formVersion;
+        $model->is_complete = $isComplete;
+        $model->completed_at = $completedAt;
+        $model->updated_by = $userId;
 
         // the important bit set data explicitly then save
         $model->data = $persistData;
@@ -938,24 +986,24 @@ foreach ($flatSchemaFields as $idx => $fld) {
         // Mirror into session meta so runner and viewers that read session->meta can see latest values
         $sessionMeta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
         $formKeyUnderscore = $derivedFormType;                 // e.g. risk_assessment
-        $formSlug          = $this->slugForForm($form);        // e.g. risk-assessment
+        $formSlug = $this->slugForForm($form);        // e.g. risk-assessment
 
         data_set($sessionMeta, "forms.$formKeyUnderscore.answers", $persistData);
-        data_set($sessionMeta, "forms.$formKeyUnderscore.schema",  $rawSchema);
+        data_set($sessionMeta, "forms.$formKeyUnderscore.schema", $rawSchema);
         data_set($sessionMeta, "forms.$formKeyUnderscore.updated_at", now()->toIso8601String());
 
         // Also store under the hyphenated slug for consumers that expect that shape
         data_set($sessionMeta, "forms.$formSlug.answers", $persistData);
-        data_set($sessionMeta, "forms.$formSlug.schema",  $rawSchema);
+        data_set($sessionMeta, "forms.$formSlug.schema", $rawSchema);
         data_set($sessionMeta, "forms.$formSlug.updated_at", now()->toIso8601String());
 
         // Backward compatible mirrors for legacy consumers that expect top-level formsQA or forms_qa
         data_set($sessionMeta, "formsQA.$formKeyUnderscore", $persistData);
-        data_set($sessionMeta, "formsQA.$formSlug",        $persistData);
+        data_set($sessionMeta, "formsQA.$formSlug", $persistData);
         data_set($sessionMeta, "forms_qa.$formKeyUnderscore", $persistData);
-        data_set($sessionMeta, "forms_qa.$formSlug",          $persistData);
-        data_set($sessionMeta, "formsQA.updated_at", now()->toIso8601String());
-        data_set($sessionMeta, "forms_qa.updated_at", now()->toIso8601String());
+        data_set($sessionMeta, "forms_qa.$formSlug", $persistData);
+        data_set($sessionMeta, 'formsQA.updated_at', now()->toIso8601String());
+        data_set($sessionMeta, 'forms_qa.updated_at', now()->toIso8601String());
 
         $session->meta = $sessionMeta;
         $session->save();
@@ -991,7 +1039,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 if ($weightRaw === null && is_array($persistData)) {
                     foreach ($persistData as $k => $v) {
                         $ks = is_string($k) ? strtolower($k) : '';
-                        if ($ks === '' || !str_contains($ks, 'weight')) {
+                        if ($ks === '' || ! str_contains($ks, 'weight')) {
                             continue;
                         }
                         if (str_contains($ks, 'target') || str_contains($ks, 'goal')) {
@@ -1055,7 +1103,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     $user = User::query()->find($userId);
                     if ($user) {
                         $userMeta = is_array($user->meta) ? $user->meta : (json_decode($user->meta ?? '[]', true) ?: []);
-                        if (!is_array($userMeta)) {
+                        if (! is_array($userMeta)) {
                             $userMeta = [];
                         }
 
@@ -1098,15 +1146,15 @@ foreach ($flatSchemaFields as $idx => $fld) {
             $consultNotesStr = $this->coerceConsultationNoteText($consultNotesRaw);
 
             \Log::info('consultation.save.notes_detected', [
-                'session_id'    => $session->id,
-                'form_type'     => $derivedFormType,
-                'step_slug'     => $stepSlug,
-                'raw_type'      => gettype($consultNotesRaw),
-                'notes_found'   => $consultNotesStr !== '',
-                'notes_length'  => strlen($consultNotesStr),
+                'session_id' => $session->id,
+                'form_type' => $derivedFormType,
+                'step_slug' => $stepSlug,
+                'raw_type' => gettype($consultNotesRaw),
+                'notes_found' => $consultNotesStr !== '',
+                'notes_length' => strlen($consultNotesStr),
                 'request_has_snake' => $request->has('consultation_notes'),
-                'request_has_dash'  => $request->has('consultation-notes'),
-                'persist_keys'      => is_array($persistData ?? null) ? array_keys($persistData) : [],
+                'request_has_dash' => $request->has('consultation-notes'),
+                'persist_keys' => is_array($persistData ?? null) ? array_keys($persistData) : [],
             ]);
 
             if ($consultNotesStr !== '') {
@@ -1128,7 +1176,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 }
 
                 try {
-                    if (!$userForNote && $order && isset($order->user_id) && $order->user_id) {
+                    if (! $userForNote && $order && isset($order->user_id) && $order->user_id) {
                         $userForNote = User::query()->find($order->user_id);
                     }
                 } catch (\Throwable $e) {
@@ -1150,7 +1198,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
                 // Fallbacks if relationship isn't loaded/available
                 try {
-                    if (!$order && isset($session->order_id) && class_exists('App\\Models\\Order')) {
+                    if (! $order && isset($session->order_id) && class_exists('App\\Models\\Order')) {
                         $order = \App\Models\Order::find($session->order_id);
                     }
                 } catch (\Throwable $e) {
@@ -1158,7 +1206,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 }
 
                 try {
-                    if (!$order && isset($session->order_reference) && class_exists('App\\Models\\Order')) {
+                    if (! $order && isset($session->order_reference) && class_exists('App\\Models\\Order')) {
                         $order = \App\Models\Order::where('reference', $session->order_reference)->first();
                     }
                 } catch (\Throwable $e) {
@@ -1170,7 +1218,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     if (is_string($meta)) {
                         $meta = json_decode($meta, true) ?: [];
                     }
-                    if (!is_array($meta)) {
+                    if (! is_array($meta)) {
                         $meta = [];
                     }
 
@@ -1185,6 +1233,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                                 return is_string($v) ? trim($v) : '';
                             }, $existing)));
                             $arr[] = $note;
+
                             return array_values(array_unique(array_filter($arr, fn ($v) => $v !== '')));
                         }
 
@@ -1195,6 +1244,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                         if ($s === $note) {
                             return [$note];
                         }
+
                         return array_values(array_unique([$s, $note]));
                     };
 
@@ -1215,7 +1265,9 @@ foreach ($flatSchemaFields as $idx => $fld) {
                                 if (is_array($v)) {
                                     $n = data_get($v, 'note') ?? data_get($v, 'text') ?? data_get($v, 'message') ?? '';
                                     $n = is_string($n) ? trim($n) : '';
-                                    if ($n === '') continue;
+                                    if ($n === '') {
+                                        continue;
+                                    }
 
                                     $t = data_get($v, 'at') ?? data_get($v, 'ts') ?? data_get($v, 'created_at') ?? null;
                                     $t = is_string($t) ? trim($t) : (is_null($t) ? null : (string) $t);
@@ -1223,7 +1275,9 @@ foreach ($flatSchemaFields as $idx => $fld) {
                                     $items[] = ['note' => $n, 'at' => $t ?: null];
                                 } else {
                                     $s = is_string($v) ? trim($v) : '';
-                                    if ($s === '') continue;
+                                    if ($s === '') {
+                                        continue;
+                                    }
                                     $items[] = ['note' => $s, 'at' => null];
                                 }
                             }
@@ -1239,13 +1293,17 @@ foreach ($flatSchemaFields as $idx => $fld) {
                         $deduped = [];
                         foreach ($items as $it) {
                             $k = (string) ($it['note'] ?? '');
-                            if ($k === '') continue;
-                            if (isset($seen[$k])) continue;
+                            if ($k === '') {
+                                continue;
+                            }
+                            if (isset($seen[$k])) {
+                                continue;
+                            }
                             $seen[$k] = true;
                             $deduped[] = $it;
                         }
 
-                        if (!isset($seen[$note])) {
+                        if (! isset($seen[$note])) {
                             $deduped[] = $newItem;
                         }
 
@@ -1287,7 +1345,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                         $ord = $session->order;
                         if ($ord) {
                             // Set some reasonable "completed" semantics while keeping existing values when present
-                            if (empty($ord->status) || in_array($ord->status, ['pending','processing','approved'], true)) {
+                            if (empty($ord->status) || in_array($ord->status, ['pending', 'processing', 'approved'], true)) {
                                 $ord->status = 'completed';
                             }
                             // Persist shipping meta echo for quick access from order views
@@ -1312,8 +1370,8 @@ foreach ($flatSchemaFields as $idx => $fld) {
                             } catch (\Throwable $ae) {
                                 \Log::warning('consultation.save.appointment_update_failed', [
                                     'session' => $session->id,
-                                    'order'   => $ord->getKey(),
-                                    'error'   => $ae->getMessage(),
+                                    'order' => $ord->getKey(),
+                                    'error' => $ae->getMessage(),
                                 ]);
                             }
 
@@ -1330,16 +1388,16 @@ foreach ($flatSchemaFields as $idx => $fld) {
         }
         // 7) Smart redirect: keep user on the same tab
         $backUrl = url()->previous();
-        $tabKey  = $this->defaultTabKeyForSlug($stepSlug);
+        $tabKey = $this->defaultTabKeyForSlug($stepSlug);
 
         // append or replace the "tab" query with the current tabKey
-        $target  = $backUrl ? preg_replace('/([?&])tab=[^&]*/', '$1tab='.$tabKey, $backUrl) : null;
-        if ($target && !str_contains($target, 'tab=')) {
+        $target = $backUrl ? preg_replace('/([?&])tab=[^&]*/', '$1tab='.$tabKey, $backUrl) : null;
+        if ($target && ! str_contains($target, 'tab=')) {
             $target .= (str_contains($target, '?') ? '&' : '?').'tab='.$tabKey;
         }
         // optional hint for the UI if it cares about stepping
         if ($target && $goNext) {
-            $target .= (str_contains($target, '?') ? '&' : '?') . 'next=1';
+            $target .= (str_contains($target, '?') ? '&' : '?').'next=1';
         }
 
         // If we completed the consultation this request and computed a post‑completion target, use it.
@@ -1348,13 +1406,13 @@ foreach ($flatSchemaFields as $idx => $fld) {
         }
         if ($request->wantsJson()) {
             return response()->json([
-                'ok'            => true,
-                'message'       => 'Form saved successfully',
-                'step'          => $stepSlug,
-                'tab'           => $tabKey,
-                'is_complete'   => $isComplete,
-                'completed_at'  => optional($completedAt)->toISOString(),
-                'saved_keys'    => array_keys($persistData),
+                'ok' => true,
+                'message' => 'Form saved successfully',
+                'step' => $stepSlug,
+                'tab' => $tabKey,
+                'is_complete' => $isComplete,
+                'completed_at' => optional($completedAt)->toISOString(),
+                'saved_keys' => array_keys($persistData),
             ]);
         }
 
@@ -1362,6 +1420,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
             ? redirect()->to($target)->with('success', 'Form saved successfully!')
             : back()->with('success', 'Form saved successfully!');
     }
+
     /**
      * Build a best-effort answers array for hydration by checking DB records first
      * then falling back to session meta stores used across the app.
@@ -1403,12 +1462,12 @@ foreach ($flatSchemaFields as $idx => $fld) {
             data_get($session, 'assessment.answers'),
         ];
         foreach ($cands as $cand) {
-            if (is_array($cand) && !empty($cand)) {
+            if (is_array($cand) && ! empty($cand)) {
                 return (array) $cand;
             }
             if (is_string($cand)) {
                 $dec = json_decode($cand, true);
-                if (is_array($dec) && !empty($dec)) {
+                if (is_array($dec) && ! empty($dec)) {
                     return (array) $dec;
                 }
             }
@@ -1422,13 +1481,13 @@ foreach ($flatSchemaFields as $idx => $fld) {
      */
     public function showComplete(ConsultationSession $session)
     {
-        $order   = $session->order ?? null;
+        $order = $session->order ?? null;
         $patient = $order?->patient ?? null;
 
         return view('consultations.complete', [
-            'session'     => $session,
-            'order'       => $order,
-            'patient'     => $patient,
+            'session' => $session,
+            'order' => $order,
+            'patient' => $patient,
             'sessionLike' => $session,
         ]);
     }
@@ -1463,11 +1522,13 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
                 if ($key === 'signature' && str_starts_with($value, 'data:image/')) {
                     $value = '[signature omitted]';
+
                     return;
                 }
 
                 if (str_starts_with($value, 'data:image/')) {
                     $value = '[embedded image omitted]';
+
                     return;
                 }
 
@@ -1498,7 +1559,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
                     if (! empty($nameHints)) {
                         foreach ($nameHints as $hint) {
-                            $q->orWhere('name', 'like', '%' . $hint . '%');
+                            $q->orWhere('name', 'like', '%'.$hint.'%');
                         }
                     }
                 })
@@ -1518,24 +1579,24 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
         $formsToCopy = [
             'reorder' => [
-                'aliases'   => ['reorder'],
+                'aliases' => ['reorder'],
                 'nameHints' => ['reorder'],
-                'top'       => 'reorder',
+                'top' => 'reorder',
             ],
             'pharmacist_advice' => [
-                'aliases'   => ['pharmacist_advice', 'pharmacist-advice', 'advice'],
+                'aliases' => ['pharmacist_advice', 'pharmacist-advice', 'advice'],
                 'nameHints' => ['pharmacist advice', 'advice'],
-                'top'       => 'pharmacist_advice',
+                'top' => 'pharmacist_advice',
             ],
             'pharmacist_declaration' => [
-                'aliases'   => ['pharmacist_declaration', 'pharmacist-declaration', 'declaration'],
+                'aliases' => ['pharmacist_declaration', 'pharmacist-declaration', 'declaration'],
                 'nameHints' => ['pharmacist declaration', 'declaration'],
-                'top'       => 'pharmacist_declaration',
+                'top' => 'pharmacist_declaration',
             ],
             'record_of_supply' => [
-                'aliases'   => ['record_of_supply', 'record-of-supply', 'clinical_notes'],
+                'aliases' => ['record_of_supply', 'record-of-supply', 'clinical_notes'],
                 'nameHints' => ['record of supply', 'clinical notes'],
-                'top'       => 'record_of_supply',
+                'top' => 'record_of_supply',
             ],
         ];
 
@@ -1543,18 +1604,18 @@ foreach ($flatSchemaFields as $idx => $fld) {
         foreach ($formsToCopy as $canonical => $cfg) {
             \Log::info('consultation.save_all_tabs.check', [
                 'session_id' => $session->id,
-                'canonical'  => $canonical,
-                'aliases'    => $cfg['aliases'],
+                'canonical' => $canonical,
+                'aliases' => $cfg['aliases'],
                 'name_hints' => $cfg['nameHints'],
             ]);
 
             $row = $findLatestRow($cfg['aliases'], $cfg['nameHints']);
 
             \Log::info('consultation.save_all_tabs.row', [
-                'session_id'     => $session->id,
-                'canonical'      => $canonical,
-                'row_id'         => $row->id ?? null,
-                'row_form_type'  => $row->form_type ?? null,
+                'session_id' => $session->id,
+                'canonical' => $canonical,
+                'row_id' => $row->id ?? null,
+                'row_form_type' => $row->form_type ?? null,
                 'clinic_form_id' => $row->clinic_form_id ?? null,
             ]);
             if (! $row) {
@@ -1563,18 +1624,18 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
             $payload = $normalisePayload($row->data ?? null);
             \Log::info('consultation.save_all_tabs.payload_sanitised', [
-                'session_id'    => $session->id,
-                'canonical'     => $canonical,
-                'payload_keys'  => array_keys($payload),
+                'session_id' => $session->id,
+                'canonical' => $canonical,
+                'payload_keys' => array_keys($payload),
                 'payload_count' => count($payload),
                 'has_signature' => array_key_exists('signature', $payload),
             ]);
             \Log::info('consultation.save_all_tabs.payload', [
-    'session_id'    => $session->id,
-    'canonical'     => $canonical,
-    'payload_keys'  => array_keys($payload),
-    'payload_count' => count($payload),
-]);
+                'session_id' => $session->id,
+                'canonical' => $canonical,
+                'payload_keys' => array_keys($payload),
+                'payload_count' => count($payload),
+            ]);
             if (empty($payload)) {
                 continue;
             }
@@ -1635,9 +1696,9 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
                     $payload = $normalisePayload($row->data ?? null);
                     \Log::info('consultation.save_all_tabs.order_payload_sanitised', [
-                        'session_id'    => $session->id,
-                        'canonical'     => $canonical,
-                        'payload_keys'  => array_keys($payload),
+                        'session_id' => $session->id,
+                        'canonical' => $canonical,
+                        'payload_keys' => array_keys($payload),
                         'payload_count' => count($payload),
                         'has_signature' => array_key_exists('signature', $payload),
                     ]);
@@ -1684,7 +1745,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
         } catch (\Throwable $e) {
             \Log::warning('consultation.save_all_tabs.order_meta_merge_failed', [
                 'session' => $session->id,
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
         }
 
@@ -1695,302 +1756,302 @@ foreach ($flatSchemaFields as $idx => $fld) {
      * Controller action to merge all saved tabs into session/order meta.
      */
     public function saveAllTabs(Request $request, ConsultationSession $session)
-{
-    \Log::info('consultation.save_all_tabs.hit', [
-        'session_id' => $session->id,
-        'url'        => $request->fullUrl(),
-        'method'     => $request->method(),
-    ]);
+    {
+        \Log::info('consultation.save_all_tabs.hit', [
+            'session_id' => $session->id,
+            'url' => $request->fullUrl(),
+            'method' => $request->method(),
+        ]);
 
-    $merged = $this->mergeLatestSavedTabsIntoMeta($session);
+        $merged = $this->mergeLatestSavedTabsIntoMeta($session);
 
-    $consultationNotesRaw = $request->input('consultation_notes');
-    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
-        $consultationNotesRaw = $request->input('answers.consultation_notes');
-    }
-    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
-        $consultationNotesRaw = $request->input('answers.consultation-notes');
-    }
-    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
-        $consultationNotesRaw = $request->input('pharmacist_advice.consultation_notes');
-    }
-    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
-        $consultationNotesRaw = $request->input('consultation-notes');
-    }
-    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
-        $consultationNotesRaw = $request->input('other-clinical-notes');
-    }
-    if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
-        $consultationNotesRaw = $request->input('other_clinical_notes');
-    }
+        $consultationNotesRaw = $request->input('consultation_notes');
+        if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+            $consultationNotesRaw = $request->input('answers.consultation_notes');
+        }
+        if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+            $consultationNotesRaw = $request->input('answers.consultation-notes');
+        }
+        if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+            $consultationNotesRaw = $request->input('pharmacist_advice.consultation_notes');
+        }
+        if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+            $consultationNotesRaw = $request->input('consultation-notes');
+        }
+        if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+            $consultationNotesRaw = $request->input('other-clinical-notes');
+        }
+        if ($consultationNotesRaw === null || $consultationNotesRaw === '') {
+            $consultationNotesRaw = $request->input('other_clinical_notes');
+        }
 
-    $consultationNotes = $this->coerceConsultationNoteText($consultationNotesRaw);
+        $consultationNotes = $this->coerceConsultationNoteText($consultationNotesRaw);
 
-    if ($consultationNotes === '') {
-        try {
-            $candidateRows = ConsultationFormResponse::query()
-                ->where('consultation_session_id', $session->id)
-                ->whereIn('form_type', ['pharmacist_advice', 'pharmacist-advice', 'advice', 'clinical_notes', 'record_of_supply', 'record-of-supply'])
-                ->orderByDesc('updated_at')
-                ->get();
+        if ($consultationNotes === '') {
+            try {
+                $candidateRows = ConsultationFormResponse::query()
+                    ->where('consultation_session_id', $session->id)
+                    ->whereIn('form_type', ['pharmacist_advice', 'pharmacist-advice', 'advice', 'clinical_notes', 'record_of_supply', 'record-of-supply'])
+                    ->orderByDesc('updated_at')
+                    ->get();
 
-            foreach ($candidateRows as $candidateRow) {
-                $candidateData = is_array($candidateRow->data)
-                    ? $candidateRow->data
-                    : (json_decode($candidateRow->data ?? '[]', true) ?: []);
+                foreach ($candidateRows as $candidateRow) {
+                    $candidateData = is_array($candidateRow->data)
+                        ? $candidateRow->data
+                        : (json_decode($candidateRow->data ?? '[]', true) ?: []);
 
-                if (!is_array($candidateData)) {
-                    continue;
-                }
+                    if (! is_array($candidateData)) {
+                        continue;
+                    }
 
-                foreach (['consultation_notes', 'consultation-notes', 'other-clinical-notes', 'other_clinical_notes'] as $noteKey) {
-                    if (array_key_exists($noteKey, $candidateData)) {
-                        $consultationNotes = $this->coerceConsultationNoteText($candidateData[$noteKey]);
-                        if ($consultationNotes !== '') {
-                            break 2;
+                    foreach (['consultation_notes', 'consultation-notes', 'other-clinical-notes', 'other_clinical_notes'] as $noteKey) {
+                        if (array_key_exists($noteKey, $candidateData)) {
+                            $consultationNotes = $this->coerceConsultationNoteText($candidateData[$noteKey]);
+                            if ($consultationNotes !== '') {
+                                break 2;
+                            }
                         }
                     }
                 }
+            } catch (\Throwable $e) {
+                \Log::warning('consultation.save_all_tabs.lookup_notes_failed', [
+                    'session' => $session->id,
+                    'error' => $e->getMessage(),
+                ]);
             }
-        } catch (\Throwable $e) {
-            \Log::warning('consultation.save_all_tabs.lookup_notes_failed', [
-                'session' => $session->id,
-                'error'   => $e->getMessage(),
-            ]);
         }
-    }
 
-    \Log::info('consultation.save_all_tabs.notes_input', [
-        'session_id'          => $session->id,
-        'raw_type'            => gettype($consultationNotesRaw),
-        'notes_found'         => $consultationNotes !== '',
-        'notes_length'        => strlen($consultationNotes),
-        'request_has_direct'  => $request->has('consultation_notes'),
-        'request_has_answers' => $request->has('answers.consultation_notes'),
-    ]);
+        \Log::info('consultation.save_all_tabs.notes_input', [
+            'session_id' => $session->id,
+            'raw_type' => gettype($consultationNotesRaw),
+            'notes_found' => $consultationNotes !== '',
+            'notes_length' => strlen($consultationNotes),
+            'request_has_direct' => $request->has('consultation_notes'),
+            'request_has_answers' => $request->has('answers.consultation_notes'),
+        ]);
 
-    $consultationNotesLatest = $consultationNotes !== ''
-        ? \Illuminate\Support\Str::limit($consultationNotes, 4000, '')
-        : '';
+        $consultationNotesLatest = $consultationNotes !== ''
+            ? \Illuminate\Support\Str::limit($consultationNotes, 4000, '')
+            : '';
 
-    if ($consultationNotes !== '') {
-        // Write consultation notes to the latest pharmacist advice ConsultationFormResponse row
-        try {
-            $adviceRow = ConsultationFormResponse::query()
-                ->where('consultation_session_id', $session->id)
-                ->whereIn('form_type', ['pharmacist_advice', 'pharmacist-advice', 'advice'])
-                ->latest('updated_at')
-                ->first();
+        if ($consultationNotes !== '') {
+            // Write consultation notes to the latest pharmacist advice ConsultationFormResponse row
+            try {
+                $adviceRow = ConsultationFormResponse::query()
+                    ->where('consultation_session_id', $session->id)
+                    ->whereIn('form_type', ['pharmacist_advice', 'pharmacist-advice', 'advice'])
+                    ->latest('updated_at')
+                    ->first();
 
-            if ($adviceRow) {
-                $adviceData = is_array($adviceRow->data)
-                    ? $adviceRow->data
-                    : (json_decode($adviceRow->data ?? '[]', true) ?: []);
+                if ($adviceRow) {
+                    $adviceData = is_array($adviceRow->data)
+                        ? $adviceRow->data
+                        : (json_decode($adviceRow->data ?? '[]', true) ?: []);
 
-                if (!is_array($adviceData)) {
-                    $adviceData = [];
+                    if (! is_array($adviceData)) {
+                        $adviceData = [];
+                    }
+
+                    $adviceData['consultation_notes'] = $consultationNotes;
+                    $adviceData['consultation-notes'] = $consultationNotes;
+
+                    $adviceRow->data = $adviceData;
+                    $adviceRow->save();
+
+                    \Log::info('consultation.save_all_tabs.advice_row_updated', [
+                        'session_id' => $session->id,
+                        'row_id' => $adviceRow->id,
+                        'form_type' => $adviceRow->form_type,
+                        'keys' => array_keys($adviceData),
+                    ]);
+                } else {
+                    \Log::warning('consultation.save_all_tabs.advice_row_missing', [
+                        'session_id' => $session->id,
+                    ]);
                 }
-
-                $adviceData['consultation_notes'] = $consultationNotes;
-                $adviceData['consultation-notes'] = $consultationNotes;
-
-                $adviceRow->data = $adviceData;
-                $adviceRow->save();
-
-                \Log::info('consultation.save_all_tabs.advice_row_updated', [
-                    'session_id' => $session->id,
-                    'row_id'     => $adviceRow->id,
-                    'form_type'  => $adviceRow->form_type,
-                    'keys'       => array_keys($adviceData),
-                ]);
-            } else {
-                \Log::warning('consultation.save_all_tabs.advice_row_missing', [
-                    'session_id' => $session->id,
+            } catch (\Throwable $e) {
+                \Log::warning('consultation.save_all_tabs.advice_row_update_failed', [
+                    'session' => $session->id,
+                    'error' => $e->getMessage(),
                 ]);
             }
-        } catch (\Throwable $e) {
-            \Log::warning('consultation.save_all_tabs.advice_row_update_failed', [
-                'session' => $session->id,
-                'error'   => $e->getMessage(),
-            ]);
-        }
-        try {
-            $sessionMeta = is_array($session->meta)
-                ? $session->meta
-                : (json_decode($session->meta ?? '[]', true) ?: []);
+            try {
+                $sessionMeta = is_array($session->meta)
+                    ? $session->meta
+                    : (json_decode($session->meta ?? '[]', true) ?: []);
 
-            data_set($sessionMeta, 'consultation_notes', $consultationNotes);
-            data_set($sessionMeta, 'consultation-notes', $consultationNotesLatest);
-            data_set($sessionMeta, 'consultation_notes_latest', $consultationNotesLatest);
-            data_set($sessionMeta, 'pharmacist_advice.consultation_notes', $consultationNotesLatest);
-            data_set($sessionMeta, 'pharmacist_advice.consultation-notes', $consultationNotesLatest);
-            data_set($sessionMeta, 'pharmacist_advice_notes', $consultationNotesLatest);
-            data_set($sessionMeta, 'pharmacist-advice-notes', $consultationNotesLatest);
+                data_set($sessionMeta, 'consultation_notes', $consultationNotes);
+                data_set($sessionMeta, 'consultation-notes', $consultationNotesLatest);
+                data_set($sessionMeta, 'consultation_notes_latest', $consultationNotesLatest);
+                data_set($sessionMeta, 'pharmacist_advice.consultation_notes', $consultationNotesLatest);
+                data_set($sessionMeta, 'pharmacist_advice.consultation-notes', $consultationNotesLatest);
+                data_set($sessionMeta, 'pharmacist_advice_notes', $consultationNotesLatest);
+                data_set($sessionMeta, 'pharmacist-advice-notes', $consultationNotesLatest);
 
-            $session->meta = $sessionMeta;
-            $session->save();
-        } catch (\Throwable $e) {
-            \Log::warning('consultation.save_all_tabs.session_notes_failed', [
-                'session' => $session->id,
-                'error'   => $e->getMessage(),
-            ]);
-        }
+                $session->meta = $sessionMeta;
+                $session->save();
+            } catch (\Throwable $e) {
+                \Log::warning('consultation.save_all_tabs.session_notes_failed', [
+                    'session' => $session->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
 
-        try {
-            $order = $session->order ?? null;
-            if ($order) {
-                $orderMeta = is_array($order->meta)
-                    ? $order->meta
-                    : (json_decode($order->meta ?? '[]', true) ?: []);
+            try {
+                $order = $session->order ?? null;
+                if ($order) {
+                    $orderMeta = is_array($order->meta)
+                        ? $order->meta
+                        : (json_decode($order->meta ?? '[]', true) ?: []);
 
-                $existingNotes = $orderMeta['consultation_notes'] ?? $orderMeta['consultant_notes'] ?? [];
+                    $existingNotes = $orderMeta['consultation_notes'] ?? $orderMeta['consultant_notes'] ?? [];
 
-                if (is_string($existingNotes)) {
-                    $decodedExistingNotes = json_decode($existingNotes, true);
-                    if (json_last_error() === JSON_ERROR_NONE && is_array($decodedExistingNotes)) {
-                        $existingNotes = $decodedExistingNotes;
-                    } elseif (trim($existingNotes) !== '') {
-                        $existingNotes = [
-                            [
-                                'note' => trim($existingNotes),
-                                'at'   => null,
-                            ],
-                        ];
-                    } else {
+                    if (is_string($existingNotes)) {
+                        $decodedExistingNotes = json_decode($existingNotes, true);
+                        if (json_last_error() === JSON_ERROR_NONE && is_array($decodedExistingNotes)) {
+                            $existingNotes = $decodedExistingNotes;
+                        } elseif (trim($existingNotes) !== '') {
+                            $existingNotes = [
+                                [
+                                    'note' => trim($existingNotes),
+                                    'at' => null,
+                                ],
+                            ];
+                        } else {
+                            $existingNotes = [];
+                        }
+                    }
+
+                    if (! is_array($existingNotes)) {
                         $existingNotes = [];
                     }
-                }
 
-                if (! is_array($existingNotes)) {
-                    $existingNotes = [];
-                }
-
-                $alreadyExists = false;
-                foreach ($existingNotes as $item) {
-                    $text = is_array($item)
-                        ? trim((string) ($item['note'] ?? $item['text'] ?? ''))
-                        : trim((string) $item);
-                    if ($text === $consultationNotes) {
-                        $alreadyExists = true;
-                        break;
-                    }
-                }
-
-                if (! $alreadyExists) {
-                    $existingNotes[] = [
-                        'note' => $consultationNotes,
-                        'at'   => now('UTC')->toIso8601String(),
-                    ];
-                }
-
-                $normalisedNotes = [];
-                $seenNotes = [];
-                foreach ($existingNotes as $item) {
-                    $noteText = is_array($item)
-                        ? trim((string) ($item['note'] ?? $item['text'] ?? ''))
-                        : trim((string) $item);
-                    $noteAt = is_array($item)
-                        ? ($item['at'] ?? $item['created_at'] ?? $item['ts'] ?? null)
-                        : null;
-
-                    if ($noteText === '') {
-                        continue;
+                    $alreadyExists = false;
+                    foreach ($existingNotes as $item) {
+                        $text = is_array($item)
+                            ? trim((string) ($item['note'] ?? $item['text'] ?? ''))
+                            : trim((string) $item);
+                        if ($text === $consultationNotes) {
+                            $alreadyExists = true;
+                            break;
+                        }
                     }
 
-                    $dedupeKey = strtolower(preg_replace('/\s+/', ' ', $noteText));
-                    if (isset($seenNotes[$dedupeKey])) {
-                        continue;
+                    if (! $alreadyExists) {
+                        $existingNotes[] = [
+                            'note' => $consultationNotes,
+                            'at' => now('UTC')->toIso8601String(),
+                        ];
                     }
 
-                    $seenNotes[$dedupeKey] = true;
-                    $normalisedNotes[] = [
-                        'note' => $noteText,
-                        'at'   => $noteAt ?: null,
-                    ];
+                    $normalisedNotes = [];
+                    $seenNotes = [];
+                    foreach ($existingNotes as $item) {
+                        $noteText = is_array($item)
+                            ? trim((string) ($item['note'] ?? $item['text'] ?? ''))
+                            : trim((string) $item);
+                        $noteAt = is_array($item)
+                            ? ($item['at'] ?? $item['created_at'] ?? $item['ts'] ?? null)
+                            : null;
+
+                        if ($noteText === '') {
+                            continue;
+                        }
+
+                        $dedupeKey = strtolower(preg_replace('/\s+/', ' ', $noteText));
+                        if (isset($seenNotes[$dedupeKey])) {
+                            continue;
+                        }
+
+                        $seenNotes[$dedupeKey] = true;
+                        $normalisedNotes[] = [
+                            'note' => $noteText,
+                            'at' => $noteAt ?: null,
+                        ];
+                    }
+
+                    $existingNotes = $normalisedNotes;
+
+                    $orderMeta['consultation_notes'] = $existingNotes;
+                    $orderMeta['consultant_notes'] = $existingNotes;
+                    $orderMeta['consultation_notes_latest'] = $consultationNotesLatest;
+                    $orderMeta['consultation-notes'] = $consultationNotesLatest;
+                    $orderMeta['pharmacist_advice_notes'] = $consultationNotesLatest;
+                    $orderMeta['pharmacist-advice-notes'] = $consultationNotesLatest;
+
+                    // Explicit mirrors for Completed Order details page
+                    data_set($orderMeta, 'consultation_notes', $existingNotes);
+                    data_set($orderMeta, 'consultant_notes', $existingNotes);
+
+                    \Log::info('consultation.save_all_tabs.order_notes_written', [
+                        'session_id' => $session->id,
+                        'order_id' => $order->id,
+                        'notes_count' => is_array($existingNotes) ? count($existingNotes) : 0,
+                        'latest_length' => strlen($consultationNotesLatest),
+                        'meta_has_consultation_notes' => array_key_exists('consultation_notes', $orderMeta),
+                        'meta_has_consultant_notes' => array_key_exists('consultant_notes', $orderMeta),
+                    ]);
+
+                    $order->meta = $orderMeta;
+                    $order->save();
                 }
-
-                $existingNotes = $normalisedNotes;
-
-                $orderMeta['consultation_notes'] = $existingNotes;
-                $orderMeta['consultant_notes'] = $existingNotes;
-                $orderMeta['consultation_notes_latest'] = $consultationNotesLatest;
-                $orderMeta['consultation-notes'] = $consultationNotesLatest;
-                $orderMeta['pharmacist_advice_notes'] = $consultationNotesLatest;
-                $orderMeta['pharmacist-advice-notes'] = $consultationNotesLatest;
-
-                // Explicit mirrors for Completed Order details page
-                data_set($orderMeta, 'consultation_notes', $existingNotes);
-                data_set($orderMeta, 'consultant_notes', $existingNotes);
-
-                \Log::info('consultation.save_all_tabs.order_notes_written', [
-                    'session_id'   => $session->id,
-                    'order_id'     => $order->id,
-                    'notes_count'  => is_array($existingNotes) ? count($existingNotes) : 0,
-                    'latest_length'=> strlen($consultationNotesLatest),
-                    'meta_has_consultation_notes' => array_key_exists('consultation_notes', $orderMeta),
-                    'meta_has_consultant_notes'   => array_key_exists('consultant_notes', $orderMeta),
+            } catch (\Throwable $e) {
+                \Log::warning('consultation.save_all_tabs.order_notes_failed', [
+                    'session' => $session->id,
+                    'error' => $e->getMessage(),
                 ]);
-
-                $order->meta = $orderMeta;
-                $order->save();
             }
-        } catch (\Throwable $e) {
-            \Log::warning('consultation.save_all_tabs.order_notes_failed', [
-                'session' => $session->id,
-                'error'   => $e->getMessage(),
-            ]);
+
+            try {
+                $userForNote = null;
+                if (isset($session->user_id) && $session->user_id) {
+                    $userForNote = User::query()->find($session->user_id);
+                }
+                if (! $userForNote && ($session->order ?? null) && isset($session->order->user_id) && $session->order->user_id) {
+                    $userForNote = User::query()->find($session->order->user_id);
+                }
+
+                $reference = (string) (($session->order->reference ?? null) ?: ($session->order_reference ?? $session->reference ?? ''));
+                $this->appendUserConsultationNote($userForNote, $consultationNotes, $reference !== '' ? $reference : null);
+            } catch (\Throwable $e) {
+                \Log::warning('consultation.save_all_tabs.user_notes_failed', [
+                    'session' => $session->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
-        try {
-            $userForNote = null;
-            if (isset($session->user_id) && $session->user_id) {
-                $userForNote = User::query()->find($session->user_id);
-            }
-            if (! $userForNote && ($session->order ?? null) && isset($session->order->user_id) && $session->order->user_id) {
-                $userForNote = User::query()->find($session->order->user_id);
-            }
-
-            $reference = (string) (($session->order->reference ?? null) ?: ($session->order_reference ?? $session->reference ?? ''));
-            $this->appendUserConsultationNote($userForNote, $consultationNotes, $reference !== '' ? $reference : null);
-        } catch (\Throwable $e) {
-            \Log::warning('consultation.save_all_tabs.user_notes_failed', [
-                'session' => $session->id,
-                'error'   => $e->getMessage(),
-            ]);
-        }
-    }
-
-    \Log::info('consultation.save_all_tabs.result', [
-        'session_id'                => $session->id,
-        'merged'                    => $merged,
-        'consultation_notes'        => $consultationNotes !== '',
-        'consultation_notes_length' => strlen($consultationNotes),
-        'latest_length'             => strlen($consultationNotesLatest),
-    ]);
-
-    if ($request->expectsJson() || $request->wantsJson()) {
-        return response()->json([
-            'ok' => true,
+        \Log::info('consultation.save_all_tabs.result', [
+            'session_id' => $session->id,
             'merged' => $merged,
-            'consultation_notes_saved' => $consultationNotes !== '',
+            'consultation_notes' => $consultationNotes !== '',
             'consultation_notes_length' => strlen($consultationNotes),
+            'latest_length' => strlen($consultationNotesLatest),
         ]);
-    }
 
-    if (empty($merged) && $consultationNotes === '') {
-        return back()->with('warning', 'No previously saved tab responses were found to merge.');
-    }
+        if ($request->expectsJson() || $request->wantsJson()) {
+            return response()->json([
+                'ok' => true,
+                'merged' => $merged,
+                'consultation_notes_saved' => $consultationNotes !== '',
+                'consultation_notes_length' => strlen($consultationNotes),
+            ]);
+        }
 
-    $parts = [];
-    if (! empty($merged)) {
-        $parts[] = 'Saved tabs merged: ' . implode(', ', $merged);
-    }
-    if ($consultationNotes !== '') {
-        $parts[] = 'Consultation notes saved.';
-    }
+        if (empty($merged) && $consultationNotes === '') {
+            return back()->with('warning', 'No previously saved tab responses were found to merge.');
+        }
 
-    return back()->with('success', implode(' ', $parts));
-}
+        $parts = [];
+        if (! empty($merged)) {
+            $parts[] = 'Saved tabs merged: '.implode(', ', $merged);
+        }
+        if ($consultationNotes !== '') {
+            $parts[] = 'Consultation notes saved.';
+        }
+
+        return back()->with('success', implode(' ', $parts));
+    }
 
     /**
      * Handle the final Confirm and complete action.
@@ -2026,11 +2087,10 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 ]);
 
                 return redirect()
-                    ->to(url('/admin/orders/completed-orders/' . $order->id . '/details'))
+                    ->to(url('/admin/orders/completed-orders/'.$order->id.'/details'))
                     ->with('status', 'This order has already been completed and sent to Royal Mail.');
             }
         }
-
 
         // First mark session and order as completed
         DB::transaction(function () use ($session) {
@@ -2105,15 +2165,15 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     } catch (\Throwable $ae) {
                         \Log::warning('consultation.complete.appointment_update_failed', [
                             'session' => $session->id,
-                            'order'   => $order->getKey(),
-                            'error'   => $ae->getMessage(),
+                            'order' => $order->getKey(),
+                            'error' => $ae->getMessage(),
                         ]);
                     }
                 }
             } catch (\Throwable $e) {
                 Log::warning('consultation.complete.order_update_failed', [
                     'session' => $session->id,
-                    'error'   => $e->getMessage(),
+                    'error' => $e->getMessage(),
                 ]);
             }
         });
@@ -2140,22 +2200,26 @@ foreach ($flatSchemaFields as $idx => $fld) {
         } catch (\Throwable $e) {
             \Log::warning('consultation.complete.pdf_generate_failed', [
                 'session' => $session->id,
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
         }
-
-
 
         $this->sendApprovedEmail($session);
 
         // After successfully completing, attempt to create a Royal Mail Click & Drop order
         try {
             $order = $session->order ?? null;
-            if ($order) {
+            if ($order && app(\App\Services\Shipping\ClickAndDrop::class)->shouldSkipOrder($order)) {
+                \Log::info('clickanddrop.complete.skipped_walk_in', [
+                    'session' => $session->id,
+                    'order' => $order->getKey(),
+                    'reference' => $order->reference,
+                ]);
+            } elseif ($order) {
                 \Log::info('clickanddrop.complete.start', [
-                    'session'   => $session->id,
-                    'order'     => $order->getKey(),
-                    'reference' => $order->reference ?? ('CONS-' . $session->id),
+                    'session' => $session->id,
+                    'order' => $order->getKey(),
+                    'reference' => $order->reference ?? ('CONS-'.$session->id),
                 ]);
 
                 // Hydrate missing patient identity and address fields from order->shipping_address and meta
@@ -2198,34 +2262,34 @@ foreach ($flatSchemaFields as $idx => $fld) {
                             // 3) As a last resort, try to build an address from top-level keys in meta
                             if ((! is_array($addr) || empty($addr)) && ! empty($orderMeta)) {
                                 $guess = [
-                                    'first_name'   => $orderMeta['first_name']   ?? $orderMeta['firstName']   ?? null,
-                                    'last_name'    => $orderMeta['last_name']    ?? $orderMeta['lastName']    ?? null,
-                                    'email'        => $orderMeta['email']        ?? null,
-                                    'phone'        => $orderMeta['phone']        ?? $orderMeta['mobile']      ?? null,
+                                    'first_name' => $orderMeta['first_name'] ?? $orderMeta['firstName'] ?? null,
+                                    'last_name' => $orderMeta['last_name'] ?? $orderMeta['lastName'] ?? null,
+                                    'email' => $orderMeta['email'] ?? null,
+                                    'phone' => $orderMeta['phone'] ?? $orderMeta['mobile'] ?? null,
                                     // Prefer shipping keys only
-                                    'address1'     => data_get($orderMeta, 'shipping_address1')
+                                    'address1' => data_get($orderMeta, 'shipping_address1')
                                                         ?? data_get($orderMeta, 'shipping.line1')
                                                         ?? data_get($orderMeta, 'shipping.address1')
                                                         ?? data_get($orderMeta, 'shippingAddress1')
                                                         ?? data_get($orderMeta, 'shipping.line_1')
                                                         ?? data_get($orderMeta, 'shipping_address.line1')
                                                         ?? null,
-                                    'address2'     => data_get($orderMeta, 'shipping_address2')
+                                    'address2' => data_get($orderMeta, 'shipping_address2')
                                                         ?? data_get($orderMeta, 'shipping.line2')
                                                         ?? data_get($orderMeta, 'shipping.address2')
                                                         ?? data_get($orderMeta, 'shippingAddress2')
                                                         ?? data_get($orderMeta, 'shipping.line_2')
                                                         ?? data_get($orderMeta, 'shipping_address.line2')
                                                         ?? null,
-                                    'city'         => data_get($orderMeta, 'shipping_city')
+                                    'city' => data_get($orderMeta, 'shipping_city')
                                                         ?? data_get($orderMeta, 'shipping.city')
                                                         ?? data_get($orderMeta, 'shipping.town')
                                                         ?? data_get($orderMeta, 'shippingAddress.city')
                                                         ?? null,
-                                    'county'       => data_get($orderMeta, 'shipping_county')
+                                    'county' => data_get($orderMeta, 'shipping_county')
                                                         ?? data_get($orderMeta, 'shipping.county')
                                                         ?? null,
-                                    'postcode'     => data_get($orderMeta, 'shipping_postcode')
+                                    'postcode' => data_get($orderMeta, 'shipping_postcode')
                                                         ?? data_get($orderMeta, 'shipping.postcode')
                                                         ?? data_get($orderMeta, 'shipping.postCode')
                                                         ?? data_get($orderMeta, 'shipping.postal_code')
@@ -2249,15 +2313,15 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     if ((! is_array($addr) || empty($addr)) && $order && $order->user) {
                         $u = $order->user;
                         $uShipping = [
-                            'address1'     => $u->shipping_address1 ?? null,
-                            'address2'     => $u->shipping_address2 ?? null,
-                            'city'         => $u->shipping_city ?? null,
-                            'postcode'     => $u->shipping_postcode ?? null,
+                            'address1' => $u->shipping_address1 ?? null,
+                            'address2' => $u->shipping_address2 ?? null,
+                            'city' => $u->shipping_city ?? null,
+                            'postcode' => $u->shipping_postcode ?? null,
                             'country_code' => $u->shipping_country ?? null,
-                            'first_name'   => $u->first_name ?? null,
-                            'last_name'    => $u->last_name ?? null,
-                            'email'        => $u->email ?? null,
-                            'phone'        => $u->phone ?? null,
+                            'first_name' => $u->first_name ?? null,
+                            'last_name' => $u->last_name ?? null,
+                            'email' => $u->email ?? null,
+                            'phone' => $u->phone ?? null,
                         ];
                         $nonEmpty = array_filter($uShipping, fn ($v) => $v !== null && $v !== '');
                         if (! empty($nonEmpty)) {
@@ -2269,15 +2333,15 @@ foreach ($flatSchemaFields as $idx => $fld) {
                         $changed = false;
 
                         $map = [
-                            'patient.first_name'   => ['first_name', 'firstName', 'name.first', 'first'],
-                            'patient.last_name'    => ['last_name', 'lastName', 'name.last', 'last'],
-                            'patient.email'        => ['email'],
-                            'patient.phone'        => ['phone', 'mobile'],
-                            'patient.address1'     => ['address1', 'line1', 'address.line1', 'addressLine1'],
-                            'patient.address2'     => ['address2', 'line2', 'address.line2', 'addressLine2'],
-                            'patient.city'         => ['city', 'town', 'address.city'],
-                            'patient.county'       => ['county', 'address.county'],
-                            'patient.postcode'     => ['postcode', 'postCode', 'address.postcode'],
+                            'patient.first_name' => ['first_name', 'firstName', 'name.first', 'first'],
+                            'patient.last_name' => ['last_name', 'lastName', 'name.last', 'last'],
+                            'patient.email' => ['email'],
+                            'patient.phone' => ['phone', 'mobile'],
+                            'patient.address1' => ['address1', 'line1', 'address.line1', 'addressLine1'],
+                            'patient.address2' => ['address2', 'line2', 'address.line2', 'addressLine2'],
+                            'patient.city' => ['city', 'town', 'address.city'],
+                            'patient.county' => ['county', 'address.county'],
+                            'patient.postcode' => ['postcode', 'postCode', 'address.postcode'],
                             'patient.country_code' => ['country_code', 'country', 'address.country_code', 'countryCode'],
                         ];
 
@@ -2303,20 +2367,20 @@ foreach ($flatSchemaFields as $idx => $fld) {
                             $session->save();
                             \Log::info('consultation.patient_meta.hydrated_from_order', [
                                 'session' => $session->id,
-                                'source'  => 'order.shipping_address',
+                                'source' => 'order.shipping_address',
                             ]);
                         }
                     }
                 } catch (\Throwable $e) {
                     \Log::warning('consultation.patient_meta.hydrate_failed', [
                         'session' => $session->id,
-                        'error'   => $e->getMessage(),
+                        'error' => $e->getMessage(),
                     ]);
                 }
 
                 // Try to also hydrate from a concrete Patient model (session or order)
                 // Try to also hydrate from a concrete Patient model (session or order or user)
-                
+
                 $patientModel = null;
                 try {
                     if (method_exists($session, 'patient') || property_exists($session, 'patient')) {
@@ -2338,22 +2402,22 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 } catch (\Throwable $e) {
                     \Log::warning('consultation.patient_model.resolve_failed', [
                         'session' => $session->id,
-                        'error'   => $e->getMessage(),
+                        'error' => $e->getMessage(),
                     ]);
                 }
 
                 if ($patientModel) {
                     $changed = false;
                     $map = [
-                        'patient.first_name'   => ['first_name'],
-                        'patient.last_name'    => ['last_name'],
-                        'patient.email'        => ['email'],
-                        'patient.phone'        => ['phone'],
-                        'patient.address1'     => ['address1'],
-                        'patient.address2'     => ['address2'],
-                        'patient.city'         => ['city'],
-                        'patient.county'       => ['county'],
-                        'patient.postcode'     => ['postcode'],
+                        'patient.first_name' => ['first_name'],
+                        'patient.last_name' => ['last_name'],
+                        'patient.email' => ['email'],
+                        'patient.phone' => ['phone'],
+                        'patient.address1' => ['address1'],
+                        'patient.address2' => ['address2'],
+                        'patient.city' => ['city'],
+                        'patient.county' => ['county'],
+                        'patient.postcode' => ['postcode'],
                         'patient.country_code' => ['country_code', 'country'],
                     ];
 
@@ -2377,7 +2441,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                         $session->save();
 
                         \Log::info('consultation.patient_meta.hydrated_from_patient', [
-                            'session'    => $session->id,
+                            'session' => $session->id,
                             'patient_id' => method_exists($patientModel, 'getKey') ? $patientModel->getKey() : null,
                         ]);
                     }
@@ -2396,6 +2460,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                             }
                         }
                     }
+
                     return null;
                 };
 
@@ -2429,14 +2494,14 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     ?? data_get($metaArr, 'patient.name.first')
                     ?? data_get($metaArr, 'first_name')
                     ?? $findMeta($metaArr, ['.first_name', '.firstName', '.name.first']);
-                $lastName  = data_get($metaArr, 'patient.last_name')
+                $lastName = data_get($metaArr, 'patient.last_name')
                     ?? data_get($metaArr, 'patient.name.last')
                     ?? data_get($metaArr, 'last_name')
                     ?? $findMeta($metaArr, ['.last_name', '.lastName', '.name.last']);
 
-                $email    = data_get($metaArr, 'patient.email')
+                $email = data_get($metaArr, 'patient.email')
                     ?? $findMeta($metaArr, ['.email']);
-                $phone    = data_get($metaArr, 'patient.phone')
+                $phone = data_get($metaArr, 'patient.phone')
                     ?? $findMeta($metaArr, ['.phone', '.mobile']);
                 $address1 = $shipLine1
                     ?? data_get($metaArr, 'patient.address1')
@@ -2446,49 +2511,49 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     ?? data_get($metaArr, 'patient.address2')
                     ?? data_get($metaArr, 'patient.address.line2')
                     ?? $findMeta($metaArr, ['.address2', '.line2', '.addressLine2']);
-                $city     = $shipCity
+                $city = $shipCity
                     ?? data_get($metaArr, 'patient.city')
                     ?? data_get($metaArr, 'patient.address.city')
                     ?? $findMeta($metaArr, ['.city', '.town']);
-                $county   = data_get($metaArr, 'patient.county')
+                $county = data_get($metaArr, 'patient.county')
                     ?? data_get($metaArr, 'patient.address.county')
                     ?? $findMeta($metaArr, ['.county']);
                 $postcode = $shipPostcode
                     ?? data_get($metaArr, 'patient.postcode')
                     ?? data_get($metaArr, 'patient.address.postcode')
                     ?? $findMeta($metaArr, ['.postcode', '.postCode']);
-                $country  = $shipCountry
+                $country = $shipCountry
                     ?? data_get($metaArr, 'patient.country_code')
                     ?? data_get($metaArr, 'patient.address.country_code')
                     ?? $findMeta($metaArr, ['.country_code', '.countryCode', '.country'])
                     ?? 'GB';
 
                 $patient = (object) [
-                    'first_name'           => $firstName,
-                    'last_name'            => $lastName,
-                    'email'                => $email,
-                    'phone'                => $phone,
+                    'first_name' => $firstName,
+                    'last_name' => $lastName,
+                    'email' => $email,
+                    'phone' => $phone,
                     // Home-address style fields (now prefilled with shipping when present)
-                    'address1'             => $address1,
-                    'address2'             => $address2,
-                    'city'                 => $city,
-                    'county'               => $county,
-                    'postcode'             => $postcode,
-                    'country_code'         => $country,
+                    'address1' => $address1,
+                    'address2' => $address2,
+                    'city' => $city,
+                    'county' => $county,
+                    'postcode' => $postcode,
+                    'country_code' => $country,
                     // Explicit SHIPPING fields for Click & Drop
-                    'shipping_address1'    => $shipLine1,
-                    'shipping_address2'    => $shipLine2,
-                    'shipping_city'        => $shipCity,
-                    'shipping_postcode'    => $shipPostcode,
-                    'shipping_country_code'=> $shipCountry,
+                    'shipping_address1' => $shipLine1,
+                    'shipping_address2' => $shipLine2,
+                    'shipping_city' => $shipCity,
+                    'shipping_postcode' => $shipPostcode,
+                    'shipping_country_code' => $shipCountry,
                 ];
 
                 \Log::info('clickanddrop.patient_built', [
-                    'session'  => $session->id,
-                    'first'    => $patient->first_name ?? null,
-                    'last'     => $patient->last_name ?? null,
+                    'session' => $session->id,
+                    'first' => $patient->first_name ?? null,
+                    'last' => $patient->last_name ?? null,
                     'address1' => $patient->address1 ?? null,
-                    'city'     => $patient->city ?? null,
+                    'city' => $patient->city ?? null,
                     'postcode' => $patient->postcode ?? null,
                 ]);
 
@@ -2527,10 +2592,10 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 }
 
                 \Log::info('clickanddrop.complete.ok', [
-                    'session'   => $session->id,
-                    'order'     => $order->getKey(),
-                    'tracking'  => $tracking,
-                    'labels'    => $out['label_paths'] ?? [],
+                    'session' => $session->id,
+                    'order' => $order->getKey(),
+                    'tracking' => $tracking,
+                    'labels' => $out['label_paths'] ?? [],
                 ]);
 
                 // Persist shipping info back onto the session for viewers and PDFs
@@ -2571,18 +2636,19 @@ foreach ($flatSchemaFields as $idx => $fld) {
         } catch (\Throwable $e) {
             \Log::error('clickanddrop.complete.failed', [
                 'session' => $session->id,
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
         }
 
         // Prefer redirecting to the order if present, and trigger the PDF download on the destination page
         $order = $session->order ?? null;
         if ($order) {
-            $url = url('/admin/orders/completed-orders/' . $order->getKey() . '/details?download=pre');
+            $url = url('/admin/orders/completed-orders/'.$order->getKey().'/details?download=pre');
+
             return redirect()->to($url)->with('success', 'Consultation completed');
         }
 
-        return redirect()->to(url('/admin/consultations/' . $session->id))->with('success', 'Consultation completed');
+        return redirect()->to(url('/admin/consultations/'.$session->id))->with('success', 'Consultation completed');
     }
 
     /**
@@ -2632,13 +2698,13 @@ foreach ($flatSchemaFields as $idx => $fld) {
         $isInjectableWeight = $isWeight && ! $isWegovyPill;
 
         \Log::info('consultation.email.treatment_detected', [
-            'session_id'          => $session->id,
-            'order_id'            => $order->getKey(),
-            'service_slug'        => $svc,
-            'treatment_slug'      => $treatmentSlug,
-            'is_weight'           => $isWeight,
-            'is_wegovy_pill'      => $isWegovyPill,
-            'is_injectable_weight'=> $isInjectableWeight,
+            'session_id' => $session->id,
+            'order_id' => $order->getKey(),
+            'service_slug' => $svc,
+            'treatment_slug' => $treatmentSlug,
+            'is_weight' => $isWeight,
+            'is_wegovy_pill' => $isWegovyPill,
+            'is_injectable_weight' => $isInjectableWeight,
         ]);
 
         $email = data_get($meta, 'email')
@@ -2682,14 +2748,11 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 $guideDir = storage_path('app/public/guides/weight-management');
 
                 $files = [
-                    $guideDir . '/GLP-1 WEIGHT MANAGEMENT_ CLINICAL LIFESTYLE, NUTRITION & MOVEMENT GUIDE.docx.pdf'
-                        => 'GLP-1 Lifestyle Nutrition Movement.pdf',
+                    $guideDir.'/GLP-1 WEIGHT MANAGEMENT_ CLINICAL LIFESTYLE, NUTRITION & MOVEMENT GUIDE.docx.pdf' => 'GLP-1 Lifestyle Nutrition Movement.pdf',
 
-                    $guideDir . '/YOUR WEIGHT LOSS JOURNEY WITH GLP-1 MEDICATIONS – PATIENT GUIDE ON WHAT TO EXPECT.docx.pdf'
-                        => 'GLP-1 What To Expect.pdf',
+                    $guideDir.'/YOUR WEIGHT LOSS JOURNEY WITH GLP-1 MEDICATIONS – PATIENT GUIDE ON WHAT TO EXPECT.docx.pdf' => 'GLP-1 What To Expect.pdf',
 
-                    $guideDir . '/GLP-1 WEIGHT LOSS PROGRAMME_ PATIENT STARTER PACK & INFORMATION GUIDE ON HOW THE MEDICATION WORKS.docx.pdf'
-                        => 'GLP-1 Starter Pack.pdf',
+                    $guideDir.'/GLP-1 WEIGHT LOSS PROGRAMME_ PATIENT STARTER PACK & INFORMATION GUIDE ON HOW THE MEDICATION WORKS.docx.pdf' => 'GLP-1 Starter Pack.pdf',
                 ];
 
                 foreach ($files as $abs => $downloadName) {
@@ -2704,7 +2767,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
         } catch (\Throwable $e) {
             \Log::warning('consultation.email.glp1_guides_attach_failed', [
                 'session' => $session->id,
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
         }
 
@@ -2712,9 +2775,9 @@ foreach ($flatSchemaFields as $idx => $fld) {
         $sessionId = $session->id ?? null;
 
         if ($sessionId && $ref) {
-            $baseDir = storage_path('app/public/consultations/' . $sessionId);
+            $baseDir = storage_path('app/public/consultations/'.$sessionId);
 
-            $rosPath = $baseDir . '/' . $ref . '_supply.pdf';
+            $rosPath = $baseDir.'/'.$ref.'_supply.pdf';
 
             if (is_file($rosPath)) {
                 $attachments[] = [
@@ -2723,7 +2786,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 ];
             }
 
-            $invPath = $baseDir . '/' . $ref . '_invoice.pdf';
+            $invPath = $baseDir.'/'.$ref.'_invoice.pdf';
 
             if (is_file($invPath)) {
                 $attachments[] = [
@@ -2736,9 +2799,9 @@ foreach ($flatSchemaFields as $idx => $fld) {
             // including the Wegovy pill.
             if ($isWeight) {
                 $notPaths = [
-                    $baseDir . '/' . $ref . '_notification-of-treatment.pdf',
-                    $baseDir . '/' . $ref . '_notification-of-treatment-issued.pdf',
-                    $baseDir . '/' . $ref . '_notification.pdf',
+                    $baseDir.'/'.$ref.'_notification-of-treatment.pdf',
+                    $baseDir.'/'.$ref.'_notification-of-treatment-issued.pdf',
+                    $baseDir.'/'.$ref.'_notification.pdf',
                 ];
 
                 foreach ($notPaths as $np) {
@@ -2780,13 +2843,13 @@ foreach ($flatSchemaFields as $idx => $fld) {
                     '/'
                 );
 
-                $candidate = public_path('storage/' . $relative);
+                $candidate = public_path('storage/'.$relative);
 
                 if (is_file($candidate)) {
                     return $candidate;
                 }
 
-                $candidate = storage_path('app/public/' . $relative);
+                $candidate = storage_path('app/public/'.$relative);
 
                 if (is_file($candidate)) {
                     return $candidate;
@@ -2800,7 +2863,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
             }
 
             $candidate = storage_path(
-                'app/public/' . ltrim($path, '/')
+                'app/public/'.ltrim($path, '/')
             );
 
             if (is_file($candidate)) {
@@ -2808,7 +2871,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
             }
 
             $candidate = storage_path(
-                'app/' . ltrim($path, '/')
+                'app/'.ltrim($path, '/')
             );
 
             if (is_file($candidate)) {
@@ -2886,11 +2949,11 @@ foreach ($flatSchemaFields as $idx => $fld) {
         */
 
         $subject = $isWegovyPill
-            ? 'Your Wegovy pill order has been completed – ' . $ref
-            : 'Your Pharmacy Express order has been completed – ' . $ref;
+            ? 'Your Wegovy pill order has been completed – '.$ref
+            : 'Your Pharmacy Express order has been completed – '.$ref;
 
         $safeName = e($name ?: 'there');
-        $safeRef  = e((string) $ref);
+        $safeRef = e((string) $ref);
 
         if ($isWegovyPill) {
             $documentsIntro = 'Your Wegovy pill order has been completed by our pharmacy team. We will email you again once your Royal Mail tracking is active. Please read the tablet instructions below carefully before starting your treatment.';
@@ -2924,7 +2987,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                                 </p>
 
                                 <a
-                                    href="' . $safeWegovyPillGuideUrl . '"
+                                    href="'.$safeWegovyPillGuideUrl.'"
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     style="display:inline-block;background:#123f40;color:#ffffff;padding:17px 34px;text-decoration:none;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:18px;line-height:24px;font-weight:700;"
@@ -3114,7 +3177,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
             <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
             <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
-            <title>' . e($subject) . '</title>
+            <title>'.e($subject).'</title>
         </head>
 
         <body style="margin:0;padding:0;background:#f6f6f4;">
@@ -3141,23 +3204,23 @@ foreach ($flatSchemaFields as $idx => $fld) {
                             <tr>
                                 <td style="padding:34px 34px 10px 34px;">
                                     <p style="margin:0 0 18px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">
-                                        Hi ' . $safeName . ',
+                                        Hi '.$safeName.',
                                     </p>
 
                                     <p style="margin:0 0 14px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">
                                         Your Pharmacy Express order
-                                        <strong style="color:#123f40;">' . $safeRef . '</strong>
+                                        <strong style="color:#123f40;">'.$safeRef.'</strong>
                                         has been completed by our pharmacy team.
                                     </p>
 
                                     <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:24px;color:#334155;">
-                                        ' . e($documentsIntro) . '
+                                        '.e($documentsIntro).'
                                     </p>
                                 </td>
                             </tr>
 
-                            ' . $weightSafetyHtml . '
-                            ' . $wegovyPillButtonHtml . '
+                            '.$weightSafetyHtml.'
+                            '.$wegovyPillButtonHtml.'
 
                             <tr>
                                 <td style="padding:0 34px 26px 34px;">
@@ -3169,7 +3232,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                                                 </p>
 
                                                 <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:25px;line-height:31px;color:#ffffff;font-weight:800;letter-spacing:.02em;">
-                                                    ' . $safeRef . '
+                                                    '.$safeRef.'
                                                 </p>
 
                                                 <p style="margin:12px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:21px;color:rgba(255,255,255,.72);">
@@ -3224,9 +3287,9 @@ foreach ($flatSchemaFields as $idx => $fld) {
                         ->subject($subject);
 
                     \Log::info('consultation.email.attachments_start', [
-                        'email'       => $email,
-                        'order_id'    => $order->getKey(),
-                        'count'       => count($attachments),
+                        'email' => $email,
+                        'order_id' => $order->getKey(),
+                        'count' => count($attachments),
                         'attachments' => $attachments,
                     ]);
 
@@ -3235,15 +3298,15 @@ foreach ($flatSchemaFields as $idx => $fld) {
                             && is_file($att['path']);
 
                         \Log::info('consultation.email.attach_try', [
-                            'email'    => $email,
+                            'email' => $email,
                             'order_id' => $order->getKey(),
-                            'path'     => $att['path'] ?? null,
-                            'exists'   => $exists,
+                            'path' => $att['path'] ?? null,
+                            'exists' => $exists,
                         ]);
 
                         if ($exists) {
                             $m->attach($att['path'], [
-                                'as'   => $att['name']
+                                'as' => $att['name']
                                     ?? basename($att['path']),
                                 'mime' => 'application/pdf',
                             ]);
@@ -3254,7 +3317,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
             Notification::make()
                 ->success()
-                ->title('Processed order email sent to ' . $email)
+                ->title('Processed order email sent to '.$email)
                 ->send();
         } catch (\Throwable $e) {
             Notification::make()
@@ -3266,7 +3329,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
             report($e);
         }
     }
-    
+
     /**
      * REORDER step viewer
      * Opens the Reorder form for the given consultation session.
@@ -3277,7 +3340,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
 
         // Choose the right ClinicForm from the session templates snapshot if available
         $form = null;
-        $tpl  = data_get($session->templates, 'reorder');
+        $tpl = data_get($session->templates, 'reorder');
 
         if (is_array($tpl) && isset($tpl['id'])) {
             $form = \App\Models\ClinicForm::find($tpl['id']);
@@ -3292,7 +3355,7 @@ foreach ($flatSchemaFields as $idx => $fld) {
                 ->when($session->service, function ($q) use ($session) {
                     $q->where(function ($qq) use ($session) {
                         $qq->whereNull('service_slug')
-                           ->orWhere('service_slug', \Illuminate\Support\Str::slug((string) $session->service));
+                            ->orWhere('service_slug', \Illuminate\Support\Str::slug((string) $session->service));
                     });
                 })
                 ->orderByDesc('version')
@@ -3301,10 +3364,11 @@ foreach ($flatSchemaFields as $idx => $fld) {
         }
 
         $oldData = $this->gatherAnswersFor($session, 'reorder', 'reorder', $form?->id);
+
         return view('consultations.reorder', [
             'session' => $session,
-            'form'    => $form,
-            'step'    => 'reorder',
+            'form' => $form,
+            'step' => 'reorder',
             'oldData' => $oldData,
         ]);
     }
@@ -3347,12 +3411,12 @@ foreach ($flatSchemaFields as $idx => $fld) {
         }
 
         return match ($t) {
-            'supply', 'record_of_supply', 'record-of-supply'       => 'record-of-supply',
-            'advice', 'pharmacist_advice', 'pharmacist-advice'     => 'pharmacist-advice',
-            'pharmacist_declaration', 'declaration'                => 'pharmacist-declaration',
-            'risk', 'risk_assessment', 'risk-assessment'           => 'risk-assessment',
-            'reorder', 're-order'                                  => 'reorder',
-            default                                                => Str::slug($t ?: 'form', '-'),
+            'supply', 'record_of_supply', 'record-of-supply' => 'record-of-supply',
+            'advice', 'pharmacist_advice', 'pharmacist-advice' => 'pharmacist-advice',
+            'pharmacist_declaration', 'declaration' => 'pharmacist-declaration',
+            'risk', 'risk_assessment', 'risk-assessment' => 'risk-assessment',
+            'reorder', 're-order' => 'reorder',
+            default => Str::slug($t ?: 'form', '-'),
         };
     }
 
@@ -3363,10 +3427,10 @@ foreach ($flatSchemaFields as $idx => $fld) {
     {
         return match ($slug) {
             'pharmacist-declaration' => 'pharmacist_declaration',
-            'pharmacist-advice'      => 'pharmacist_advice',
-            'record-of-supply'       => 'record_of_supply',
-            'reorder'                => 'reorder',
-            default                  => Str::slug($slug, '_'),
+            'pharmacist-advice' => 'pharmacist_advice',
+            'record-of-supply' => 'record_of_supply',
+            'reorder' => 'reorder',
+            default => Str::slug($slug, '_'),
         };
     }
 
@@ -3379,50 +3443,50 @@ foreach ($flatSchemaFields as $idx => $fld) {
     {
         Log::info('forms.view enter', [
             'session_param_type' => is_object($session) ? get_class($session) : gettype($session),
-            'session_id'         => $session instanceof ConsultationSession ? $session->id : $session,
-            'form_param_type'    => is_object($form) ? get_class($form) : gettype($form),
-            'form_id'            => $form instanceof ConsultationFormResponse ? $form->id : null,
-            'form_session_id'    => $form instanceof ConsultationFormResponse ? $form->consultation_session_id : null,
-            'inline'             => $request->boolean('inline'),
-            'has_inline'         => $request->has('inline'),
+            'session_id' => $session instanceof ConsultationSession ? $session->id : $session,
+            'form_param_type' => is_object($form) ? get_class($form) : gettype($form),
+            'form_id' => $form instanceof ConsultationFormResponse ? $form->id : null,
+            'form_session_id' => $form instanceof ConsultationFormResponse ? $form->consultation_session_id : null,
+            'inline' => $request->boolean('inline'),
+            'has_inline' => $request->has('inline'),
         ]);
         if ((int) $form->consultation_session_id !== (int) $session->id) {
             abort(404);
         }
         Log::info('forms.view guard passed', [
             'session_id' => $session->id,
-            'form_id'    => $form->id,
+            'form_id' => $form->id,
         ]);
 
         // Inline modal content (treat presence of the param as true to be safe)
         if ($request->has('inline')) {
-$cf      = ClinicForm::find($form->clinic_form_id);
-$title   = ($cf?->name ?: 'Form') . ' – View';
-$version = $form->form_version ? ('v' . (int) $form->form_version) : '—';
-$updated = optional($form->updated_at)->format('d-m-Y H:i');
-$dataArr = (array) ($form->data ?? []);
+            $cf = ClinicForm::find($form->clinic_form_id);
+            $title = ($cf?->name ?: 'Form').' – View';
+            $version = $form->form_version ? ('v'.(int) $form->form_version) : '—';
+            $updated = optional($form->updated_at)->format('d-m-Y H:i');
+            $dataArr = (array) ($form->data ?? []);
 
-$rowsHtml = '';
-foreach ($dataArr as $k => $v) {
-    $keyEsc = e((string) $k);
-    if (is_string($v) && str_starts_with($v, 'data:image/')) {
-        $valHtml = '<img src="'.e($v).'" alt="image" style="max-height:140px;max-width:100%;border-radius:6px;display:block">';
-    } else {
-        $str = is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
-        $isLong = strlen($str) > 160;
-        $display = $isLong ? e(mb_substr($str, 0, 160).'…') : e($str);
-        $full    = e($str);
-        $valHtml = $isLong ? '<span title="'.$full.'">'.$display.'</span>' : '<span>'.$display.'</span>';
-    }
-    $rowsHtml .= <<<HTML
+            $rowsHtml = '';
+            foreach ($dataArr as $k => $v) {
+                $keyEsc = e((string) $k);
+                if (is_string($v) && str_starts_with($v, 'data:image/')) {
+                    $valHtml = '<img src="'.e($v).'" alt="image" style="max-height:140px;max-width:100%;border-radius:6px;display:block">';
+                } else {
+                    $str = is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                    $isLong = strlen($str) > 160;
+                    $display = $isLong ? e(mb_substr($str, 0, 160).'…') : e($str);
+                    $full = e($str);
+                    $valHtml = $isLong ? '<span title="'.$full.'">'.$display.'</span>' : '<span>'.$display.'</span>';
+                }
+                $rowsHtml .= <<<HTML
         <tr>
           <td class="px-3 py-2 text-xs text-gray-300 align-top whitespace-nowrap">{$keyEsc}</td>
           <td class="px-3 py-2 text-sm text-gray-100">{$valHtml}</td>
         </tr>
     HTML;
-}
+            }
 
-$style = <<<HTML
+            $style = <<<'HTML'
 <style>
   /* Global admin modal background & reset */
   html, body,
@@ -3447,7 +3511,7 @@ $style = <<<HTML
 </style>
 HTML;
 
-$html = new HtmlString(<<<HTML
+            $html = new HtmlString(<<<HTML
     {$style}
     <div style="background:#0b0b0b;overflow:hidden;border-radius:8px;min-width:560px">
       <div class="p-4 text-gray-100">
@@ -3477,33 +3541,33 @@ HTML);
         }
 
         // If not explicitly inline, still render the same read-only HTML directly
-$cf      = ClinicForm::find($form->clinic_form_id);
-$title   = ($cf?->name ?: 'Form') . ' – View';
-$version = $form->form_version ? ('v' . (int) $form->form_version) : '—';
-$updated = optional($form->updated_at)->format('d-m-Y H:i');
-$dataArr = (array) ($form->data ?? []);
+        $cf = ClinicForm::find($form->clinic_form_id);
+        $title = ($cf?->name ?: 'Form').' – View';
+        $version = $form->form_version ? ('v'.(int) $form->form_version) : '—';
+        $updated = optional($form->updated_at)->format('d-m-Y H:i');
+        $dataArr = (array) ($form->data ?? []);
 
-$rowsHtml = '';
-foreach ($dataArr as $k => $v) {
-    $keyEsc = e((string) $k);
-    if (is_string($v) && str_starts_with($v, 'data:image/')) {
-        $valHtml = '<img src="'.e($v).'" alt="image" style="max-height:140px;max-width:100%;border-radius:6px;display:block">';
-    } else {
-        $str = is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
-        $isLong = strlen($str) > 160;
-        $display = $isLong ? e(mb_substr($str, 0, 160).'…') : e($str);
-        $full    = e($str);
-        $valHtml = $isLong ? '<span title="'.$full.'">'.$display.'</span>' : '<span>'.$display.'</span>';
-    }
-    $rowsHtml .= <<<HTML
+        $rowsHtml = '';
+        foreach ($dataArr as $k => $v) {
+            $keyEsc = e((string) $k);
+            if (is_string($v) && str_starts_with($v, 'data:image/')) {
+                $valHtml = '<img src="'.e($v).'" alt="image" style="max-height:140px;max-width:100%;border-radius:6px;display:block">';
+            } else {
+                $str = is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                $isLong = strlen($str) > 160;
+                $display = $isLong ? e(mb_substr($str, 0, 160).'…') : e($str);
+                $full = e($str);
+                $valHtml = $isLong ? '<span title="'.$full.'">'.$display.'</span>' : '<span>'.$display.'</span>';
+            }
+            $rowsHtml .= <<<HTML
         <tr>
           <td class="px-3 py-2 text-xs text-gray-300 align-top whitespace-nowrap">{$keyEsc}</td>
           <td class="px-3 py-2 text-sm text-gray-100">{$valHtml}</td>
         </tr>
     HTML;
-}
+        }
 
-$style = <<<HTML
+        $style = <<<'HTML'
 <style>
   /* Global admin modal background & reset */
   html, body,
@@ -3528,7 +3592,7 @@ $style = <<<HTML
 </style>
 HTML;
 
-$html = new HtmlString(<<<HTML
+        $html = new HtmlString(<<<HTML
     {$style}
     <div style="background:#0b0b0b;overflow:hidden;border-radius:8px;min-width:560px">
       <div class="p-4 text-gray-100">
@@ -3569,7 +3633,7 @@ HTML);
 
         if ($request->boolean('inline')) {
             $slug = $this->slugForForm($form);
-            $tab  = $form->step_slug ?: $this->defaultTabKeyForSlug($slug);
+            $tab = $form->step_slug ?: $this->defaultTabKeyForSlug($slug);
             $runnerUrl = url("/admin/consultations/{$session->id}/{$slug}?tab={$tab}&edit=1");
             $html = new HtmlString(<<<HTML
 <style>
@@ -3647,6 +3711,7 @@ HTML);
   })();
 </script>
 HTML);
+
             return response($html);
         }
 
@@ -3667,15 +3732,16 @@ HTML);
             $formId = (int) $routeParam;
         }
 
-        if (!$formId) {
+        if (! $formId) {
             $formId = ConsultationFormResponse::where('consultation_session_id', $session->id)
                 ->orderByDesc('id')
                 ->value('id');
         }
 
-        abort_if(!$formId, 404);
+        abort_if(! $formId, 404);
 
         $selfInline = url("/admin/consultations/{$session->id}/forms/{$formId}/edit?inline=1");
+
         return redirect()->to($selfInline);
     }
 
@@ -3695,16 +3761,16 @@ HTML);
             ->orderByDesc('updated_at')
             ->limit(100)
             ->get(['id', 'is_complete', 'created_at', 'updated_at', 'updated_by', 'form_version'])
-            ->map(function ($r) use ($session, $form) {
-                $viewUrl   = url("/admin/consultations/{$session->id}/forms/{$r->id}/view?inline=1");
-                $editUrl   = url("/admin/consultations/{$session->id}/forms/{$r->id}/edit?inline=1");
+            ->map(function ($r) use ($session) {
+                $viewUrl = url("/admin/consultations/{$session->id}/forms/{$r->id}/view?inline=1");
+                $editUrl = url("/admin/consultations/{$session->id}/forms/{$r->id}/edit?inline=1");
                 $statusBad = $r->is_complete ? '<span class="px-2 py-1 text-xs rounded bg-green-500/15 text-green-400 border border-green-500/30">Complete</span>'
                                              : '<span class="px-2 py-1 text-xs rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">Draft</span>';
 
                 $created = optional($r->created_at)->format('d-m-Y H:i');
                 $updated = optional($r->updated_at)->format('d-m-Y H:i');
-                $userId  = $r->updated_by ? ('#' . (int) $r->updated_by) : '—';
-                $ver     = $r->form_version ? ('v' . (int) $r->form_version) : '—';
+                $userId = $r->updated_by ? ('#'.(int) $r->updated_by) : '—';
+                $ver = $r->form_version ? ('v'.(int) $r->form_version) : '—';
 
                 return <<<HTML
                   <tr class="border-b border-gray-700/60">

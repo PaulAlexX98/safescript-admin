@@ -58,7 +58,6 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->widgets([
                 \App\Filament\Widgets\ClockWidget::class,
-                \App\Filament\Widgets\WeightManagementAlertsWidget::class,
                 \App\Filament\Widgets\AppointmentsCalendarWidget::class,
                 \App\Filament\Widgets\KpiStats::class,
                 \App\Filament\Widgets\BookingStatusTable::class,

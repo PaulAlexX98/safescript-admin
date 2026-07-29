@@ -2935,29 +2935,12 @@ class ApprovedOrderResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        $count = Cache::remember(
-            'filament:navigation:approved-orders-count',
-            now()->addMinutes(2),
-            function (): int {
-                try {
-                    return static::getEloquentQuery()->count();
-                } catch (Throwable $e) {
-                    return 0;
-                }
-            }
-        );
-
-        return $count > 0 ? (string) $count : null;
+        return null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        $count = (int) Cache::get(
-            'filament:navigation:approved-orders-count',
-            0
-        );
-
-        return $count > 0 ? 'success' : 'gray';
+        return null;
     }
 
     protected static function sixMonthReviewHistoryForPending($record): string

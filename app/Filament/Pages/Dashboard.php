@@ -8,7 +8,6 @@ use App\Filament\Widgets\KpiStats;
 use App\Filament\Widgets\RevenueBookingsChart;
 use App\Filament\Widgets\ServicesPerformance;
 use App\Filament\Widgets\DailyRevenueTable;
-use App\Filament\Widgets\WeightManagementAlertsWidget;
 use App\Filament\Widgets\AppointmentsCalendarWidget;
 use App\Filament\Widgets\ClockWidget;
 
@@ -52,7 +51,6 @@ class Dashboard extends Base
     {
         return [
             
-            WeightManagementAlertsWidget::class,
             AppointmentsCalendarWidget::class,
             KpiStats::class,         
             

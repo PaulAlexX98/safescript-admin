@@ -36,6 +36,7 @@ use Illuminate\Database\Eloquent\Builder;
 use App\Services\Consultations\StartConsultation;
 use App\Models\ConsultationSession;
 use Filament\Forms\Components\Placeholder;
+use App\Support\DatabaseSchema as DatabaseSchema;
 
 class NhsPendingResource extends Resource
 {
@@ -61,7 +62,7 @@ class NhsPendingResource extends Resource
 
         // 1) Only show pending rows for the NHS Pending list
         try {
-            if (\Schema::hasColumn((new \App\Models\NhsPending())->getTable(), 'status')) {
+            if (DatabaseSchema::hasColumn((new \App\Models\NhsPending())->getTable(), 'status')) {
                 $query->where('status', 'pending');
             } else {
                 $query->where(function (Builder $q) {
@@ -797,7 +798,7 @@ class NhsPendingResource extends Resource
                                                     ->orWhereRaw("JSON_EXTRACT(meta, '$.user_id') = ?", [$uid])
                                                     ->orWhereRaw("JSON_EXTRACT(meta, '$.user.id') = ?", [$uid]);
                                                 }
-                                                if ($pid && \Schema::hasColumn('orders', 'patient_id')) {
+                                                if ($pid && DatabaseSchema::hasColumn('orders', 'patient_id')) {
                                                     $w->orWhere('patient_id', $pid)
                                                     ->orWhereRaw("JSON_EXTRACT(meta, '$.patient_id') = ?", [$pid])
                                                     ->orWhereRaw("JSON_EXTRACT(meta, '$.patient.id') = ?", [$pid]);
@@ -1264,7 +1265,7 @@ class NhsPendingResource extends Resource
 
                                 $order->meta = $meta;
 
-                                if (\Schema::hasColumn('orders', 'status')) {
+                                if (DatabaseSchema::hasColumn('orders', 'status')) {
                                     $order->status = 'completed';
                                 }
 
@@ -1272,7 +1273,7 @@ class NhsPendingResource extends Resource
 
                                 $record->meta = $meta;
 
-                                if (\Schema::hasColumn($record->getTable(), 'status')) {
+                                if (DatabaseSchema::hasColumn($record->getTable(), 'status')) {
                                     $record->status = 'completed';
                                 }
 
@@ -1305,7 +1306,7 @@ class NhsPendingResource extends Resource
 
                             $record->meta = $meta;
 
-                            if (\Schema::hasColumn($record->getTable(), 'status')) {
+                            if (DatabaseSchema::hasColumn($record->getTable(), 'status')) {
                                 $record->status = 'rejected';
                             }
 
@@ -1500,29 +1501,12 @@ class NhsPendingResource extends Resource
 
    public static function getNavigationBadge(): ?string
     {
-        $count = Cache::remember(
-            'filament:navigation:nhs-pending-count',
-            now()->addMinutes(2),
-            function (): int {
-                try {
-                    return static::getEloquentQuery()->count();
-                } catch (Throwable $e) {
-                    return 0;
-                }
-            }
-        );
-
-        return $count > 0 ? (string) $count : null;
+        return null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        $count = (int) Cache::get(
-            'filament:navigation:nhs-pending-count',
-            0
-        );
-
-        return $count > 0 ? 'warning' : 'gray';
+        return null;
     }
 
     public function startConsultationAction($record)

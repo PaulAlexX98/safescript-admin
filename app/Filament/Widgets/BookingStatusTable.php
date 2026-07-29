@@ -1,18 +1,20 @@
 <?php
+
 // app/Filament/Widgets/BookingStatusTable.php
+
 namespace App\Filament\Widgets;
 
-use Filament\Tables;
-use Filament\Widgets\TableWidget as Base;
-use Illuminate\Support\Facades\DB;
 use App\Support\DatabaseSchema as Schema;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Relations\Relation;
-use Illuminate\Support\Str;
-use Illuminate\Support\Collection;
+use Carbon\Carbon;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
-use Carbon\Carbon;
+use Filament\Tables;
+use Filament\Widgets\TableWidget as Base;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class BookingStatusTable extends Base
 {
@@ -33,9 +35,9 @@ class BookingStatusTable extends Base
 
         return match ($p) {
             // Rolling windows (as labelled in the UI)
-            'weekly'  => [$now->copy()->subWeeks(12)->startOfDay(), $now->copy()->endOfDay()],
-            'yearly'  => [$now->copy()->subYears(5)->startOfDay(), $now->copy()->endOfDay()],
-            default   => [$now->copy()->subMonths(12)->startOfDay(), $now->copy()->endOfDay()],
+            'weekly' => [$now->copy()->subWeeks(12)->startOfDay(), $now->copy()->endOfDay()],
+            'yearly' => [$now->copy()->subYears(5)->startOfDay(), $now->copy()->endOfDay()],
+            default => [$now->copy()->subMonths(12)->startOfDay(), $now->copy()->endOfDay()],
         };
     }
 
@@ -43,90 +45,32 @@ class BookingStatusTable extends Base
     {
         if ($statusKey === 'completed') {
             // Use an actual completion timestamp, not payment time
-            if (Schema::hasColumn('orders', 'completed_at')) return 'orders.completed_at';
-            if (Schema::hasColumn('orders', 'approved_at')) return 'orders.approved_at';
-            if (Schema::hasColumn('orders', 'updated_at')) return 'orders.updated_at';
+            if (Schema::hasColumn('orders', 'completed_at')) {
+                return 'orders.completed_at';
+            }
+            if (Schema::hasColumn('orders', 'approved_at')) {
+                return 'orders.approved_at';
+            }
+            if (Schema::hasColumn('orders', 'updated_at')) {
+                return 'orders.updated_at';
+            }
+
             return Schema::hasColumn('orders', 'created_at') ? 'orders.created_at' : null;
         }
         if ($statusKey === 'rejected') {
-            if (Schema::hasColumn('orders', 'rejected_at')) return 'orders.rejected_at';
-            if (Schema::hasColumn('orders', 'updated_at')) return 'orders.updated_at';
+            if (Schema::hasColumn('orders', 'rejected_at')) {
+                return 'orders.rejected_at';
+            }
+            if (Schema::hasColumn('orders', 'updated_at')) {
+                return 'orders.updated_at';
+            }
+
             return Schema::hasColumn('orders', 'created_at') ? 'orders.created_at' : null;
         }
+
         // unpaid and others
         return Schema::hasColumn('orders', 'created_at') ? 'orders.created_at' : null;
     }
-
-    private function applyOrderStatusFilter(\Illuminate\Database\Query\Builder $q, string $statusKey): void
-    {
-        // Strict groups. Prefer booking_status when present. No pending states included.
-        if ($statusKey === 'completed') {
-            // Match the Completed orders list exactly.
-            // Do NOT treat paid orders as completed.
-            if (Schema::hasColumn('orders', 'status')) {
-                $q->where('orders.status', 'completed');
-                return;
-            }
-
-            // Fallback if this project uses booking_status instead of status
-            if (Schema::hasColumn('orders', 'booking_status')) {
-                $q->whereIn('orders.booking_status', ['approved', 'completed']);
-                return;
-            }
-
-            return;
-        }
-
-        if ($statusKey === 'rejected') {
-            $q->where(function ($w) {
-                $w->whereRaw('1=0');
-
-                if (Schema::hasColumn('orders', 'booking_status')) {
-                    $w->orWhere('orders.booking_status', 'rejected');
-                }
-                if (Schema::hasColumn('orders', 'status')) {
-                    $w->orWhereIn('orders.status', ['rejected','cancelled','canceled','declined']);
-                }
-            });
-            return;
-        }
-
-        if ($statusKey === 'unpaid') {
-            // Match Unpaid Orders using direct columns first.
-            if (Schema::hasColumn('orders', 'payment_status')) {
-                $q->where('orders.payment_status', 'unpaid');
-            } elseif (Schema::hasColumn('orders', 'booking_status')) {
-                $q->where('orders.booking_status', 'unpaid');
-            } elseif (Schema::hasColumn('orders', 'status')) {
-                $q->where('orders.status', 'unpaid');
-            } elseif (Schema::hasColumn('orders', 'meta')) {
-                $q->where(function ($w) {
-                    $w->whereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))) = ?", ['unpaid'])
-                        ->orWhereRaw("LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))) = ?", ['unpaid']);
-                });
-            }
-
-            if (Schema::hasColumn('orders', 'status')) {
-                $q->whereNotIn('orders.status', [
-                    'completed',
-                    'approved',
-                    'paid',
-                    'rejected',
-                    'cancelled',
-                    'canceled',
-                    'declined',
-                ]);
-            }
-
-            return;
-        }
-
-        // Fallback exact match on orders.status if nothing else applies
-        if (Schema::hasColumn('orders', 'status')) {
-            $q->where('orders.status', $statusKey);
-        }
-    }
-
 
     protected function getTableHeaderActions(): array
     {
@@ -176,13 +120,13 @@ class BookingStatusTable extends Base
 
             Tables\Columns\TextColumn::make('percent')
                 ->label('Percent')
-                ->state(fn ($record) => number_format(($record['percent'] ?? 0), 1) . '%')
+                ->state(fn ($record) => number_format(($record['percent'] ?? 0), 1).'%')
                 ->alignRight(),
 
             Tables\Columns\TextColumn::make('impact')
                 ->label('Impact')
                 ->state(fn ($record) => isset($record['impact']) && $record['impact'] !== null
-                    ? '£' . number_format((float) $record['impact'], 2)
+                    ? '£'.number_format((float) $record['impact'], 2)
                     : '—'
                 )
                 ->alignRight(),
@@ -191,52 +135,180 @@ class BookingStatusTable extends Base
 
     public function getTableRecords(): Collection
     {
-        [$start, $end] = $this->getCurrentRange();
-
         $statusMap = [
             ['label' => 'Completed', 'key' => 'completed'],
             ['label' => 'Rejected',  'key' => 'rejected'],
             ['label' => 'Unpaid',    'key' => 'unpaid'],
         ];
 
-        // Count orders by status within the selected period using the right date column per status
-        $counts = collect($statusMap)->mapWithKeys(function ($s) use ($start, $end) {
-            $key = $s['key'];
-            $q = DB::table('orders');
+        $metrics = Cache::remember(
+            'admin:booking-status:v3:'.($this->period ?? 'monthly'),
+            now()->addMinutes(5),
+            fn (): array => $this->loadStatusMetrics()
+        );
 
-            // choose date column per status
-            $dateCol = $this->dateColumnForStatus($key);
-            if ($dateCol && $start && $end) {
-                $q->whereBetween($dateCol, [$start, $end]);
-            }
-
-            // Use normalised mapping for all statuses so counts match dashboard widgets
-            $this->applyOrderStatusFilter($q, $key);
-
-            return [$key => (int) $q->count()];
-        });
-
+        $counts = collect($statusMap)->mapWithKeys(
+            fn (array $status): array => [
+                $status['key'] => (int) ($metrics[$status['key']]['count'] ?? 0),
+            ]
+        );
         $total = max(1, $counts->sum());
 
-        // Impact by order status within the same period
-        $impactByStatus = [
-            'completed' => $this->sumOrdersRevenue($start, $end, 'completed'),
-            'rejected'  => $this->sumOrdersRevenue($start, $end, 'rejected'),
-            'unpaid'    => $this->sumOrdersRevenue($start, $end, 'unpaid'),
-        ];
-
-        $rows = collect($statusMap)->map(function ($s) use ($counts, $impactByStatus, $total) {
+        $rows = collect($statusMap)->map(function ($s) use ($counts, $metrics, $total) {
             $key = $s['key'];
             $count = $counts[$key] ?? 0;
+
             return [
                 'label' => $s['label'],
                 'count' => $count,
                 'percent' => $count > 0 ? ($count * 100 / $total) : 0,
-                'impact' => $impactByStatus[$key] ?? null,
+                'impact' => (float) ($metrics[$key]['revenue'] ?? 0),
             ];
         })->values()->all();
 
         return collect($rows);
+    }
+
+    /**
+     * Load every booking-status count and revenue total in one orders scan.
+     *
+     * Previously this widget issued six separate aggregate queries: one count
+     * and one revenue sum for each status. Conditional aggregation preserves
+     * each status's date and normalisation rules while reducing that to one.
+     *
+     * @return array<string, array{count: int, revenue: float}>
+     */
+    protected function loadStatusMetrics(): array
+    {
+        $empty = [
+            'completed' => ['count' => 0, 'revenue' => 0.0],
+            'rejected' => ['count' => 0, 'revenue' => 0.0],
+            'unpaid' => ['count' => 0, 'revenue' => 0.0],
+        ];
+
+        if (! Schema::hasTable('orders')) {
+            return $empty;
+        }
+
+        [$start, $end] = $this->getCurrentRange();
+        $revenue = $this->revenueValueExpression();
+        $selects = [];
+        $bindings = [];
+
+        foreach (array_keys($empty) as $status) {
+            [$predicate, $predicateBindings] = $this->statusMetricPredicate(
+                $status,
+                $start,
+                $end
+            );
+
+            $selects[] = "SUM(CASE WHEN {$predicate} THEN 1 ELSE 0 END) AS {$status}_count";
+            array_push($bindings, ...$predicateBindings);
+
+            $selects[] = "SUM(CASE WHEN {$predicate} THEN {$revenue} ELSE 0 END) AS {$status}_revenue";
+            array_push($bindings, ...$predicateBindings);
+        }
+
+        $row = DB::table('orders')
+            ->selectRaw(implode(",\n", $selects), $bindings)
+            ->first();
+
+        if (! $row) {
+            return $empty;
+        }
+
+        foreach (array_keys($empty) as $status) {
+            $empty[$status] = [
+                'count' => (int) ($row->{"{$status}_count"} ?? 0),
+                'revenue' => (float) ($row->{"{$status}_revenue"} ?? 0),
+            ];
+        }
+
+        return $empty;
+    }
+
+    /**
+     * @return array{0: string, 1: array<int, mixed>}
+     */
+    private function statusMetricPredicate(string $status, Carbon $start, Carbon $end): array
+    {
+        $parts = [];
+        $bindings = [];
+        $dateColumn = $this->dateColumnForStatus($status);
+
+        if ($dateColumn) {
+            $parts[] = "{$dateColumn} BETWEEN ? AND ?";
+            $bindings[] = $start;
+            $bindings[] = $end;
+        }
+
+        if ($status === 'completed') {
+            if (Schema::hasColumn('orders', 'status')) {
+                $parts[] = 'orders.status = ?';
+                $bindings[] = 'completed';
+            } elseif (Schema::hasColumn('orders', 'booking_status')) {
+                $parts[] = "orders.booking_status IN ('approved', 'completed')";
+            }
+        } elseif ($status === 'rejected') {
+            $rejected = [];
+
+            if (Schema::hasColumn('orders', 'booking_status')) {
+                $rejected[] = 'orders.booking_status = ?';
+                $bindings[] = 'rejected';
+            }
+            if (Schema::hasColumn('orders', 'status')) {
+                $rejected[] = "orders.status IN ('rejected', 'cancelled', 'canceled', 'declined')";
+            }
+
+            $parts[] = $rejected ? '('.implode(' OR ', $rejected).')' : '0 = 1';
+        } elseif ($status === 'unpaid') {
+            if (Schema::hasColumn('orders', 'payment_status')) {
+                $parts[] = 'orders.payment_status = ?';
+                $bindings[] = 'unpaid';
+            } elseif (Schema::hasColumn('orders', 'booking_status')) {
+                $parts[] = 'orders.booking_status = ?';
+                $bindings[] = 'unpaid';
+            } elseif (Schema::hasColumn('orders', 'status')) {
+                $parts[] = 'orders.status = ?';
+                $bindings[] = 'unpaid';
+            } elseif (Schema::hasColumn('orders', 'meta')) {
+                $parts[] = "(LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status'))) = ?"
+                    ." OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, '$.payment_status_label'))) = ?)";
+                $bindings[] = 'unpaid';
+                $bindings[] = 'unpaid';
+            }
+
+            if (Schema::hasColumn('orders', 'status')) {
+                $parts[] = "orders.status NOT IN ('completed', 'approved', 'paid', 'rejected', 'cancelled', 'canceled', 'declined')";
+            }
+        }
+
+        return [$parts ? implode(' AND ', $parts) : '1 = 1', $bindings];
+    }
+
+    private function revenueValueExpression(): string
+    {
+        if (Schema::hasColumn('orders', 'products_total_minor')) {
+            return 'COALESCE(orders.products_total_minor, 0) / 100';
+        }
+
+        foreach (['total', 'grand_total', 'total_amount', 'amount', 'total_gbp'] as $column) {
+            if (Schema::hasColumn('orders', $column)) {
+                return "COALESCE(orders.{$column}, 0)";
+            }
+        }
+
+        if (! Schema::hasColumn('orders', 'meta')) {
+            return '0';
+        }
+
+        return 'COALESCE(
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, "$.total")) AS DECIMAL(12,2)),
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, "$.grand_total")) AS DECIMAL(12,2)),
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(orders.meta, "$.amount")) AS DECIMAL(12,2)),
+            0
+        )';
     }
 
     protected function isTablePaginationEnabled(): bool
@@ -254,56 +326,12 @@ class BookingStatusTable extends Base
         return ['md' => 1];
     }
 
-    private function sumOrdersRevenue(?Carbon $start = null, ?Carbon $end = null, ?string $statusKey = null): float
-    {
-        $table = 'orders';
-
-        if (! Schema::hasTable($table)) {
-            return 0.0;
-        }
-
-        $q = DB::table($table);
-
-        $dateColumn = $statusKey
-            ? $this->dateColumnForStatus($statusKey)
-            : (Schema::hasColumn($table, 'created_at') ? 'orders.created_at' : null);
-
-        if ($start && $end && $dateColumn) {
-            $q->whereBetween($dateColumn, [$start, $end]);
-        }
-
-        if ($statusKey !== null) {
-            $this->applyOrderStatusFilter($q, $statusKey);
-        }
-
-        if (Schema::hasColumn($table, 'products_total_minor')) {
-            return (float) $q->sum(DB::raw('COALESCE(orders.products_total_minor, 0)')) / 100;
-        }
-
-        foreach (['total', 'grand_total', 'total_amount', 'amount', 'total_gbp'] as $column) {
-            if (Schema::hasColumn($table, $column)) {
-                return (float) $q->sum($column);
-            }
-        }
-
-        if (! Schema::hasColumn($table, 'meta')) {
-            return 0.0;
-        }
-
-        return (float) ($q->selectRaw('SUM(COALESCE(
-            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.totalMinor")) AS DECIMAL(12,2)) / 100,
-            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.total")) AS DECIMAL(12,2)),
-            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.grand_total")) AS DECIMAL(12,2)),
-            CAST(JSON_UNQUOTE(JSON_EXTRACT(meta, "$.amount")) AS DECIMAL(12,2)),
-            0
-        )) as t')->value('t') ?? 0);
-    }
     public function getTableRecordKey(mixed $record): string
     {
         if (is_array($record) && isset($record['label'])) {
-            return 'booking-status-' . \Illuminate\Support\Str::slug((string) $record['label']);
+            return 'booking-status-'.\Illuminate\Support\Str::slug((string) $record['label']);
         }
 
-        return 'booking-status-' . md5(json_encode($record));
+        return 'booking-status-'.md5(json_encode($record));
     }
 }

@@ -35,30 +35,17 @@ class NhsApprovalResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        $count = Cache::remember(
-            'filament:navigation:nhs-approvals-count',
-            now()->addMinutes(2),
-            fn (): int => NhsApplication::query()
-                ->where('status', 'pending')
-                ->count()
-        );
-
-        return $count > 0 ? (string) $count : null;
+        return null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        return 'warning';
+        return null;
     }
 
     public static function getNavigationBadgeTooltip(): ?string
     {
-        $count = (int) Cache::get(
-            'filament:navigation:nhs-approvals-count',
-            0
-        );
-
-        return $count > 0 ? ($count . ' pending approval') : null;
+        return null;
     }
 
     public static function table(Table $table): Table

@@ -16,7 +16,7 @@ use App\Models\PendingOrder;
 use App\Models\Appointment;
 use App\Models\Order;
 use App\Models\User;
-use Illuminate\Support\Facades\Schema as DBSchema;
+use App\Support\DatabaseSchema as DBSchema;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use BackedEnum;
@@ -4482,29 +4482,12 @@ class PendingOrderResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        $count = Cache::remember(
-            'filament:navigation:pending-orders-count',
-            now()->addMinutes(2),
-            function (): int {
-                try {
-                    return static::getEloquentQuery()->count();
-                } catch (Throwable $e) {
-                    return 0;
-                }
-            }
-        );
-
-        return $count > 0 ? (string) $count : null;
+        return null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        $count = (int) Cache::get(
-            'filament:navigation:pending-orders-count',
-            0
-        );
-
-        return $count > 0 ? 'warning' : 'gray';
+        return null;
     }
 
     public static function canCreate(): bool

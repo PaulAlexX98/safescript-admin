@@ -1,9 +1,10 @@
 <?php
+
 // app/Models/Order.php
+
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use App\Models\Patient;
 
 class Order extends Model
 {
@@ -83,6 +84,50 @@ class Order extends Model
         return $this->appointment();
     }
 
+    public function isWalkIn(): bool
+    {
+        $meta = is_array($this->meta)
+            ? $this->meta
+            : (json_decode($this->meta ?? '[]', true) ?: []);
+
+        $walkInLabels = ['walk_in', 'walk-in', 'walkin'];
+        $labels = [
+            $this->getAttribute('source'),
+            $this->getAttribute('appointment_type'),
+            $this->getAttribute('type'),
+            data_get($meta, 'source'),
+            data_get($meta, 'appointment_type'),
+            data_get($meta, 'type'),
+        ];
+
+        foreach ($labels as $label) {
+            $normalised = strtolower(trim((string) $label));
+            if (in_array($normalised, $walkInLabels, true)) {
+                return true;
+            }
+        }
+
+        $flags = [
+            $this->getAttribute('is_walk_in'),
+            data_get($meta, 'is_walk_in'),
+        ];
+
+        foreach ($flags as $flag) {
+            if ($flag === true || $flag === 1) {
+                return true;
+            }
+
+            if (
+                is_string($flag)
+                && in_array(strtolower(trim($flag)), ['1', 'true', 'yes'], true)
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     protected static function booted(): void
     {
         static::saving(function (self $order) {
@@ -97,7 +142,7 @@ class Order extends Model
             $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
 
             // Mirror user_id into meta.user_id if missing
-            if (!empty($order->user_id) && ! data_get($meta, 'user_id')) {
+            if (! empty($order->user_id) && ! data_get($meta, 'user_id')) {
                 data_set($meta, 'user_id', $order->user_id);
             }
 
@@ -106,13 +151,13 @@ class Order extends Model
             if (\Schema::hasColumn($order->getTable(), 'patient_id')) {
                 $pid = $order->getAttribute('patient_id');
             }
-            if (empty($pid) && !empty($order->user_id)) {
+            if (empty($pid) && ! empty($order->user_id)) {
                 $pid = Patient::where('user_id', $order->user_id)->value('id');
                 if ($pid && \Schema::hasColumn($order->getTable(), 'patient_id') && empty($order->getAttribute('patient_id'))) {
                     $order->setAttribute('patient_id', $pid);
                 }
             }
-            if (!empty($pid) && ! data_get($meta, 'patient_id')) {
+            if (! empty($pid) && ! data_get($meta, 'patient_id')) {
                 data_set($meta, 'patient_id', $pid);
             }
 
@@ -123,7 +168,7 @@ class Order extends Model
         static::updating(function (self $order) {
             $meta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
 
-            if (!empty($order->user_id) && ! data_get($meta, 'user_id')) {
+            if (! empty($order->user_id) && ! data_get($meta, 'user_id')) {
                 data_set($meta, 'user_id', $order->user_id);
             }
 
@@ -131,10 +176,10 @@ class Order extends Model
             if (\Schema::hasColumn($order->getTable(), 'patient_id')) {
                 $pid = $order->getAttribute('patient_id');
             }
-            if (empty($pid) && !empty($order->user_id)) {
+            if (empty($pid) && ! empty($order->user_id)) {
                 $pid = Patient::where('user_id', $order->user_id)->value('id');
             }
-            if (!empty($pid) && ! data_get($meta, 'patient_id')) {
+            if (! empty($pid) && ! data_get($meta, 'patient_id')) {
                 data_set($meta, 'patient_id', $pid);
             }
 
@@ -236,7 +281,7 @@ class Order extends Model
                 ->orderByDesc('id')
                 ->first();
 
-            $appointment = $existing ?: new \App\Models\Appointment();
+            $appointment = $existing ?: new \App\Models\Appointment;
 
             if (\Schema::hasColumn('appointments', 'order_id')) {
                 $appointment->order_id = $order->id;
@@ -323,15 +368,27 @@ class Order extends Model
         $sum = 0;
 
         $toMinor = function ($v): ?int {
-            if ($v === null || $v === '') return null;
-            if (is_int($v)) return $v;
-            if (is_float($v)) return (int) round($v * 100);
+            if ($v === null || $v === '') {
+                return null;
+            }
+            if (is_int($v)) {
+                return $v;
+            }
+            if (is_float($v)) {
+                return (int) round($v * 100);
+            }
             if (is_string($v)) {
                 $clean = preg_replace('/[^\d\.\-]/', '', $v);
-                if ($clean === '' || $clean === '-' || $clean === null) return null;
-                if (str_contains($clean, '.')) return (int) round(((float) $clean) * 100);
+                if ($clean === '' || $clean === '-' || $clean === null) {
+                    return null;
+                }
+                if (str_contains($clean, '.')) {
+                    return (int) round(((float) $clean) * 100);
+                }
+
                 return (int) $clean;
             }
+
             return null;
         };
 
@@ -351,10 +408,14 @@ class Order extends Model
             $line = $toMinor(data_get($it, 'totalMinor'));
             if ($line === null) {
                 $unit = $toMinor(data_get($it, 'unitMinor'));
-                $qty  = (int) (data_get($it, 'qty') ?? 1);
-                if ($unit !== null) $line = $unit * max($qty, 1);
+                $qty = (int) (data_get($it, 'qty') ?? 1);
+                if ($unit !== null) {
+                    $line = $unit * max($qty, 1);
+                }
             }
-            if ($line !== null) $sum += $line;
+            if ($line !== null) {
+                $sum += $line;
+            }
         }
 
         // Fallback totals if no line items matched
@@ -383,8 +444,9 @@ class Order extends Model
         $val = data_get($meta, 'scr_verified') ?? data_get($meta, 'scr_status') ?? data_get($meta, 'scrVerified');
 
         if ($val !== null && $val !== '') {
-            $s = strtolower(trim((string)$val));
-            return in_array($s, ['y','yes','true','1'], true) ? 'Yes' : (in_array($s, ['n','no','false','0'], true) ? 'No' : '—');
+            $s = strtolower(trim((string) $val));
+
+            return in_array($s, ['y', 'yes', 'true', '1'], true) ? 'Yes' : (in_array($s, ['n', 'no', 'false', '0'], true) ? 'No' : '—');
         }
 
         $u = $this->user;

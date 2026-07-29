@@ -2,7 +2,6 @@
 
 namespace App\Services\Shipping;
 
-use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -22,9 +21,24 @@ class ClickAndDrop
      */
     public function createOrder(object $order, object $patient, array $overrides = []): array
     {
+        if ($this->shouldSkipOrder($order)) {
+            Log::info('clickanddrop.create.skipped_walk_in', [
+                'order' => data_get($order, 'id'),
+                'reference' => data_get($order, 'reference'),
+            ]);
+
+            return [
+                'skipped' => true,
+                'reason' => 'walk_in',
+                'request' => [],
+                'response' => [],
+                'label_paths' => [],
+            ];
+        }
+
         // Resolve credentials and defaults (multi-tenant capable via $overrides)
         // Use the dedicated clickanddrop config, which reads CLICK_AND_DROP_* env vars.
-        $base   = rtrim(
+        $base = rtrim(
             (string) ($overrides['base'] ?? config('clickanddrop.base') ?? 'https://api.parcel.royalmail.com/api/v1'),
             '/'
         );
@@ -38,48 +52,47 @@ class ClickAndDrop
         }
 
         // Pull safe fields from $order and $patient without assuming strict types
-        $ref       = (string) (data_get($order, 'reference') ?? data_get($order, 'ref') ?? 'REF-' . uniqid());
+        $ref = (string) (data_get($order, 'reference') ?? data_get($order, 'ref') ?? 'REF-'.uniqid());
         $createdAt = data_get($order, 'created_at');
         $orderDate = is_string($createdAt)
             ? $createdAt
             : (method_exists($createdAt, 'toIso8601String') ? $createdAt->toIso8601String() : now()->toIso8601String());
 
-        $subtotal  = (float) (data_get($order, 'subtotal', 0));
-        $shipCost  = (float) (data_get($order, 'shipping_total', 0));
-        $total     = (float) (data_get($order, 'total', $subtotal + $shipCost));
+        $subtotal = (float) (data_get($order, 'subtotal', 0));
+        $shipCost = (float) (data_get($order, 'shipping_total', 0));
+        $total = (float) (data_get($order, 'total', $subtotal + $shipCost));
 
         $firstName = trim((string) data_get($patient, 'first_name', ''));
-        $lastName  = trim((string) data_get($patient, 'last_name', ''));
-        $fullName  = trim($firstName . ' ' . $lastName) ?: (string) data_get($patient, 'name', 'Patient');
+        $lastName = trim((string) data_get($patient, 'last_name', ''));
+        $fullName = trim($firstName.' '.$lastName) ?: (string) data_get($patient, 'name', 'Patient');
 
         // Debug: log incoming patient fields and explicit shipping override
         Log::info('clickanddrop.payload.in', [
             'has_override_shipping' => isset($overrides['shipping']) && is_array($overrides['shipping']),
-            'override_shipping'     => $overrides['shipping'] ?? null,
-            'patient_shipping'      => [
+            'override_shipping' => $overrides['shipping'] ?? null,
+            'patient_shipping' => [
                 'shipping_address1' => data_get($patient, 'shipping_address1'),
                 'shipping_address2' => data_get($patient, 'shipping_address2'),
-                'shipping_city'     => data_get($patient, 'shipping_city'),
+                'shipping_city' => data_get($patient, 'shipping_city'),
                 'shipping_postcode' => data_get($patient, 'shipping_postcode'),
-                'shipping_country'  => data_get($patient, 'shipping_country') ?? data_get($patient, 'shipping_country_code'),
-                'nested'            => data_get($patient, 'shipping'),
+                'shipping_country' => data_get($patient, 'shipping_country') ?? data_get($patient, 'shipping_country_code'),
+                'nested' => data_get($patient, 'shipping'),
             ],
-            'patient_home'          => [
+            'patient_home' => [
                 'address1' => data_get($patient, 'address1'),
                 'address2' => data_get($patient, 'address2'),
-                'city'     => data_get($patient, 'city'),
+                'city' => data_get($patient, 'city'),
                 'postcode' => data_get($patient, 'postcode'),
-                'country'  => data_get($patient, 'country') ?? data_get($patient, 'country_code'),
+                'country' => data_get($patient, 'country') ?? data_get($patient, 'country_code'),
             ],
         ]);
 
-       
         // 1 use explicit shipping override if present
         $explicit = (isset($overrides['shipping']) && is_array($overrides['shipping'])) ? $overrides['shipping'] : null;
         if ($explicit) {
             $addr1 = (string) ($explicit['address1'] ?? '');
             $addr2 = (string) ($explicit['address2'] ?? '');
-            $city  = (string) ($explicit['city'] ?? '');
+            $city = (string) ($explicit['city'] ?? '');
             $postcode = (string) ($explicit['postcode'] ?? '');
             $countryCode = strtoupper((string) ($explicit['country_code'] ?? 'GB'));
             $source = 'override';
@@ -87,12 +100,12 @@ class ClickAndDrop
             // 2 try order meta shipping block with canonical keys
             $oMeta = is_array($order->meta ?? null) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
             $mShip = (array) data_get($oMeta, 'shipping', []);
-            $mHas  = ($mShip['address1'] ?? null) || ($mShip['city'] ?? null) || ($mShip['postcode'] ?? null);
+            $mHas = ($mShip['address1'] ?? null) || ($mShip['city'] ?? null) || ($mShip['postcode'] ?? null);
 
             if ($mHas) {
                 $addr1 = (string) ($mShip['address1'] ?? '');
                 $addr2 = (string) ($mShip['address2'] ?? '');
-                $city  = (string) ($mShip['city'] ?? '');
+                $city = (string) ($mShip['city'] ?? '');
                 $postcode = (string) ($mShip['postcode'] ?? '');
                 $countryCode = strtoupper((string) ($mShip['country_code'] ?? 'GB'));
                 $source = 'order_meta.shipping';
@@ -100,7 +113,7 @@ class ClickAndDrop
                 // 3 fall back to user shipping columns exactly
                 $addr1 = (string) (data_get($order->user, 'shipping_address1') ?? '');
                 $addr2 = (string) (data_get($order->user, 'shipping_address2') ?? '');
-                $city  = (string) (data_get($order->user, 'shipping_city') ?? '');
+                $city = (string) (data_get($order->user, 'shipping_city') ?? '');
                 $postcode = (string) (data_get($order->user, 'shipping_postcode') ?? '');
                 $countryCode = strtoupper((string) (data_get($order->user, 'shipping_country') ?? 'GB'));
                 $source = 'user.shipping_*';
@@ -109,7 +122,7 @@ class ClickAndDrop
                 if ($addr1 === '' && $city === '' && $postcode === '') {
                     $addr1 = (string) (data_get($order->user, 'address1') ?? '');
                     $addr2 = (string) (data_get($order->user, 'address2') ?? '');
-                    $city  = (string) (data_get($order->user, 'city') ?? '');
+                    $city = (string) (data_get($order->user, 'city') ?? '');
                     $postcode = (string) (data_get($order->user, 'postcode') ?? '');
                     $countryCode = strtoupper((string) (data_get($order->user, 'country') ?? 'GB'));
                     $source = 'user.home';
@@ -123,9 +136,9 @@ class ClickAndDrop
         // debug the chosen source and values
         \Log::info('clickanddrop.payload.resolved', [
             'source' => $source,
-            'resolved' => compact('addr1','addr2','city','postcode','countryCode'),
+            'resolved' => compact('addr1', 'addr2', 'city', 'postcode', 'countryCode'),
         ]);
-        
+
         // Resolve contact details with robust fallbacks
         // Priority: patient meta -> order meta shipping -> order user -> order root
         $oMeta = isset($oMeta) ? $oMeta : (is_array($order->meta ?? null) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []));
@@ -152,7 +165,7 @@ class ClickAndDrop
         $phone = preg_replace('/\s+/', '', $phoneRaw ?? '');
         if ($phone && $phone[0] !== '+' && preg_match('/^0\d{9,}$/', $phone)) {
             // Assume UK if leading 0 and no country code
-            $phone = '+44' . ltrim($phone, '0');
+            $phone = '+44'.ltrim($phone, '0');
         }
 
         // Weight fallback — if you measure per item, sum; else default 100g
@@ -213,7 +226,7 @@ class ClickAndDrop
         ]);
 
         // Fire the request using Bearer auth and JSON body
-        $url = $base . '/orders';
+        $url = $base.'/orders';
 
         $res = Http::asJson()
             ->withToken($apiKey) // Authorization: Bearer <key>
@@ -228,7 +241,7 @@ class ClickAndDrop
         ]);
 
         if (! $res->successful()) {
-            throw new RuntimeException('Click & Drop error ' . $res->status() . ': ' . $res->body());
+            throw new RuntimeException('Click & Drop error '.$res->status().': '.$res->body());
         }
 
         $data = $res->json();
@@ -246,7 +259,7 @@ class ClickAndDrop
             $bytesB64 = data_get($doc, 'data') ?? data_get($doc, 'bytes') ?? null;
             $ext = strtolower((string) data_get($doc, 'fileExtension', 'pdf'));
             if (is_string($bytesB64) && $bytesB64 !== '') {
-                $path = 'labels/' . $ref . '-' . ($i + 1) . '.' . $ext;
+                $path = 'labels/'.$ref.'-'.($i + 1).'.'.$ext;
                 Storage::disk('local')->put($path, base64_decode($bytesB64));
                 $saved[] = $path;
             }
@@ -257,6 +270,44 @@ class ClickAndDrop
             'response' => $data,
             'label_paths' => $saved,
         ];
+    }
+
+    /**
+     * Decide whether an order must stay out of Click & Drop.
+     *
+     * ConsultationSession resolves orders as ApprovedOrder rather than Order,
+     * so this policy must support both model types.
+     */
+    public function shouldSkipOrder(object $order): bool
+    {
+        if (method_exists($order, 'isWalkIn')) {
+            return (bool) $order->isWalkIn();
+        }
+
+        $meta = is_array(data_get($order, 'meta'))
+            ? data_get($order, 'meta')
+            : (json_decode((string) data_get($order, 'meta', '[]'), true) ?: []);
+
+        $source = strtolower(trim((string) (
+            data_get($order, 'source')
+            ?? data_get($order, 'appointment_type')
+            ?? data_get($meta, 'source')
+            ?? data_get($meta, 'appointment_type')
+            ?? ''
+        )));
+
+        if (in_array($source, ['walk_in', 'walk-in', 'walkin'], true)) {
+            return true;
+        }
+
+        $flag = data_get($order, 'is_walk_in') ?? data_get($meta, 'is_walk_in');
+
+        return $flag === true
+            || $flag === 1
+            || (
+                is_string($flag)
+                && in_array(strtolower(trim($flag)), ['1', 'true', 'yes'], true)
+            );
     }
 
     /**
@@ -277,7 +328,7 @@ class ClickAndDrop
 
         $res = Http::withToken($apiKey)
             ->acceptJson()
-            ->get($base . '/orders/' . $orderIdentifier);
+            ->get($base.'/orders/'.$orderIdentifier);
 
         Log::info('clickanddrop.get_order', [
             'orderIdentifier' => $orderIdentifier,
@@ -361,6 +412,7 @@ class ClickAndDrop
             'WALES' => 'GB',
             'NORTHERN IRELAND' => 'GB',
         ];
+
         return $map[$v] ?? 'GB';
     }
 
@@ -402,6 +454,7 @@ class ClickAndDrop
         if (is_object($value) && method_exists($value, 'toIso8601String')) {
             return $value->toIso8601String();
         }
+
         return now()->toIso8601String();
     }
 }
