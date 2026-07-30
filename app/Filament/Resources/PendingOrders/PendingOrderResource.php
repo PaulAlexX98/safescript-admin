@@ -68,6 +68,35 @@ class PendingOrderResource extends Resource
         return strtolower(trim((string) ($v ?? '')));
     }
 
+    protected static function patientEmailForPending($record): ?string
+    {
+        if (! $record) {
+            return null;
+        }
+
+        $meta = is_array($record->meta)
+            ? $record->meta
+            : (json_decode($record->meta ?? '[]', true) ?: []);
+
+        foreach ([
+            $record->email ?? null,
+            data_get($meta, 'email'),
+            data_get($meta, 'patient.email'),
+            data_get($meta, 'patient_snapshot.email'),
+            data_get($meta, 'customer.email'),
+            data_get($meta, 'contact.email'),
+            optional($record->user)->email,
+        ] as $candidate) {
+            $email = trim((string) ($candidate ?? ''));
+
+            if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                return $email;
+            }
+        }
+
+        return null;
+    }
+
     protected static function normPhone($v): string
     {
         $digits = preg_replace('/\D+/', '', (string) ($v ?? ''));
@@ -2345,6 +2374,96 @@ class PendingOrderResource extends Resource
                             ]),
                     ])
                     ->extraModalFooterActions([
+                        Action::make('emailPatient')
+                            ->label('Email Patient')
+                            ->icon('heroicon-o-envelope')
+                            ->color('info')
+                            ->modalHeading('Email patient')
+                            ->modalSubmitActionLabel('Send email')
+                            ->fillForm(function ($record): array {
+                                $meta = is_array($record?->meta)
+                                    ? $record->meta
+                                    : (json_decode($record?->meta ?? '[]', true) ?: []);
+
+                                $firstName = trim((string) (
+                                    data_get($meta, 'firstName')
+                                    ?: data_get($meta, 'first_name')
+                                    ?: data_get($meta, 'patient.firstName')
+                                    ?: data_get($meta, 'patient.first_name')
+                                    ?: optional($record?->user)->first_name
+                                    ?: ''
+                                ));
+
+                                $reference = trim((string) ($record?->reference ?? ''));
+
+                                return [
+                                    'to' => static::patientEmailForPending($record),
+                                    'subject' => $reference !== ''
+                                        ? "Pharmacy Express – Order {$reference}"
+                                        : 'Pharmacy Express',
+                                    'message' => 'Dear '.($firstName !== '' ? $firstName : 'Patient').",\n\n\n\nKind regards,\nPharmacy Express",
+                                ];
+                            })
+                            ->form([
+                                TextInput::make('to')
+                                    ->label('Patient email')
+                                    ->email()
+                                    ->required()
+                                    ->maxLength(254),
+                                TextInput::make('subject')
+                                    ->required()
+                                    ->maxLength(200),
+                                Textarea::make('message')
+                                    ->rows(10)
+                                    ->required()
+                                    ->maxLength(10000),
+                            ])
+                            ->action(function (array $data, $record): void {
+                                $email = trim((string) ($data['to'] ?? ''));
+                                $subject = trim((string) ($data['subject'] ?? ''));
+                                $body = trim((string) ($data['message'] ?? ''));
+
+                                if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                                    Notification::make()
+                                        ->title('Enter a valid patient email address')
+                                        ->danger()
+                                        ->send();
+                                    return;
+                                }
+
+                                if ($subject === '' || $body === '') {
+                                    Notification::make()
+                                        ->title('Subject and message are required')
+                                        ->danger()
+                                        ->send();
+                                    return;
+                                }
+
+                                try {
+                                    $fromAddress = config('mail.from.address') ?: 'info@pharmacy-express.co.uk';
+                                    $fromName = config('mail.from.name') ?: 'Pharmacy Express';
+
+                                    Mail::raw($body, function ($message) use ($email, $subject, $fromAddress, $fromName) {
+                                        $message->from($fromAddress, $fromName)
+                                            ->to($email)
+                                            ->subject($subject);
+                                    });
+
+                                    Notification::make()
+                                        ->title('Patient email sent')
+                                        ->body('Email sent to '.$email)
+                                        ->success()
+                                        ->send();
+                                } catch (Throwable $e) {
+                                    report($e);
+
+                                    Notification::make()
+                                        ->title('Could not send patient email')
+                                        ->body(Str::limit($e->getMessage(), 180))
+                                        ->danger()
+                                        ->send();
+                                }
+                            }),
                         Action::make('set_priority')
                             ->label('Priority')
                             ->icon('heroicon-o-flag')

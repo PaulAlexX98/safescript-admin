@@ -25,6 +25,30 @@ class PendingOrderResourcePerformanceTest extends TestCase
         $this->assertNull(TestablePendingOrderResource::banner($record));
         $this->assertSame($before + 1, TestablePendingOrderResource::$resolutionCount);
     }
+
+    public function test_patient_email_uses_order_metadata_and_user_fallbacks(): void
+    {
+        $metadataRecord = (object) [
+            'email' => 'not-an-email',
+            'meta' => ['patient' => ['email' => 'patient@example.test']],
+            'user' => (object) ['email' => 'user@example.test'],
+        ];
+
+        $userRecord = (object) [
+            'email' => null,
+            'meta' => [],
+            'user' => (object) ['email' => 'user@example.test'],
+        ];
+
+        $this->assertSame(
+            'patient@example.test',
+            TestablePendingOrderResource::patientEmail($metadataRecord)
+        );
+        $this->assertSame(
+            'user@example.test',
+            TestablePendingOrderResource::patientEmail($userRecord)
+        );
+    }
 }
 
 class TestablePendingOrderResource extends PendingOrderResource
@@ -34,6 +58,11 @@ class TestablePendingOrderResource extends PendingOrderResource
     public static function banner(object $record): ?string
     {
         return parent::sixMonthReviewBannerForPending($record);
+    }
+
+    public static function patientEmail(object $record): ?string
+    {
+        return parent::patientEmailForPending($record);
     }
 
     protected static function resolveSixMonthReviewBannerForPending($record): ?string
