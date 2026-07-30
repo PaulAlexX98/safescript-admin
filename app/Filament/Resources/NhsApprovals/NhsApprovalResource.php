@@ -23,6 +23,7 @@ use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
+use App\Support\AdminNavigationCounts;
 
 class NhsApprovalResource extends Resource
 {
@@ -35,17 +36,19 @@ class NhsApprovalResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        return null;
+        $count = AdminNavigationCounts::all()['prescription_approvals'] ?? 0;
+
+        return $count > 0 ? (string) $count : null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        return null;
+        return 'warning';
     }
 
     public static function getNavigationBadgeTooltip(): ?string
     {
-        return null;
+        return 'Pending prescription approvals';
     }
 
     public static function table(Table $table): Table

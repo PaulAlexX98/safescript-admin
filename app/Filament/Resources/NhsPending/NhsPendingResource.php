@@ -37,6 +37,7 @@ use App\Services\Consultations\StartConsultation;
 use App\Models\ConsultationSession;
 use Filament\Forms\Components\Placeholder;
 use App\Support\DatabaseSchema as DatabaseSchema;
+use App\Support\AdminNavigationCounts;
 
 class NhsPendingResource extends Resource
 {
@@ -1501,12 +1502,14 @@ class NhsPendingResource extends Resource
 
    public static function getNavigationBadge(): ?string
     {
-        return null;
+        $count = AdminNavigationCounts::all()['nhs_pending'] ?? 0;
+
+        return $count > 0 ? (string) $count : null;
     }
 
     public static function getNavigationBadgeColor(): ?string
     {
-        return null;
+        return 'warning';
     }
 
     public function startConsultationAction($record)
