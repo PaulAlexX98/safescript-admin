@@ -2696,6 +2696,8 @@ class ConsultationFormController extends Controller
             ], true);
 
         $isInjectableWeight = $isWeight && ! $isWegovyPill;
+        $isMounjaro = Str::contains($svc, 'mounjaro')
+            || Str::contains($treatmentSlug, 'mounjaro');
 
         \Log::info('consultation.email.treatment_detected', [
             'session_id' => $session->id,
@@ -2705,6 +2707,7 @@ class ConsultationFormController extends Controller
             'is_weight' => $isWeight,
             'is_wegovy_pill' => $isWegovyPill,
             'is_injectable_weight' => $isInjectableWeight,
+            'is_mounjaro' => $isMounjaro,
         ]);
 
         $email = data_get($meta, 'email')
@@ -2965,6 +2968,34 @@ class ConsultationFormController extends Controller
 
         $weightSafetyHtml = '';
         $wegovyPillButtonHtml = '';
+        $mounjaroInformationHtml = '';
+
+        if ($isMounjaro) {
+            $mounjaroInformationHtml = '
+            <tr>
+                <td style="padding:0 34px 26px 34px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#fff7ed;border:1px solid #fed7aa;">
+                        <tr>
+                            <td style="padding:22px 24px;">
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#9a3412;font-weight:700;">
+                                    Important Information About Mounjaro
+                                </p>
+
+                                <ul style="margin:0 0 18px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    <li style="margin:0 0 8px 0;"><strong>Storage:</strong> Store in the fridge (2°C–8°C). It can stay out of the fridge for up to 30 days if kept below 30°C.</li>
+                                    <li style="margin:0 0 8px 0;"><strong>Stop treatment and seek help:</strong> if you notice a neck lump or hoarse voice, low mood, or severe stomach pain.</li>
+                                    <li style="margin:0 0 8px 0;">Do not use Mounjaro with other weight-loss medication or if you are trying to conceive.</li>
+                                    <li style="margin:0 0 8px 0;">If you take thyroid medication, please have regular blood tests to check your thyroid levels while taking Mounjaro and after stopping it.</li>
+                                    <li style="margin:0 0 8px 0;">If you take contraceptive pills, consider also using barrier or non-oral contraception for four weeks after starting Mounjaro and for four weeks after each dose increase.</li>
+                                    <li style="margin:0 0 8px 0;">Please report side effects to us or your GP.</li>
+                                    <li style="margin:0;">Future repeat orders no longer require verification. You can order treatment by completing the online check-in.</li>
+                                </ul>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>';
+        }
 
         /*
         |--------------------------------------------------------------------------
@@ -3221,6 +3252,7 @@ class ConsultationFormController extends Controller
 
                             '.$weightSafetyHtml.'
                             '.$wegovyPillButtonHtml.'
+                            '.$mounjaroInformationHtml.'
 
                             <tr>
                                 <td style="padding:0 34px 26px 34px;">

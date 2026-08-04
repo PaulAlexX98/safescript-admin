@@ -210,9 +210,6 @@ class ClickAndDrop
                     'receiveSmsNotification' => false,
                 ],
                 // Ask the API to include label immediately when supported by the Click & Drop account.
-                'label' => [
-                    'includeLabelInResponse' => true,
-                ],
             ]],
         ];
 
