@@ -13,6 +13,7 @@ use App\Filament\Resources\PendingOrders\Schemas\PendingOrderForm;
 use App\Filament\Resources\PendingOrders\Tables\PendingOrdersTable;
 use Filament\Actions\Action;
 use App\Models\PendingOrder;
+use App\Models\PatientEmailTemplate;
 use App\Models\Appointment;
 use App\Models\Order;
 use App\Models\User;
@@ -95,6 +96,38 @@ class PendingOrderResource extends Resource
         }
 
         return null;
+    }
+
+    protected static function renderPatientEmailTemplate(string $text, $record): string
+    {
+        $meta = is_array($record?->meta)
+            ? $record->meta
+            : (json_decode($record?->meta ?? '[]', true) ?: []);
+
+        $patientName = trim((string) (
+            data_get($meta, 'firstName')
+            ?: data_get($meta, 'first_name')
+            ?: data_get($meta, 'patient.firstName')
+            ?: data_get($meta, 'patient.first_name')
+            ?: optional($record?->user)->first_name
+            ?: 'Patient'
+        ));
+        $serviceName = trim((string) (
+            data_get($meta, 'service_name')
+            ?: data_get($meta, 'serviceName')
+            ?: data_get($meta, 'service')
+            ?: $record?->service_name
+            ?: 'Pharmacy Express'
+        ));
+        $bookingBase = rtrim((string) (config('app.frontend_url') ?: 'https://pharmacy-express.co.uk'), '/');
+
+        return strtr($text, [
+            '{{patient_name}}' => $patientName !== '' ? $patientName : 'Patient',
+            '{{reference}}' => trim((string) ($record?->reference ?? '')),
+            '{{service_name}}' => $serviceName !== '' ? $serviceName : 'Pharmacy Express',
+            '{{pharmacy_name}}' => config('mail.from.name') ?: 'Pharmacy Express',
+            '{{booking_link}}' => $bookingBase . '/appointment/book',
+        ]);
     }
 
     protected static function normPhone($v): string
@@ -2405,6 +2438,28 @@ class PendingOrderResource extends Resource
                                 ];
                             })
                             ->form([
+                                Select::make('template_id')
+                                    ->label('Email template')
+                                    ->placeholder('Start with a blank email')
+                                    ->options(fn (): array => PatientEmailTemplate::query()
+                                        ->orderBy('name')
+                                        ->pluck('name', 'id')
+                                        ->all())
+                                    ->live()
+                                    ->afterStateUpdated(function ($state, \Filament\Schemas\Components\Utilities\Set $set, $record): void {
+                                        if (! $state) {
+                                            return;
+                                        }
+
+                                        $template = PatientEmailTemplate::query()->find($state);
+                                        if (! $template) {
+                                            return;
+                                        }
+
+                                        $set('subject', static::renderPatientEmailTemplate($template->subject, $record));
+                                        $set('message', static::renderPatientEmailTemplate($template->message, $record));
+                                    })
+                                    ->helperText('Templates can be created from Notifications → Email Templates.'),
                                 TextInput::make('to')
                                     ->label('Patient email')
                                     ->email()
@@ -2420,8 +2475,8 @@ class PendingOrderResource extends Resource
                             ])
                             ->action(function (array $data, $record): void {
                                 $email = trim((string) ($data['to'] ?? ''));
-                                $subject = trim((string) ($data['subject'] ?? ''));
-                                $body = trim((string) ($data['message'] ?? ''));
+                                $subject = trim(static::renderPatientEmailTemplate((string) ($data['subject'] ?? ''), $record));
+                                $body = trim(static::renderPatientEmailTemplate((string) ($data['message'] ?? ''), $record));
 
                                 if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
                                     Notification::make()

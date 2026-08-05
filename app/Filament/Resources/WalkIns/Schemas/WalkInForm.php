@@ -5,7 +5,6 @@ namespace App\Filament\Resources\WalkIns\Schemas;
 use App\Models\Patient;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\DatePicker;
-use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
@@ -648,20 +647,6 @@ class WalkInForm
                                     ->label('Country')
                                     ->default('United Kingdom')
                                     ->columnSpan(6),
-                            ]),
-                    ]),
-
-
-                Section::make('Appointment')
-                  ->columnSpanFull()
-                    ->schema([
-                        Grid::make(12)
-                            ->schema([
-                                DateTimePicker::make('appointment_at')
-                                    ->label('Appointment date/time')
-                                    ->native(false)
-                                    ->seconds(false)
-                                    ->columnSpan(12),
                             ]),
                     ]),
 
