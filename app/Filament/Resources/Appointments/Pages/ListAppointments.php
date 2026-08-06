@@ -45,6 +45,11 @@ class ListAppointments extends ListRecords
                     $skipped = 0;
 
                     foreach ($appointments as $appointment) {
+                        if (AppointmentResource::hasUnpaidPayment($appointment)) {
+                            $skipped++;
+                            continue;
+                        }
+
                         $order = $appointment->order;
                         $meta = is_array($order?->meta ?? null)
                             ? $order->meta

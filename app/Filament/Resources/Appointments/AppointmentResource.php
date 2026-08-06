@@ -2007,6 +2007,7 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                     ->button()
                     ->color('info')
                     ->icon('heroicon-o-envelope')
+                    ->hidden()
                     ->requiresConfirmation()
                     ->modalHeading('Send appointment reminder')
                     ->modalDescription('This sends a reminder email to the patient for their appointment today.')
@@ -2016,6 +2017,7 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
 
                         return $start !== null
                             && $start->copy()->tz('Europe/London')->isToday()
+                            && ! static::hasUnpaidPayment($record)
                             && ! in_array($status, ['cancelled', 'canceled', 'void', 'failed', 'completed', 'complete', 'done'], true);
                     })
                     ->action(function (Appointment $record): void {
@@ -3045,6 +3047,30 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
 
         static::$relatedOrderCache[$cacheKey] = null;
         return null;
+    }
+
+    public static function hasUnpaidPayment($record): bool
+    {
+        if (! $record) {
+            return false;
+        }
+
+        $statuses = [strtolower(trim((string) ($record->payment_status ?? '')))];
+        $order = static::findRelatedOrder($record);
+
+        if ($order) {
+            $meta = is_array($order->meta)
+                ? $order->meta
+                : (json_decode($order->meta ?? '[]', true) ?: []);
+            $statuses[] = strtolower(trim((string) ($order->payment_status ?? '')));
+            $statuses[] = strtolower(trim((string) (
+                data_get($meta, 'payment_status')
+                ?? data_get($meta, 'payment.status')
+                ?? ''
+            )));
+        }
+
+        return in_array('unpaid', $statuses, true);
     }
 
     protected static function resolveOrderRef($record): ?string
