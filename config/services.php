@@ -39,4 +39,11 @@ return [
         'base' => env('API_BASE', env('FRONTEND_URL', 'https://www.pharmacy-express.co.uk')),
     ],
 
+    'ryft' => [
+        'base' => env('RYFT_API_BASE', env('RYFT_MODE') === 'sandbox'
+            ? 'https://sandbox-api.ryftpay.com'
+            : 'https://api.ryftpay.com'),
+        'secret' => env('RYFT_SECRET', env('RYFT_SECRET_KEY')),
+    ],
+
 ];

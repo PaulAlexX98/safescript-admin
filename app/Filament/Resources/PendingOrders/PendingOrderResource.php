@@ -40,6 +40,7 @@ use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Http;
 use App\Mail\OrderApprovedMail;
 use Illuminate\Support\Str;
 use Illuminate\Support\Arr;
@@ -63,6 +64,139 @@ class PendingOrderResource extends Resource
      * cannot leak into the database or keep records alive between requests.
      */
     protected static ?\WeakMap $sixMonthReviewBannerCache = null;
+
+    protected static function ryftPaymentSessionForPending(PendingOrder $record): string
+    {
+        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+
+        $sessionId = trim((string) (
+            data_get($meta, 'payment_session_id')
+            ?? data_get($meta, 'ryft.payment_session_id')
+            ?? data_get($meta, 'ryft_payment_session_id')
+            ?? data_get($meta, 'last_payment.paymentSessionId')
+            ?? ''
+        ));
+
+        if ($sessionId !== '') {
+            return $sessionId;
+        }
+
+        $order = Order::query()->where('reference', $record->reference)->first();
+        $orderMeta = is_array($order?->meta ?? null)
+            ? $order->meta
+            : (json_decode($order?->meta ?? '[]', true) ?: []);
+
+        return trim((string) (
+            data_get($orderMeta, 'payment_session_id')
+            ?? data_get($orderMeta, 'ryft.payment_session_id')
+            ?? data_get($orderMeta, 'ryft_payment_session_id')
+            ?? data_get($orderMeta, 'last_payment.paymentSessionId')
+            ?? ''
+        ));
+    }
+
+    protected static function isPaidRyftPending(PendingOrder $record): bool
+    {
+        return strtolower(trim((string) $record->payment_status)) === 'paid'
+            && static::ryftPaymentSessionForPending($record) !== '';
+    }
+
+    /** @return array{status: string, refund_id: string} */
+    protected static function refundRyftPayment(PendingOrder $record, string $reason): array
+    {
+        $paymentSessionId = static::ryftPaymentSessionForPending($record);
+        $secret = trim((string) config('services.ryft.secret'));
+        $base = rtrim((string) config('services.ryft.base'), '/');
+
+        // Keep the admin refund endpoint in the same Ryft environment as the
+        // payment API. Sandbox keys cannot authenticate against the live API.
+        if (str_contains(strtolower($secret), 'sandbox')
+            && ! str_contains(strtolower($base), 'sandbox')) {
+            $base = 'https://sandbox-api.ryftpay.com';
+        }
+
+        if ($paymentSessionId === '') {
+            throw new \RuntimeException('No Ryft payment session was found for this order.');
+        }
+        if ($secret === '') {
+            throw new \RuntimeException('Ryft refund is not configured. Add RYFT_SECRET to the admin application environment.');
+        }
+
+        $response = Http::withHeaders([
+                'Authorization' => $secret,
+                'Accept' => 'application/json',
+                'Content-Type' => 'application/json',
+            ])
+            ->timeout(20)
+            ->post($base . '/v1/payment-sessions/' . rawurlencode($paymentSessionId) . '/refunds', [
+                'reason' => $reason !== '' ? $reason : 'Order rejected by Pharmacy Express',
+            ]);
+
+        $payload = $response->json();
+        if (! $response->successful()) {
+            \Log::warning('pending_order.ryft_refund_failed', [
+                'reference' => $record->reference,
+                'payment_session_id' => $paymentSessionId,
+                'http_status' => $response->status(),
+                'response' => is_array($payload) ? $payload : null,
+            ]);
+            throw new \RuntimeException('Ryft could not accept the refund request.');
+        }
+
+        return [
+            'status' => strtolower(trim((string) data_get($payload, 'status', 'pending'))),
+            'refund_id' => trim((string) (data_get($payload, 'id') ?? '')),
+        ];
+    }
+
+    protected static function rejectAfterRefund(PendingOrder $record, string $note, array $refund): void
+    {
+        $timestamp = now()->format('d-m-Y H:i');
+        $noteLine = $timestamp . ': ' . ($note !== '' ? $note : 'Rejected');
+        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+        $notes = preg_split("/\r\n|\n|\r/", (string) data_get($meta, 'rejection_notes', ''), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if (! in_array($noteLine, $notes, true)) {
+            $notes[] = $noteLine;
+        }
+
+        data_set($meta, 'rejection_notes', implode("\n", $notes));
+        data_set($meta, 'rejected_at', now()->toISOString());
+        data_set($meta, 'ryft.refund_id', $refund['refund_id']);
+        data_set($meta, 'ryft.refund_status', $refund['status']);
+        data_set($meta, 'ryft.refund_requested_at', now()->toISOString());
+        $paymentStatus = $refund['status'] === 'succeeded' ? 'refunded' : 'refund_pending';
+
+        $record->forceFill([
+            'status' => 'rejected',
+            'booking_status' => 'rejected',
+            'payment_status' => $paymentStatus,
+            'meta' => $meta,
+        ])->save();
+
+        $order = Order::query()->where('reference', $record->reference)->first();
+        if ($order) {
+            $orderMeta = is_array($order->meta) ? $order->meta : (json_decode($order->meta ?? '[]', true) ?: []);
+            data_set($orderMeta, 'rejection_notes', implode("\n", $notes));
+            data_set($orderMeta, 'rejected_at', now()->toISOString());
+            data_set($orderMeta, 'ryft.refund_id', $refund['refund_id']);
+            data_set($orderMeta, 'ryft.refund_status', $refund['status']);
+            data_set($orderMeta, 'ryft.refund_requested_at', now()->toISOString());
+            $order->forceFill([
+                'status' => 'rejected',
+                'booking_status' => 'rejected',
+                'payment_status' => $paymentStatus,
+                'meta' => $orderMeta,
+            ])->save();
+        }
+
+        if (DBSchema::hasColumn('appointments', 'status')
+            && DBSchema::hasColumn('appointments', 'order_reference')
+            && $record->reference) {
+            DB::table('appointments')
+                ->where('order_reference', $record->reference)
+                ->update(['status' => 'rejected', 'updated_at' => now()]);
+        }
+    }
 
     protected static function normEmail($v): string
     {
@@ -3268,6 +3402,27 @@ class PendingOrderResource extends Resource
                                 $action->getLivewire()->dispatch('refreshTable');
                                 return redirect(ListPendingOrders::getUrl());
                             }),
+                        Action::make('reject_and_refund')
+                            ->label('Reject and refund')
+                            ->color('danger')
+                            ->icon('heroicon-o-banknotes')
+                            ->visible(fn (PendingOrder $record): bool => static::isPaidRyftPending($record))
+                            ->modalHeading('Reject and refund order')
+                            ->modalDescription('This will submit a full refund to Ryft before rejecting the order.')
+                            ->modalSubmitActionLabel('Reject and refund')
+                            ->schema([
+                                Textarea::make('rejection_note')->label('Rejection Note')->rows(4)->required()->columnSpanFull(),
+                            ])
+                            ->action(function (PendingOrder $record, array $data): void {
+                                $note = trim((string) ($data['rejection_note'] ?? ''));
+                                try {
+                                    $refund = static::refundRyftPayment($record, $note);
+                                    static::rejectAfterRefund($record, $note, $refund);
+                                    Notification::make()->success()->title('Order rejected and Ryft refund submitted')->send();
+                                } catch (\Throwable $e) {
+                                    Notification::make()->danger()->title('Order was not rejected')->body($e->getMessage())->send();
+                                }
+                            }),
                         Action::make('reject')
                             ->label('Reject')
                             ->color('danger')
@@ -3285,6 +3440,8 @@ class PendingOrderResource extends Resource
                             ])
                             ->action(function (PendingOrder $record, array $data, Action $action) {
                                 $note = trim((string)($data['rejection_note'] ?? ''));
+                                $refund = null;
+
                                 $timestamp = now()->format('d-m-Y H:i');
                                 $noteLine = $timestamp . ': ' . ($note !== '' ? $note : 'Rejected');
 
@@ -3297,18 +3454,21 @@ class PendingOrderResource extends Resource
                                 }
                                 data_set($meta, 'rejection_notes', implode("\n", $lines));
                                 data_set($meta, 'rejected_at', now()->toISOString());
+                                if ($refund !== null) {
+                                    data_set($meta, 'ryft.refund_id', $refund['refund_id']);
+                                    data_set($meta, 'ryft.refund_status', $refund['status']);
+                                    data_set($meta, 'ryft.refund_requested_at', now()->toISOString());
+                                }
                                 $record->meta = $meta;
 
                                 // Ensure the order leaves Pending view and shows in Rejected
                                 $record->status = 'rejected';
                                 $record->booking_status = 'rejected';
 
-                                // Flip payment to refunded if it had been paid
-                                $currentPayment = strtolower((string) $record->payment_status);
-                                if ($currentPayment === 'paid') {
-                                    $record->payment_status = 'refunded';
-                                    // If you later add a refunded_at column, uncomment:
-                                    // $record->refunded_at = now();
+                                if ($refund !== null) {
+                                    $record->payment_status = $refund['status'] === 'succeeded'
+                                        ? 'refunded'
+                                        : 'refund_pending';
                                 }
 
                                 $record->save();
@@ -3328,10 +3488,15 @@ class PendingOrderResource extends Resource
                                         }
                                         data_set($orderMeta, 'rejection_notes', implode("\n", $orderLines));
                                         data_set($orderMeta, 'rejected_at', now()->toISOString());
+                                        if ($refund !== null) {
+                                            data_set($orderMeta, 'ryft.refund_id', $refund['refund_id']);
+                                            data_set($orderMeta, 'ryft.refund_status', $refund['status']);
+                                            data_set($orderMeta, 'ryft.refund_requested_at', now()->toISOString());
+                                        }
 
-                                        // Determine payment status
-                                        $orderPaid = strtolower((string) $order->payment_status) === 'paid';
-                                        $newPayment = $orderPaid ? 'refunded' : $order->payment_status;
+                                        $newPayment = $refund !== null
+                                            ? ($refund['status'] === 'succeeded' ? 'refunded' : 'refund_pending')
+                                            : $order->payment_status;
 
                                         $order->forceFill([
                                             'status'         => 'rejected',
