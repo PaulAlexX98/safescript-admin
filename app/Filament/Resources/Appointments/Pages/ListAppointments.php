@@ -78,7 +78,11 @@ class ListAppointments extends ListRecords
                             continue;
                         }
 
-                        $when = $appointment->start_at->copy()->tz('Europe/London');
+                        $when = AppointmentResource::appointmentStartInLondon($appointment);
+                        if (! $when) {
+                            $skipped++;
+                            continue;
+                        }
                         $name = $firstFilled(
                             $appointment->patient_name,
                             trim((string) (($appointment->first_name ?? '') . ' ' . ($appointment->last_name ?? ''))),

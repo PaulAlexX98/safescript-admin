@@ -2897,6 +2897,11 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
         }
     }
 
+    public static function appointmentStartInLondon($record): ?\Carbon\Carbon
+    {
+        return static::displayStartAtFor($record)?->copy()->tz('Europe/London');
+    }
+
     public static function getPages(): array
     {
         $pages = [
