@@ -624,7 +624,7 @@ class OrderResource extends Resource
                 ?? data_get($meta, 'shipping.response.createdOrders.0.trackingNumber')
                 ?? data_get($meta, 'shipping.response.createdOrders.0.packages.0.trackingNumber');
 
-            if (! $clickAndDropOrderIdentifier || ! $trackingNumber) {
+            if (! $clickAndDropOrderIdentifier) {
                 continue;
             }
 
@@ -638,8 +638,21 @@ class OrderResource extends Resource
             try {
                 $clickAndDropOrder = $clickAndDrop->getOrder($clickAndDropOrderIdentifier);
 
-                $isManifested = filled(data_get($clickAndDropOrder, 'manifestedOn'))
-                    || filled(data_get($clickAndDropOrder, 'shippedOn'));
+                // Labels created through Click & Drop are not always written back
+                // to the order metadata. Use the authoritative order response so
+                // those orders are not silently skipped before they can be checked.
+                $trackingNumber = $trackingNumber
+                    ?? data_get($clickAndDropOrder, 'trackingNumber')
+                    ?? data_get($clickAndDropOrder, 'packages.0.trackingNumber');
+
+                if (! $trackingNumber) {
+                    throw new \RuntimeException('No Click & Drop tracking number found for order.');
+                }
+
+                // Click & Drop can populate shippedOn as soon as a label is created
+                // and ready to print. Only manifestedOn confirms that Royal Mail has
+                // accepted the shipment, so do not send the customer email before it.
+                $isManifested = filled(data_get($clickAndDropOrder, 'manifestedOn'));
 
                 if (! $isManifested) {
                     $result['skipped_not_manifested']++;
