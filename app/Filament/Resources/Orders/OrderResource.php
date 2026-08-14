@@ -400,20 +400,29 @@ class OrderResource extends Resource
             ])
             ->headerActions([
                 Action::make('sendRoyalMailDespatchEmails')
-                    ->label('Send Royal Mail Despatch Emails')
+                    ->label('Send selected Royal Mail despatch emails')
                     ->icon('heroicon-o-paper-airplane')
                     ->color('success')
                     ->requiresConfirmation()
-                    ->modalHeading('Send Royal Mail despatch emails')
-                    ->modalDescription('This will check Click & Drop and only email completed orders that have actually been manifested or shipped. Open orders will be skipped.')
-                    ->modalSubmitActionLabel('Check and send')
-                    ->action(function (): void {
-                        $result = static::sendRoyalMailDespatchEmailsForManifestedOrders();
+                    ->modalHeading('Send selected Royal Mail despatch emails')
+                    ->modalDescription('Paste only the tracking numbers from the Royal Mail manifest you are sending. The system will not email any other completed orders.')
+                    ->form([
+                        Textarea::make('tracking_numbers')
+                            ->label('Royal Mail tracking numbers')
+                            ->helperText('One per line, or separated by commas/spaces.')
+                            ->required()
+                            ->rows(8),
+                    ])
+                    ->modalSubmitActionLabel('Verify and send')
+                    ->action(function (array $data): void {
+                        $result = static::sendRoyalMailDespatchEmailsForManifestedOrders(
+                            static::normaliseTrackingNumbers((string) ($data['tracking_numbers'] ?? '')),
+                        );
 
                         \Filament\Notifications\Notification::make()
                             ->success()
                             ->title('Royal Mail despatch emails processed')
-                            ->body("Sent: {$result['sent']}. Skipped not manifested: {$result['skipped_not_manifested']}. Skipped already sent: {$result['skipped_already_sent']}. Failed: {$result['failed']}.")
+                            ->body("Sent: {$result['sent']}. Not selected: {$result['skipped_not_selected']}. Skipped not manifested: {$result['skipped_not_manifested']}. Skipped already sent: {$result['skipped_already_sent']}. Failed: {$result['failed']}.")
                             ->send();
                     }),
             ])
@@ -590,15 +599,25 @@ class OrderResource extends Resource
             ]);
     }
 
-    protected static function sendRoyalMailDespatchEmailsForManifestedOrders(): array
+    /**
+     * Send only orders whose Click & Drop tracking numbers were explicitly
+     * selected from the manifest being processed. A manifestedOn value alone is
+     * not enough: it remains on historic Click & Drop orders indefinitely.
+     */
+    protected static function sendRoyalMailDespatchEmailsForManifestedOrders(array $selectedTrackingNumbers): array
     {
         $result = [
             'checked' => 0,
             'sent' => 0,
+            'skipped_not_selected' => 0,
             'skipped_not_manifested' => 0,
             'skipped_already_sent' => 0,
             'failed' => 0,
         ];
+
+        if ($selectedTrackingNumbers === []) {
+            throw new \InvalidArgumentException('At least one tracking number must be supplied.');
+        }
 
         $clickAndDrop = app(\App\Services\Shipping\ClickAndDrop::class);
 
@@ -649,6 +668,11 @@ class OrderResource extends Resource
                     throw new \RuntimeException('No Click & Drop tracking number found for order.');
                 }
 
+                if (! in_array(strtoupper((string) $trackingNumber), $selectedTrackingNumbers, true)) {
+                    $result['skipped_not_selected']++;
+                    continue;
+                }
+
                 // Click & Drop can populate shippedOn as soon as a label is created
                 // and ready to print. Only manifestedOn confirms that Royal Mail has
                 // accepted the shipment, so do not send the customer email before it.
@@ -676,6 +700,13 @@ class OrderResource extends Resource
         \Log::info('royalmail.despatch_email.batch_result', $result);
 
         return $result;
+    }
+
+    protected static function normaliseTrackingNumbers(string $trackingNumbers): array
+    {
+        $numbers = preg_split('/[\s,;]+/', strtoupper(trim($trackingNumbers))) ?: [];
+
+        return array_values(array_unique(array_filter($numbers)));
     }
 
     protected static function sendRoyalMailDespatchEmail(Order $order, string $trackingNumber, array $clickAndDropOrder = []): void
