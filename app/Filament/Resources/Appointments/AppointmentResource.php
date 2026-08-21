@@ -1383,7 +1383,14 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                     ->email()
                     ->maxLength(191)
                     ->required()
-                    ->columnSpan(12),
+                    ->columnSpan(6),
+
+                \Filament\Forms\Components\TextInput::make('phone')
+                    ->label('Contact number')
+                    ->tel()
+                    ->maxLength(50)
+                    ->dehydrated(fn () => \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'phone'))
+                    ->columnSpan(6),
 
                 \Filament\Forms\Components\Hidden::make('service')
                     ->dehydrated(true),
@@ -1807,7 +1814,7 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                     ->button()
                     ->color('gray')
                     ->icon('heroicon-o-eye')
-                    ->url(fn ($record) => static::fastOrderDetailsUrlForRecord($record))
+                    ->url(fn ($record) => static::appointmentDetailsUrlForRecord($record))
                     ->openUrlInNewTab(),
 
                 \Filament\Actions\Action::make('addSixMonthReview')
@@ -2002,163 +2009,7 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                             ->send();
                     }),
 
-                \Filament\Actions\Action::make('send_reminder_email')
-                    ->label('Send reminder')
-                    ->button()
-                    ->color('info')
-                    ->icon('heroicon-o-envelope')
-                    ->hidden()
-                    ->requiresConfirmation()
-                    ->modalHeading('Send appointment reminder')
-                    ->modalDescription('This sends a reminder email to the patient for their appointment today.')
-                    ->visible(function (Appointment $record): bool {
-                        $start = static::displayStartAtFor($record);
-                        $status = strtolower(trim((string) ($record->status ?? '')));
-
-                        return $start !== null
-                            && $start->copy()->tz('Europe/London')->isToday()
-                            && ! static::hasUnpaidPayment($record)
-                            && ! in_array($status, ['cancelled', 'canceled', 'void', 'failed', 'completed', 'complete', 'done'], true);
-                    })
-                    ->action(function (Appointment $record): void {
-                        $order = static::findRelatedOrder($record);
-                        $meta = is_array($order?->meta ?? null)
-                            ? $order->meta
-                            : (json_decode($order?->meta ?? '[]', true) ?: []);
-                        $firstFilled = function (...$values): string {
-                            foreach ($values as $value) {
-                                $value = trim((string) $value);
-                                if ($value !== '') {
-                                    return $value;
-                                }
-                            }
-
-                            return '';
-                        };
-
-                        $email = $firstFilled(
-                            $record->email,
-                            data_get($meta, 'patient.email'),
-                            data_get($meta, 'customer.email'),
-                            $order?->email,
-                            optional($order?->user)->email,
-                        );
-
-                        if ($email === '') {
-                            Notification::make()
-                                ->danger()
-                                ->title('No patient email address is available')
-                                ->send();
-
-                            return;
-                        }
-
-                        $start = static::displayStartAtFor($record);
-                        if (! $start) {
-                            Notification::make()
-                                ->danger()
-                                ->title('The appointment time is unavailable')
-                                ->send();
-
-                            return;
-                        }
-
-                        $when = $start->copy()->tz('Europe/London');
-                        $patientName = $firstFilled(
-                            $record->patient_name,
-                            trim((string) (($record->first_name ?? '') . ' ' . ($record->last_name ?? ''))),
-                            data_get($meta, 'patient.first_name'),
-                            data_get($meta, 'first_name'),
-                            optional($order?->user)->first_name,
-                        );
-                        $patientName = $patientName !== '' ? $patientName : 'there';
-
-                        $reference = $firstFilled(
-                            $record->order_reference,
-                            $order?->reference,
-                            $record->getKey(),
-                        );
-                        $service = $firstFilled(
-                            $record->service_name,
-                            $record->service,
-                            data_get($meta, 'service_name'),
-                            data_get($meta, 'service'),
-                        );
-                        $service = $service !== '' ? $service : 'your Pharmacy Express';
-
-                        $changeEmail = 'info@pharmacy-express.co.uk';
-                        $changeSubject = rawurlencode('Appointment change request – ' . $reference);
-                        $changeBody = rawurlencode('Hello Pharmacy Express,\n\nI would like to change my appointment on ' . $when->format('d M Y, H:i') . '.\n\nOrder reference: ' . $reference);
-                        $changeUrl = 'mailto:' . $changeEmail . '?subject=' . $changeSubject . '&body=' . $changeBody;
-
-                        $safeName = e($patientName);
-                        $safeReference = e($reference);
-                        $safeService = e($service);
-                        $safeWhen = e($when->format('d M Y, H:i'));
-                        $safeChangeUrl = e($changeUrl);
-                        $subject = 'Appointment reminder – ' . $reference;
-
-                        $body = '<!doctype html>
-                        <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' . e($subject) . '</title></head>
-                        <body style="margin:0;padding:0;background:#f6f6f4;">
-                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;margin:0;padding:32px 12px;">
-                                <tr><td align="center">
-                                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid rgba(18,63,64,.14);">
-                                        <tr><td style="background:#123f40;padding:34px 34px 30px;border-bottom:4px solid #10c7a4;">
-                                            <p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:12px;letter-spacing:.20em;text-transform:uppercase;color:#10c7a4;font-weight:700;">Pharmacy Express</p>
-                                            <h1 style="margin:0;font-family:Arial,sans-serif;font-size:34px;line-height:38px;color:#ffffff;">Appointment reminder</h1>
-                                        </td></tr>
-                                        <tr><td style="padding:34px;">
-                                            <p style="margin:0 0 18px;font-family:Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">Hi ' . $safeName . ',</p>
-                                            <p style="margin:0 0 22px;font-family:Arial,sans-serif;font-size:16px;line-height:25px;color:#111827;">This is a reminder that your <strong>' . $safeService . '</strong> appointment is today at <strong>' . $safeWhen . '</strong>.</p>
-                                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef8f3;border:1px solid rgba(18,63,64,.16);margin:0 0 24px;"><tr><td style="padding:20px 24px;">
-                                                <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">Appointment reference</p>
-                                                <p style="margin:0;font-family:Arial,sans-serif;font-size:20px;line-height:28px;color:#123f40;font-weight:700;">' . $safeReference . '</p>
-                                            </td></tr></table>
-                                            <p style="margin:0 0 18px;font-family:Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">If you need to change the time, please use the button below.</p>
-                                            <a href="' . $safeChangeUrl . '" style="display:inline-block;background:#123f40;color:#ffffff;padding:14px 20px;text-decoration:none;font-family:Arial,sans-serif;font-size:15px;font-weight:700;">Request a time change</a>
-                                        </td></tr>
-                                    </table>
-                                </td></tr>
-                            </table>
-                        </body></html>';
-
-                        try {
-                            $fromAddress = config('mail.from.address') ?: 'info@pharmacy-express.co.uk';
-                            $fromName = config('mail.from.name') ?: 'Pharmacy Express';
-
-                            Mail::html($body, function ($mail) use ($email, $subject, $fromAddress, $fromName) {
-                                $mail->from($fromAddress, $fromName)
-                                    ->to($email)
-                                    ->subject($subject);
-                            });
-
-                            \Log::info('appointment.reminder_email_sent', [
-                                'appointment_id' => $record->getKey(),
-                                'order_id' => $order?->getKey(),
-                                'email' => $email,
-                            ]);
-
-                            Notification::make()
-                                ->success()
-                                ->title('Appointment reminder sent')
-                                ->body('The reminder was sent to ' . $email)
-                                ->send();
-                        } catch (\Throwable $e) {
-                            \Log::warning('appointment.reminder_email_failed', [
-                                'appointment_id' => $record->getKey(),
-                                'email' => $email,
-                                'error' => $e->getMessage(),
-                            ]);
-
-                            Notification::make()
-                                ->danger()
-                                ->title('Could not send appointment reminder')
-                                ->body(substr($e->getMessage(), 0, 200))
-                                ->send();
-                        }
-                    }),
-
+                   
                 \Filament\Actions\Action::make('reschedule')
                     ->label('Reschedule')
                     ->button()
@@ -2897,11 +2748,6 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
         }
     }
 
-    public static function appointmentStartInLondon($record): ?\Carbon\Carbon
-    {
-        return static::displayStartAtFor($record)?->copy()->tz('Europe/London');
-    }
-
     public static function getPages(): array
     {
         $pages = [
@@ -3054,30 +2900,6 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
         return null;
     }
 
-    public static function hasUnpaidPayment($record): bool
-    {
-        if (! $record) {
-            return false;
-        }
-
-        $statuses = [strtolower(trim((string) ($record->payment_status ?? '')))];
-        $order = static::findRelatedOrder($record);
-
-        if ($order) {
-            $meta = is_array($order->meta)
-                ? $order->meta
-                : (json_decode($order->meta ?? '[]', true) ?: []);
-            $statuses[] = strtolower(trim((string) ($order->payment_status ?? '')));
-            $statuses[] = strtolower(trim((string) (
-                data_get($meta, 'payment_status')
-                ?? data_get($meta, 'payment.status')
-                ?? ''
-            )));
-        }
-
-        return in_array('unpaid', $statuses, true);
-    }
-
     protected static function resolveOrderRef($record): ?string
     {
         // 1) Use linked order ref if available
@@ -3158,6 +2980,10 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
             ? trim((string) $record->order_reference)
             : '';
 
+        if ($reference === '' && is_string($record->reference ?? null)) {
+            $reference = trim((string) $record->reference);
+        }
+
         if ($reference === '' && ! empty($record->order?->reference)) {
             $reference = trim((string) $record->order->reference);
         }
@@ -3175,6 +3001,27 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
         } catch (\Throwable $e) {
             return null;
         }
+    }
+
+    /**
+     * Manual appointments have no pending order to inspect. Open the appointment
+     * record itself so its patient details (including contact details) are shown.
+     */
+    protected static function appointmentDetailsUrlForRecord($record): ?string
+    {
+        $reference = is_string($record->order_reference ?? null)
+            ? trim((string) $record->order_reference)
+            : '';
+
+        if (str_starts_with(strtoupper($reference), 'PCAO')) {
+            try {
+                return static::getUrl('view', ['record' => $record]);
+            } catch (\Throwable $e) {
+                return static::getUrl('edit', ['record' => $record]);
+            }
+        }
+
+        return static::fastOrderDetailsUrlForRecord($record);
     }
 
     protected static function orderDetailsUrlForRecord($record): string
