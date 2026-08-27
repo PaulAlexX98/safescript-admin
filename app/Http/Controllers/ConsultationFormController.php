@@ -1348,8 +1348,15 @@ class ConsultationFormController extends Controller
                             if (empty($ord->status) || in_array($ord->status, ['pending', 'processing', 'approved'], true)) {
                                 $ord->status = 'completed';
                             }
+                            if (Schema::hasColumn($ord->getTable(), 'booking_status')
+                                && (empty($ord->booking_status) || in_array(strtolower((string) $ord->booking_status), ['pending', 'processing', 'approved', 'booked'], true))) {
+                                $ord->booking_status = 'completed';
+                            }
                             // Persist shipping meta echo for quick access from order views
                             $meta = is_array($ord->meta) ? $ord->meta : (json_decode($ord->meta ?? '[]', true) ?: []);
+                            // A completing pharmacist session supersedes any earlier
+                            // frontend intake/RAF session retained in order metadata.
+                            $meta['consultation_session_id'] = $session->id;
                             $sessMeta = is_array($session->meta) ? $session->meta : (json_decode($session->meta ?? '[]', true) ?: []);
                             if (data_get($sessMeta, 'shipping')) {
                                 $meta['shipping'] = array_replace_recursive($meta['shipping'] ?? [], (array) data_get($sessMeta, 'shipping'));
@@ -2105,6 +2112,10 @@ class ConsultationFormController extends Controller
                     if (empty($order->status) || in_array($order->status, ['pending', 'processing', 'approved'], true)) {
                         $order->status = 'completed';
                     }
+                    if (Schema::hasColumn($order->getTable(), 'booking_status')
+                        && (empty($order->booking_status) || in_array(strtolower((string) $order->booking_status), ['pending', 'processing', 'approved', 'booked'], true))) {
+                        $order->booking_status = 'completed';
+                    }
                     $order->save();
 
                     // Also mark any linked appointment as completed by order_reference
@@ -2187,7 +2198,10 @@ class ConsultationFormController extends Controller
                     ? $order->meta
                     : (json_decode($order->meta ?? '[]', true) ?: []);
 
-                if (! isset($orderMeta['consultation_session_id'])) {
+                // The completing pharmacist session is authoritative. A frontend RAF
+                // session may already be present here, but must not hide the completed
+                // consultation, its declarations, or its generated PDFs.
+                if ((int) ($orderMeta['consultation_session_id'] ?? 0) !== (int) $session->id) {
                     $orderMeta['consultation_session_id'] = $session->id;
                     $order->meta = $orderMeta;
                     $order->save();
@@ -2695,7 +2709,10 @@ class ConsultationFormController extends Controller
                 'wegovy-pill-semaglutide-pre-order',
             ], true);
 
-        $isInjectableWeight = $isWeight && ! $isWegovyPill;
+        $isFoundayo = $svc === 'weight-management'
+            && $treatmentSlug === 'foundayo-orforglipron';
+
+        $isInjectableWeight = $isWeight && ! $isWegovyPill && ! $isFoundayo;
         $isMounjaro = Str::contains($svc, 'mounjaro')
             || Str::contains($treatmentSlug, 'mounjaro');
 
@@ -2706,6 +2723,7 @@ class ConsultationFormController extends Controller
             'treatment_slug' => $treatmentSlug,
             'is_weight' => $isWeight,
             'is_wegovy_pill' => $isWegovyPill,
+            'is_foundayo' => $isFoundayo,
             'is_injectable_weight' => $isInjectableWeight,
             'is_mounjaro' => $isMounjaro,
         ]);
@@ -2951,15 +2969,19 @@ class ConsultationFormController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        $subject = $isWegovyPill
-            ? 'Your Wegovy pill order has been completed – '.$ref
-            : 'Your Pharmacy Express order has been completed – '.$ref;
+        $subject = match (true) {
+            $isWegovyPill => 'Your Wegovy pill order has been completed – '.$ref,
+            $isFoundayo => 'Your Foundayo order has been completed – '.$ref,
+            default => 'Your Pharmacy Express order has been completed – '.$ref,
+        };
 
         $safeName = e($name ?: 'there');
         $safeRef = e((string) $ref);
 
         if ($isWegovyPill) {
             $documentsIntro = 'Your Wegovy pill order has been completed by our pharmacy team. We will email you again once your Royal Mail tracking is active. Please read the tablet instructions below carefully before starting your treatment.';
+        } elseif ($isFoundayo) {
+            $documentsIntro = 'Your Foundayo order has been completed by our pharmacy team. We will email you again once your Royal Mail tracking is active. Please read the tablet instructions below carefully before starting your treatment.';
         } elseif ($isWeight) {
             $documentsIntro = 'Your order has been completed by our pharmacy team. We will email you again once your Royal Mail tracking is active. Please see the attached documents, which include your medication review, clinical consultation information and patient education guides.';
         } else {
@@ -3103,6 +3125,95 @@ class ConsultationFormController extends Controller
 
                                 <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
                                     If pancreatitis is confirmed, do not restart Wegovy or another GLP-1 treatment unless advised by an appropriate clinician.
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>';
+        } elseif ($isFoundayo) {
+            $foundayoGuideUrl = rtrim((string) config('app.frontend_url', 'https://www.pharmacy-express.co.uk'), '/')
+                . '/blogs/weight-loss/foundayo-orforglipron';
+            $safeFoundayoGuideUrl = e($foundayoGuideUrl);
+            $wegovyPillButtonHtml = '
+            <tr>
+                <td style="padding:0 34px 26px 34px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef8f3;border:1px solid rgba(18,63,64,.16);">
+                        <tr>
+                            <td style="padding:24px;text-align:center;">
+                                <p style="margin:0 0 16px 0;font-family:Helvetica,Arial,sans-serif;font-size:16px;line-height:24px;color:#334155;">
+                                    For more information, click the button below.
+                                </p>
+
+                                <a
+                                    href="'.$safeFoundayoGuideUrl.'"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style="display:inline-block;background:#123f40;color:#ffffff;padding:17px 34px;text-decoration:none;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:18px;line-height:24px;font-weight:700;"
+                                >
+                                    Check guide on Foundayo
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>';
+
+            $weightSafetyHtml = '
+            <tr>
+                <td style="padding:0 34px 26px 34px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f6f4;border:1px solid rgba(18,63,64,.14);">
+                        <tr>
+                            <td style="padding:22px 24px;">
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    How to take Foundayo
+                                </p>
+
+                                <p style="margin:0 0 14px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Foundayo is a once-daily tablet. Take it at a convenient, consistent time each day.
+                                </p>
+
+                                <ul style="margin:0 0 20px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    <li style="margin:0 0 8px 0;">Take one tablet once daily, with or without food.</li>
+                                    <li style="margin:0 0 8px 0;">No fasting is required and there are no water restrictions.</li>
+                                    <li style="margin:0;">Swallow the tablet whole with water. Do not split, crush or chew it.</li>
+                                </ul>
+
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    How does Foundayo dose escalation work?
+                                </p>
+
+                                <p style="margin:0 0 14px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Your dose may be increased after at least 30 days, when prescribed by your clinician.
+                                </p>
+
+                                <ul style="margin:0 0 20px 18px;padding:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    <li style="margin:0 0 8px 0;"><strong>Starting dose:</strong> 0.8mg once daily.</li>
+                                    <li style="margin:0 0 8px 0;"><strong>Month 2:</strong> 2.5mg once daily.</li>
+                                    <li style="margin:0 0 8px 0;"><strong>Month 3:</strong> 5.5mg once daily.</li>
+                                    <li style="margin:0 0 8px 0;"><strong>Month 4:</strong> 9mg once daily.</li>
+                                    <li style="margin:0 0 8px 0;"><strong>Month 5:</strong> 14.5mg once daily.</li>
+                                    <li style="margin:0;"><strong>Maximum dose:</strong> 17.2mg once daily.</li>
+                                </ul>
+
+                                <p style="margin:0 0 22px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    You may stay on a dose for longer if side effects do not settle or you are happy with your progress. Always take the strength prescribed by your clinician.
+                                </p>
+
+                                <p style="margin:0 0 14px 0;font-family:Outfit,Arial,Helvetica,sans-serif;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#123f40;font-weight:700;">
+                                    Other medicines and safety information
+                                </p>
+
+                                <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Tell your pharmacist about all prescribed, over-the-counter and herbal medicines you take. Use barrier or non-oral contraception for 30 days after starting Foundayo and for 30 days after each dose increase.
+                                </p>
+
+                                <p style="margin:0 0 12px 0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Common side effects can include nausea, constipation, diarrhoea, vomiting, indigestion and stomach pain. Contact the pharmacy if side effects persist or worsen.
+                                </p>
+
+                                <p style="margin:0;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#334155;">
+                                    Seek urgent medical attention if you experience severe, persistent stomach pain, pain spreading to your back, repeated vomiting, signs of dehydration, a serious allergic reaction, sudden vision changes or symptoms of bowel obstruction.
                                 </p>
                             </td>
                         </tr>

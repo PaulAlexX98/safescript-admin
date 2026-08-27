@@ -355,14 +355,27 @@ class CompletedOrderDetails extends ViewRecord
                     // Compose line1 with ALL items shown (no "+N more")
                     if (!empty($allItems)) {
                         $lines = [];
+                        $productSlugs = [];
                         foreach ($allItems as $row) {
                             $lines[] = $renderItem((array) $row);
+                            $slug = trim((string) (
+                                data_get($row, 'slug')
+                                ?? data_get($row, 'product_slug')
+                                ?? data_get($row, 'product.slug')
+                                ?? data_get($row, 'selectedProduct.slug')
+                                ?? ''
+                            ));
+
+                            if ($slug !== '') {
+                                $productSlugs[] = $slug;
+                            }
                         }
                         // Join all items with a middle dot separator to keep it compact
                         // Example: "Hepatitis A • Typhoid Vi • Malarone 250mg"
                         $line1 = trim(implode(' • ', array_filter($lines, fn ($s) => $s !== '')));
                     } else {
                         $line1 = '';
+                        $productSlugs = [];
                     }
 
                     // Patient
@@ -389,6 +402,7 @@ class CompletedOrderDetails extends ViewRecord
 
                     $payload = [
                         'line1'      => $line1,
+                        'product_slugs' => $productSlugs,
                         'directions' => $directions,
                         'warning'    => $warning,     // supports two lines in the builder
                         'patient'    => $patient,

@@ -9,15 +9,26 @@ class ZplLabelBuilder
     public function forOrder(array $data): string
     {
         $line1 = mb_strtoupper(trim($data['line1'] ?? ''));
+        $productSlugs = array_map(
+            fn ($slug) => mb_strtolower(trim((string) $slug)),
+            (array) ($data['product_slugs'] ?? []),
+        );
 
-        $isWegovyPill = str_contains($line1, 'WEGOVY')
-            && (str_contains($line1, 'TABLET') || str_contains($line1, 'PILL'));
+        // Both treatments are oral daily tablets and require the same dispensing
+        // direction. Use slugs when they are available, with a name-based fallback
+        // for older orders whose item metadata has no slug.
+        $isDailyTablet = in_array('wegovy-pill-semaglutide', $productSlugs, true)
+            || in_array('wegovy-pill-semaglutide-pre-order', $productSlugs, true)
+            || in_array('foundayo-orforglipron', $productSlugs, true)
+            || (str_contains($line1, 'WEGOVY')
+                && (str_contains($line1, 'TABLET') || str_contains($line1, 'PILL')))
+            || str_contains($line1, 'FOUNDAYO');
 
-        $defaultDirections = $isWegovyPill
+        $defaultDirections = $isDailyTablet
             ? 'Take one tablet once daily as directed'
             : 'Use once a week same day as directed';
 
-        $directions = $isWegovyPill
+        $directions = $isDailyTablet
             ? $defaultDirections
             : trim($data['directions'] ?? $defaultDirections);
         $warning    = trim((string) ($data['warning'] ?? ''));
