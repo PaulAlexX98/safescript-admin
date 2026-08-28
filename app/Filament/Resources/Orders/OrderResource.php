@@ -23,6 +23,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\CheckboxList;
 use App\Filament\Resources\Orders\CompletedOrderResource as CompletedOrders;
 use Illuminate\Support\Facades\DB;
 
@@ -399,30 +400,52 @@ class OrderResource extends Resource
                 // No filters by default for generic Orders resource
             ])
             ->headerActions([
-                Action::make('sendRoyalMailDespatchEmails')
-                    ->label('Send selected Royal Mail despatch emails')
+                Action::make('chooseRoyalMailDespatchEmails')
+                    ->label('Choose despatch emails')
                     ->icon('heroicon-o-paper-airplane')
                     ->color('success')
-                    ->requiresConfirmation()
-                    ->modalHeading('Send selected Royal Mail despatch emails')
-                    ->modalDescription('Paste only the tracking numbers from the Royal Mail manifest you are sending. The system will not email any other completed orders.')
-                    ->form([
-                        Textarea::make('tracking_numbers')
-                            ->label('Royal Mail tracking numbers')
-                            ->helperText('One per line, or separated by commas/spaces.')
-                            ->required()
-                            ->rows(8),
-                    ])
-                    ->modalSubmitActionLabel('Verify and send')
+                    ->modalHeading('Choose Royal Mail despatch emails')
+                    ->modalDescription('Click & Drop is checked before this list is shown. Select the patients to email; nobody is selected by default.')
+                    ->form(function (): array {
+                        $recipients = app(\App\Services\Shipping\DespatchEmailQueue::class)->eligible();
+                        $options = [];
+                        $descriptions = [];
+                        foreach ($recipients as $recipient) {
+                            $id = (int) $recipient['id'];
+                            $name = e((string) $recipient['name']);
+                            $reference = e((string) $recipient['reference']);
+                            // This is intentionally an immediate queue operation. Removing a
+                            // patient must survive closing the modal or a later bulk send.
+                            $options[$id] = "{$name} — {$reference} <button type=\"button\" title=\"Remove from despatch-email queue\" aria-label=\"Remove {$name} from despatch-email queue\" class=\"ml-2 text-danger-600 hover:text-danger-800\" x-on:click.stop.prevent=\"fetch('".route('admin.despatch-emails.skip')."',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRF-TOKEN':'".csrf_token()."'},body:JSON.stringify({order_ids:[{$id}]})}).then(r=>{if(!r.ok)throw new Error();\$el.closest('.fi-fo-checkbox-list-option-ctn').remove()}).catch(()=>alert('Unable to remove this patient from the queue.'))\">&#215;</button>";
+                            $descriptions[$recipient['id']] = $recipient['email'];
+                        }
+                        return [
+                            CheckboxList::make('order_ids')
+                                ->label(count($recipients).' email'.(count($recipients) === 1 ? '' : 's').' ready to send')
+                                ->options($options)
+                                ->descriptions($descriptions)
+                                ->allowHtml()
+                                ->bulkToggleable()
+                                ->selectAllAction(fn (Action $action) => $action->label('Select all'))
+                                ->deselectAllAction(fn (Action $action) => $action->label('Clear'))
+                                ->columns(1)
+                                ->default([])
+                                ->helperText('Use Select all or Clear. Selected orders are checked again immediately before sending.'),
+                        ];
+                    })
+                    ->modalSubmitActionLabel('Send selected emails')
                     ->action(function (array $data): void {
-                        $result = static::sendRoyalMailDespatchEmailsForManifestedOrders(
-                            static::normaliseTrackingNumbers((string) ($data['tracking_numbers'] ?? '')),
-                        );
+                        $ids = $data['order_ids'] ?? [];
+                        if ($ids === []) {
+                            \Filament\Notifications\Notification::make()->warning()->title('No despatch emails selected')->send();
+                            return;
+                        }
+                        $result = app(\App\Services\Shipping\DespatchEmailQueue::class)->send($ids);
 
                         \Filament\Notifications\Notification::make()
                             ->success()
                             ->title('Royal Mail despatch emails processed')
-                            ->body("Sent: {$result['sent']}. Not selected: {$result['skipped_not_selected']}. Skipped not manifested: {$result['skipped_not_manifested']}. Skipped already sent: {$result['skipped_already_sent']}. Failed: {$result['failed']}.")
+                            ->body("Sent: {$result['sent']}. No longer eligible: {$result['skipped']}. Failed: {$result['failed']}.")
                             ->send();
                     }),
             ])
@@ -709,7 +732,7 @@ class OrderResource extends Resource
         return array_values(array_unique(array_filter($numbers)));
     }
 
-    protected static function sendRoyalMailDespatchEmail(Order $order, string $trackingNumber, array $clickAndDropOrder = []): void
+    public static function sendRoyalMailDespatchEmail(Order $order, string $trackingNumber, array $clickAndDropOrder = []): void
     {
         $meta = static::normaliseOrderMeta($order->meta);
 
@@ -792,6 +815,8 @@ class OrderResource extends Resource
 
         data_set($meta, 'shipping.dispatch_email_sent_at', now()->toIso8601String());
         data_set($meta, 'shipping.dispatch_email_sent_by', auth()->id());
+        data_set($meta, 'shipping.dispatch_email_sending_at', null);
+        data_set($meta, 'shipping.dispatch_email_sending_by', null);
         data_set($meta, 'shipping.manifested_at', data_get($clickAndDropOrder, 'manifestedOn'));
         data_set($meta, 'shipping.shipped_at', data_get($clickAndDropOrder, 'shippedOn'));
         data_set($meta, 'shipping.tracking_number', $trackingNumber);

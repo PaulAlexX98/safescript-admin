@@ -26,6 +26,7 @@ use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
 use App\Services\Consultations\StartConsultation;
 use App\Http\Controllers\ConsultationFormController;
 use App\Http\Controllers\ConsultationRunnerController;
+use App\Http\Controllers\Admin\DespatchEmailQueueController;
 
 
 Route::get('/consultations/{session}/risk-assessment', function (ConsultationSession $session, Illuminate\Http\Request $r) {
@@ -86,6 +87,14 @@ Route::get('/consultations/{session}/reorder', function (ConsultationSession $se
 Route::middleware(['web', FilamentAuthenticate::class])->group(function () {
     Route::post('/consultations/save', [ConsultationFormController::class, 'saveByPost'])
         ->name('consultations.save');
+});
+
+// The completed-orders screen uses these authenticated endpoints to check and
+// operate the despatch queue. They are deliberately not public API routes.
+Route::middleware(['web', FilamentAuthenticate::class])->prefix('admin/despatch-emails')->group(function () {
+    Route::get('eligible', [DespatchEmailQueueController::class, 'eligible'])->name('admin.despatch-emails.eligible');
+    Route::post('send', [DespatchEmailQueueController::class, 'send'])->name('admin.despatch-emails.send');
+    Route::post('skip', [DespatchEmailQueueController::class, 'skip'])->name('admin.despatch-emails.skip');
 });
 
 Route::middleware([
