@@ -15,6 +15,7 @@ use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
+use Filament\Schemas\Components\Html;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema as FilamentSchema;
 use Filament\Support\Icons\Heroicon;
@@ -404,33 +405,55 @@ class OrderResource extends Resource
                     ->label('Choose despatch emails')
                     ->icon('heroicon-o-paper-airplane')
                     ->color('success')
-                    ->modalHeading('Choose Royal Mail despatch emails')
-                    ->modalDescription('Click & Drop is checked before this list is shown. Select the patients to email; nobody is selected by default.')
+                    ->modalHeading('Choose despatch emails')
+                    ->modalDescription('Only manifested Royal Mail orders with tracking are shown. Select the patients you want to email.')
+                    ->modalWidth('xl')
                     ->form(function (): array {
                         $recipients = app(\App\Services\Shipping\DespatchEmailQueue::class)->eligible();
                         $options = [];
-                        $descriptions = [];
                         foreach ($recipients as $recipient) {
                             $id = (int) $recipient['id'];
                             $name = e((string) $recipient['name']);
                             $reference = e((string) $recipient['reference']);
+                            $email = e((string) $recipient['email']);
                             // This is intentionally an immediate queue operation. Removing a
                             // patient must survive closing the modal or a later bulk send.
-                            $options[$id] = "{$name} — {$reference} <button type=\"button\" title=\"Remove from despatch-email queue\" aria-label=\"Remove {$name} from despatch-email queue\" class=\"ml-2 text-danger-600 hover:text-danger-800\" x-on:click.stop.prevent=\"fetch('".route('admin.despatch-emails.skip')."',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRF-TOKEN':'".csrf_token()."'},body:JSON.stringify({order_ids:[{$id}]})}).then(r=>{if(!r.ok)throw new Error();\$el.closest('.fi-fo-checkbox-list-option-ctn').remove()}).catch(()=>alert('Unable to remove this patient from the queue.'))\">&#215;</button>";
-                            $descriptions[$recipient['id']] = $recipient['email'];
+                            $options[$id] = "<span class=\"dispatch-email-recipient\"><span class=\"dispatch-email-patient\"><strong>{$name}</strong><small>{$email}</small></span><span class=\"dispatch-email-reference\"><small>Order reference</small><strong>{$reference}</strong></span><button type=\"button\" title=\"Remove from despatch-email queue\" aria-label=\"Remove {$name} from despatch-email queue\" class=\"dispatch-email-remove\" x-on:click.stop.prevent=\"fetch('".route('admin.despatch-emails.skip')."',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRF-TOKEN':'".csrf_token()."'},body:JSON.stringify({order_ids:[{$id}]})}).then(r=>{if(!r.ok)throw new Error();\$el.closest('.fi-fo-checkbox-list-option-ctn').remove()}).catch(()=>alert('Unable to remove this patient from the queue.'))\">&#215;</button></span>";
                         }
                         return [
+                            Html::make('<style>
+                                .dispatch-email-queue .fi-fo-checkbox-list-option-ctn { margin: 0 0 .55rem; border: 1px solid rgba(148,163,184,.28); border-radius: .7rem; background: rgba(30,41,59,.28); overflow: hidden; }
+                                .dispatch-email-queue .fi-fo-checkbox-list-option-ctn:has(input:checked) { border-color: rgb(16,185,129); background: rgba(6,78,59,.25); }
+                                .dispatch-email-queue .fi-fo-checkbox-list-option { align-items: center; gap: .85rem; padding: .8rem .9rem; }
+                                .dispatch-email-queue .fi-fo-checkbox-list-option-text { width: 100%; }
+                                .dispatch-email-recipient { display: grid; grid-template-columns: minmax(0, 1fr) auto 2rem; align-items: center; gap: 1rem; width: 100%; }
+                                .dispatch-email-patient, .dispatch-email-reference { display: grid; gap: .18rem; }
+                                .dispatch-email-patient strong { color: #f8fafc; font-size: .925rem; }
+                                .dispatch-email-patient small, .dispatch-email-reference small { color: #94a3b8; font-size: .75rem; }
+                                .dispatch-email-reference { text-align: right; }
+                                .dispatch-email-reference strong { color: #cbd5e1; font-size: .8rem; letter-spacing: .025em; }
+                                .dispatch-email-remove { display: grid; place-items: center; width: 1.8rem; height: 1.8rem; border: 1px solid rgba(248,113,113,.42); border-radius: 999px; color: #fca5a5; font-size: 1.2rem; line-height: 1; }
+                                .dispatch-email-remove:hover { background: rgba(127,29,29,.35); color: #fff; }
+                                @media (max-width: 640px) { .dispatch-email-recipient { grid-template-columns: minmax(0, 1fr) 2rem; } .dispatch-email-reference { display: none; } }
+                            </style>'),
                             CheckboxList::make('order_ids')
-                                ->label(count($recipients).' email'.(count($recipients) === 1 ? '' : 's').' ready to send')
+                                ->label(count($recipients).' ready to send')
                                 ->options($options)
-                                ->descriptions($descriptions)
                                 ->allowHtml()
                                 ->bulkToggleable()
                                 ->selectAllAction(fn (Action $action) => $action->label('Select all'))
                                 ->deselectAllAction(fn (Action $action) => $action->label('Clear'))
+                                ->searchable(fn (): bool => count($recipients) > 6)
+                                ->searchPrompt('Search patient, order reference, or email')
                                 ->columns(1)
                                 ->default([])
-                                ->helperText('Use Select all or Clear. Selected orders are checked again immediately before sending.'),
+                                ->extraAttributes([
+                                    // Keep the modal actions visible while allowing every
+                                    // eligible recipient to be reached in a compact list.
+                                    'class' => 'dispatch-email-queue',
+                                    'style' => 'max-height: min(46vh, 440px); overflow-y: auto; padding: .25rem .5rem .25rem 0;',
+                                ])
+                                ->helperText('Nothing is selected by default. Each selected order is checked again before sending.'),
                         ];
                     })
                     ->modalSubmitActionLabel('Send selected emails')
