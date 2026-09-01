@@ -2865,6 +2865,30 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
         return false;
     }
 
+    /**
+     * Return an appointment's UTC start time in the timezone used in patient emails.
+     */
+    public static function appointmentStartInLondon(Appointment $appointment): ?Carbon
+    {
+        $startAt = $appointment->getRawOriginal('start_at') ?? $appointment->start_at;
+
+        if (blank($startAt)) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($startAt, 'UTC')->tz('Europe/London');
+        } catch (\Throwable $e) {
+            \Log::warning('appointment.reminder_invalid_start_at', [
+                'appointment_id' => $appointment->getKey(),
+                'start_at' => $startAt,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
     public static function findRelatedOrder($record): ?\App\Models\Order
     {
         if (! $record) return null;
