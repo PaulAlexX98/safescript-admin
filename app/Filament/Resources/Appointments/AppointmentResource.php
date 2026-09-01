@@ -2834,6 +2834,37 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
         }
     }
 
+    /**
+     * Determine whether an appointment is linked to an order that is explicitly unpaid.
+     *
+     * Manual appointments and orders without a payment status are not considered unpaid.
+     */
+    public static function hasUnpaidPayment(Appointment $appointment): bool
+    {
+        $order = static::findRelatedOrder($appointment);
+
+        if (! $order) {
+            return false;
+        }
+
+        $meta = is_array($order->meta)
+            ? $order->meta
+            : (json_decode($order->meta ?? '[]', true) ?: []);
+
+        $statuses = [
+            $order->payment_status ?? null,
+            data_get($meta, 'payment_status'),
+        ];
+
+        foreach ($statuses as $status) {
+            if (strtolower(trim((string) $status)) === 'unpaid') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static function findRelatedOrder($record): ?\App\Models\Order
     {
         if (! $record) return null;
