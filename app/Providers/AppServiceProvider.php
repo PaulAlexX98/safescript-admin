@@ -7,6 +7,8 @@ use Illuminate\Support\Facades\View;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use App\Models\User;
+use App\Observers\UserObserver;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -21,6 +23,8 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        User::observe(UserObserver::class);
+
         if (config('admin_performance.enabled')) {
             DB::listen(function (QueryExecuted $query): void {
                 if ($query->time < config('admin_performance.slow_query_ms', 200)) {

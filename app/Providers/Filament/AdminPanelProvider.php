@@ -2,21 +2,22 @@
 
 namespace App\Providers\Filament;
 
-use Illuminate\Support\HtmlString;
-use App\Filament\Resources\Scheduling\Schedules\ScheduleResource;
+use App\Filament\Pages\Auth\EditProfile;
 use App\Filament\Pages\ConsultationRunner;
 use App\Filament\Pages\Dashboard;
-use Filament\Panel;
-use Filament\PanelProvider;
+use App\Filament\Resources\Appointments\AppointmentResource as AppointmentsAppointmentResource;
+use App\Filament\Resources\Scheduling\Schedules\ScheduleResource;
+use App\Filament\Resources\WalkIns\WalkInResource;
+use Filament\Auth\MultiFactor\App\AppAuthentication;
+use Filament\Enums\ThemeMode;
+use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
 use Filament\Navigation\NavigationGroup;
 use Filament\Navigation\NavigationItem;
-use App\Filament\Resources\Appointments\AppointmentResource as AppointmentsAppointmentResource;
-use App\Filament\Resources\WalkIns\WalkInResource;
-use Illuminate\Support\Facades\Route;
+use Filament\Panel;
+use Filament\PanelProvider;
 use Guava\Calendar\CalendarPlugin;
-use Filament\Http\Middleware\Authenticate as FilamentAuthenticate;
-use App\Filament\Pages\Auth\EditProfile;
-use Filament\Enums\ThemeMode;
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\HtmlString;
 
 class AdminPanelProvider extends PanelProvider
 {
@@ -37,10 +38,14 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->topbar(false)
             ->login()
-            ->registration()
             ->passwordReset()
             ->emailVerification()
             ->emailChangeVerification()
+            ->multiFactorAuthentication([
+                AppAuthentication::make()
+                    ->recoverable()
+                    ->brandName('Pharmacy Express Admin'),
+            ])
             ->renderHook(
                 'panels::body.end',
                 fn () => view('components.layout.app')
@@ -98,7 +103,7 @@ class AdminPanelProvider extends PanelProvider
                     return '';
                 }
 
-                $style = <<<HTML
+                $style = <<<'HTML'
 <style>
   .fi-sidebar,
   .fi-topbar,
