@@ -2168,7 +2168,7 @@ class PendingOrderResource extends Resource
                             return $count ? 'Products (' . $count . ')' : 'Products';
                         })
                             ->collapsible()
-                            ->collapsed()
+                            ->collapsed(false)
                             ->schema([
                                 RepeatableEntry::make('products')
                                     ->hiddenLabel()
@@ -2509,7 +2509,7 @@ class PendingOrderResource extends Resource
                         // Consultation QA snapshot (RAF only — rendered via Blade)
                         Section::make('Assessment Answers')
                             ->collapsible()
-                            ->collapsed()
+                            ->collapsed(false)
                             ->schema([
                                 ViewEntry::make('consultation_qa')
                                     ->label(false)
