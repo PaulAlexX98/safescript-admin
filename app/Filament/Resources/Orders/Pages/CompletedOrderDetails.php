@@ -29,6 +29,7 @@ use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\ToggleButtons;
 use Filament\Schemas\Components\Utilities\Get;
 
@@ -537,6 +538,13 @@ class CompletedOrderDetails extends ViewRecord
                     ->modalHeading('Add 6-month review')
                     ->modalSubmitActionLabel('Save review')
                     ->form([
+                        DatePicker::make('review_date')
+                            ->label('Review date')
+                            ->default(fn () => $this->record?->created_at?->timezone('Europe/London')->toDateString() ?? now('Europe/London')->toDateString())
+                            ->maxDate(now('Europe/London')->toDateString())
+                            ->native(false)
+                            ->required(),
+
                         ToggleButtons::make('height_unit')
                             ->label('Height units')
                             ->options([
@@ -656,9 +664,12 @@ class CompletedOrderDetails extends ViewRecord
                         }
 
                         $user = auth()->user();
+                        $reviewDate = Carbon::parse($data['review_date'], 'Europe/London')
+                            ->startOfDay()
+                            ->toIso8601String();
 
                         $reviews[] = [
-                            'date' => now()->toIso8601String(),
+                            'date' => $reviewDate,
 
                             'height_unit' => $heightUnit,
                             'height_cm' => $heightCm ?: null,
