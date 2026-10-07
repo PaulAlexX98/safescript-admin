@@ -23,6 +23,8 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
         'shipping_city',
         'shipping_postcode',
         'shipping_country',
+        'gp_surgery',
+        'gp_email',
         'city', 'county', 'postcode', 'country',
         'marketing',
         'name', 'email', 'password',
