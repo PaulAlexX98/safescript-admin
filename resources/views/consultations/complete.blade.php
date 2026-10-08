@@ -19,6 +19,7 @@
 
 @php
     $shippingMeta = [];
+    $metaArr = [];
     if (isset($order)) {
         $rawMeta = $order->meta ?? [];
         $metaArr = is_array($rawMeta) ? $rawMeta : (json_decode($rawMeta ?? '[]', true) ?: []);
@@ -27,7 +28,66 @@
 @endphp
 
 @php
-    $consultationNotesTemplate = <<<'TEXT'
+    $normaliseTreatmentSlug = static function ($value): string {
+        return is_scalar($value) ? \Illuminate\Support\Str::slug((string) $value) : '';
+    };
+
+    $treatmentCandidates = [
+        $session->treatment_slug ?? null,
+        $session->treatment ?? null,
+        data_get($session->meta ?? [], 'treatment_slug'),
+        data_get($session->meta ?? [], 'treatment'),
+    ];
+
+    foreach ([
+        'treatment_slug',
+        'treatment',
+        'consultation.treatment_slug',
+        'service.treatment_slug',
+        'product_slug',
+        'product_name',
+        'product.slug',
+        'product.name',
+        'selected_product.slug',
+        'selected_product.name',
+        'selectedProduct.slug',
+        'selectedProduct.name',
+    ] as $path) {
+        $treatmentCandidates[] = data_get($metaArr, $path);
+    }
+
+    foreach (['items', 'lines', 'products', 'line_items', 'cart.items'] as $path) {
+        $lines = data_get($metaArr, $path, []);
+        if (!is_array($lines)) {
+            continue;
+        }
+
+        if (\Illuminate\Support\Arr::isAssoc($lines)) {
+            $lines = [$lines];
+        }
+
+        foreach ($lines as $line) {
+            if (!is_array($line)) {
+                continue;
+            }
+
+            foreach (['treatment_slug', 'slug', 'product_slug', 'name', 'title', 'product_name', 'product.slug', 'product.name'] as $linePath) {
+                $treatmentCandidates[] = data_get($line, $linePath);
+            }
+        }
+    }
+
+    $detectedTreatmentSlugs = array_values(array_unique(array_filter(array_map(
+        $normaliseTreatmentSlug,
+        $treatmentCandidates
+    ))));
+    $isDailyTabletTreatment = !empty(array_intersect($detectedTreatmentSlugs, [
+        'foundayo-orforglipron',
+        'wegovy-pill-semaglutide',
+        'wegovy-pill-semaglutide-pre-order',
+    ]));
+
+    $injectableConsultationNotesTemplate = <<<'TEXT'
 
 Important safety information
 
@@ -65,6 +125,42 @@ Plan:
 - Reorder via website at end of week three for next dose.
 - Continue current strength if effective weight loss achieved
 TEXT;
+
+    $tabletConsultationNotesTemplate = <<<'TEXT'
+Important Safety Information
+
+Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports, this can have serious or fatal outcomes.
+
+Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.
+
+Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
+
+Medication Review:
+- New medication: Weight management tablet
+- Dose: Take one tablet once daily, at the same time each day.
+- Storage: Store tablets according to the product's storage instructions.
+
+Clinical Consultation:
+- Weight management consultation completed.
+
+Patient Education:
+- Technique: Take one tablet each day at the same time each day.
+- Fluid intake: Aim for 2–3 litres of fluid daily, unless otherwise advised, to help prevent constipation or diarrhoea.
+- Side effects discussed: Initial nausea and headache may occur and usually resolve. Constipation or diarrhoea may also occur.
+- Rare side effect counselling: Discussed symptoms of pancreatitis, including severe, persistent abdominal pain that may radiate to the back, potentially accompanied by fever/high temperature, nausea or vomiting. Seek urgent medical advice if these symptoms occur.
+- Dosing schedule: Start with the current strength and take once daily. Reorder via the website at the end of week three for the next supply. The dose may be increased, decreased, or maintained depending on response, tolerability, and clinical assessment.
+- Current strength: Can remain on the current strength if effective weight loss is achieved and the medication is well tolerated.
+
+Plan:
+- Order dispatched today; delivery expected tomorrow.
+- Take one tablet once daily as instructed.
+- Reorder via the website at the end of week three for the next supply.
+- Continue the current strength if effective weight loss is achieved and treatment remains well tolerated.
+TEXT;
+
+    $consultationNotesTemplate = $isDailyTabletTreatment
+        ? $tabletConsultationNotesTemplate
+        : $injectableConsultationNotesTemplate;
 
     $consultationNotesHelp = $consultationNotesTemplate;
 

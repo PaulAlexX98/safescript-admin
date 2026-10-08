@@ -44,6 +44,18 @@
             $cands[] = data_get($meta, 'treatment_slug');
             $cands[] = data_get($meta, 'consultation.treatment_slug');
             $cands[] = data_get($meta, 'service.treatment_slug');
+            foreach ([
+                'product_slug',
+                'product_name',
+                'product.slug',
+                'product.name',
+                'selected_product.slug',
+                'selected_product.name',
+                'selectedProduct.slug',
+                'selectedProduct.name',
+            ] as $path) {
+                $cands[] = data_get($meta, $path);
+            }
 
             // 4. Common product line shapes
             $lines = $toArr(data_get($meta, 'lines') ?? data_get($meta, 'items') ?? data_get($meta, 'order.items') ?? []);
@@ -56,6 +68,10 @@
                     $cands[] = data_get($ln, 'slug');
                     $cands[] = data_get($ln, 'product.slug');
                     $cands[] = data_get($ln, 'product_slug');
+                    $cands[] = data_get($ln, 'name');
+                    $cands[] = data_get($ln, 'title');
+                    $cands[] = data_get($ln, 'product_name');
+                    $cands[] = data_get($ln, 'product.name');
                     $sku = data_get($ln, 'sku');
                     if (is_string($sku) && $sku !== '') {
                         $parts = preg_split('/[^a-z0-9]+/i', strtolower($sku));
@@ -343,13 +359,25 @@
 
     $oldData = $loadAnswers($sessionLike ?? $session, $form ?? null, $stepSlug);
 
-    $consultationNotesHelp = "Use a structured approach for example SOAP or encounter based
+    $tabletTreatmentSlugs = [
+        'foundayo-orforglipron',
+        'wegovy-pill-semaglutide',
+        'wegovy-pill-semaglutide-pre-order',
+    ];
+    $detectedTreatmentSlugs = array_values(array_unique(array_filter(array_merge(
+        [$treatFor],
+        $treatDebug
+    ))));
+    $isDailyTabletTreatment = !empty(array_intersect($tabletTreatmentSlugs, $detectedTreatmentSlugs));
+
+    $structuredNotesIntroduction = "Use a structured approach for example SOAP or encounter based
 
 S Subjective presenting complaint history medicines allergies
 O Objective observations exam findings investigations
 A Assessment working diagnosis differentials risk stratification
-P Plan treatment prescriptions referrals safety netting follow up
+P Plan treatment prescriptions referrals safety netting follow up";
 
+    $injectableConsultationNotesHelp = <<<'TEXT'
 Important safety information
 
 Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.
@@ -385,8 +413,43 @@ Plan:
 - Order dispatched today, delivery expected tomorrow
 - Reorder via website at end of week three for next dose.
 - Continue current strength if effective weight loss achieved
+TEXT;
 
-";
+    $tabletConsultationNotesHelp = <<<'TEXT'
+Important Safety Information
+
+Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports, this can have serious or fatal outcomes.
+
+Seek urgent medical attention if you experience severe, persistent abdominal pain that may radiate to your back and may be accompanied by nausea and vomiting, as this may be a sign of pancreatitis.
+
+Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
+
+Medication Review:
+- New medication: Weight management tablet
+- Dose: Take one tablet once daily, at the same time each day.
+- Storage: Store tablets according to the product's storage instructions.
+
+Clinical Consultation:
+- Weight management consultation completed.
+
+Patient Education:
+- Technique: Take one tablet each day at the same time each day.
+- Fluid intake: Aim for 2–3 litres of fluid daily, unless otherwise advised, to help prevent constipation or diarrhoea.
+- Side effects discussed: Initial nausea and headache may occur and usually resolve. Constipation or diarrhoea may also occur.
+- Rare side effect counselling: Discussed symptoms of pancreatitis, including severe, persistent abdominal pain that may radiate to the back, potentially accompanied by fever/high temperature, nausea or vomiting. Seek urgent medical advice if these symptoms occur.
+- Dosing schedule: Start with the current strength and take once daily. Reorder via the website at the end of week three for the next supply. The dose may be increased, decreased, or maintained depending on response, tolerability, and clinical assessment.
+- Current strength: Can remain on the current strength if effective weight loss is achieved and the medication is well tolerated.
+
+Plan:
+- Order dispatched today; delivery expected tomorrow.
+- Take one tablet once daily as instructed.
+- Reorder via the website at the end of week three for the next supply.
+- Continue the current strength if effective weight loss is achieved and treatment remains well tolerated.
+TEXT;
+
+    $consultationNotesHelp = $structuredNotesIntroduction."\n\n".($isDailyTabletTreatment
+        ? $tabletConsultationNotesHelp
+        : $injectableConsultationNotesHelp);
     // Prefer saved notes only (leave blank if none)
     $consultationNotesValue = old('consultation_notes', $oldData['consultation_notes'] ?? '');
 
