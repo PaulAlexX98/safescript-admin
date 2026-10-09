@@ -370,6 +370,23 @@
     ))));
     $isDailyTabletTreatment = !empty(array_intersect($tabletTreatmentSlugs, $detectedTreatmentSlugs));
 
+    $sessionMetaForPatientType = is_array($sessionLike->meta ?? null)
+        ? $sessionLike->meta
+        : (json_decode($sessionLike->meta ?? '[]', true) ?: []);
+    $consultationType = \Illuminate\Support\Str::slug((string) (
+        data_get($sessionMetaForPatientType, 'consultation.type')
+        ?: data_get($sessionMetaForPatientType, 'consultation.mode')
+    ));
+    $isReorderFlow = $consultationType === 'reorder'
+        || (bool) data_get($sessionLike, 'templates.reorder')
+        || in_array('reorder', (array) ($sessionLike->steps ?? []), true);
+    $patientConsultationLines = $isReorderFlow
+        ? '- current repeat patient'
+        : "- First time using\n- video call done new patient";
+    $injectableMedicationLine = $isReorderFlow
+        ? '- New medication: (weight management)'
+        : '- New medication: (weight management)??';
+
     $structuredNotesIntroduction = "Use a structured approach for example SOAP or encounter based
 
 S Subjective presenting complaint history medicines allergies
@@ -377,7 +394,7 @@ O Objective observations exam findings investigations
 A Assessment working diagnosis differentials risk stratification
 P Plan treatment prescriptions referrals safety netting follow up";
 
-    $injectableConsultationNotesHelp = <<<'TEXT'
+    $injectableConsultationNotesHelp = <<<TEXT
 Important safety information
 
 Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports this can have serious or fatal outcomes.
@@ -387,14 +404,13 @@ Seek urgent medical attention if you experience severe, persistent abdominal pai
 Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
 
 Medication Review:
-- New medication: (weight management)??
+{$injectableMedicationLine}
 - Dose: once weekly injection, same day each week
 - Storage: keep pen in fridge
 
 Clinical Consultation:
 - Weight management consultation
-- First time using or current repeat patient?
-- video call done new patient?
+{$patientConsultationLines}
 
 Patient Education:
 - Injection technique: once weekly subcutaneous injection, same day each week
@@ -415,7 +431,7 @@ Plan:
 - Continue current strength if effective weight loss achieved
 TEXT;
 
-    $tabletConsultationNotesHelp = <<<'TEXT'
+    $tabletConsultationNotesHelp = <<<TEXT
 Important Safety Information
 
 Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports, this can have serious or fatal outcomes.
@@ -431,6 +447,7 @@ Medication Review:
 
 Clinical Consultation:
 - Weight management consultation completed.
+{$patientConsultationLines}
 
 Patient Education:
 - Technique: Take one tablet each day at the same time each day.
@@ -505,6 +522,11 @@ TEXT;
       .cf-input, .cf-select, .cf-file{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px}
       .cf-textarea{display:block;width:100%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035);border-radius:10px;padding:10px 12px;min-height:140px;resize:vertical}
       .cf-input:focus, .cf-textarea:focus, .cf-select:focus{outline:none;border-color:rgba(255,255,255,.28);box-shadow:0 0 0 2px rgba(255,255,255,.12)}
+      .cf-label-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+      .cf-label-row .cf-label{margin-bottom:0}
+      .copy-template-btn{appearance:none;border:1px solid rgba(34,197,94,.4);border-radius:8px;padding:7px 11px;font-size:12px;font-weight:600;line-height:1.2;cursor:pointer;color:#bbf7d0;background:rgba(34,197,94,.12);transition:filter .15s ease,background-color .15s ease}
+      .copy-template-btn:hover{filter:brightness(1.12);background:rgba(34,197,94,.18)}
+      .copy-template-btn:focus-visible{outline:2px solid rgba(34,197,94,.65);outline-offset:2px}
       /* Voice toolbar styling */
       .voice-toolbar{display:flex;align-items:center;gap:10px;margin-top:8px}
       .voice-btn{appearance:none;border:0;border-radius:999px;padding:8px 14px;font-weight:600;cursor:pointer;background:rgba(34,197,94,.15);transition:filter .15s ease, background-color .15s ease}
@@ -773,7 +795,14 @@ TEXT;
             {{-- Consultation Notes --}}
             <div class="cf-section-card">
                 <div class="cf-field-flat">
-                    <label class="cf-label">Consultation notes</label>
+                    <div class="cf-label-row">
+                        <label for="consultation_notes" class="cf-label">Consultation notes</label>
+                        <button
+                            type="button"
+                            id="copy_consultation_notes_template"
+                            class="copy-template-btn"
+                        >Copy template to notes</button>
+                    </div>
                     <textarea
                         id="consultation_notes"
                         name="consultation_notes"
@@ -849,6 +878,33 @@ TEXT;
           }
           bindMirror('admin_notes','answers_admin_notes');
           bindMirror('consultation_notes','answers_consultation_notes');
+        });
+        </script>
+
+        <script>
+        document.addEventListener('DOMContentLoaded', function(){
+          var button = document.getElementById('copy_consultation_notes_template');
+          var notes = document.getElementById('consultation_notes');
+          var mirror = document.getElementById('answers_consultation_notes');
+          if (!button || !notes) return;
+
+          var template = @json($consultationNotesHelp);
+          var originalLabel = button.textContent;
+          var resetTimer;
+
+          button.addEventListener('click', function(){
+            notes.value = template;
+            if (mirror) mirror.value = template;
+            notes.dispatchEvent(new Event('input', { bubbles: true }));
+            notes.focus();
+            notes.setSelectionRange(notes.value.length, notes.value.length);
+
+            button.textContent = 'Template copied';
+            clearTimeout(resetTimer);
+            resetTimer = setTimeout(function(){
+              button.textContent = originalLabel;
+            }, 1800);
+          });
         });
         </script>
 

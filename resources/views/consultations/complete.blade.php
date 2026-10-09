@@ -87,7 +87,24 @@
         'wegovy-pill-semaglutide-pre-order',
     ]));
 
-    $injectableConsultationNotesTemplate = <<<'TEXT'
+    $sessionMetaForPatientType = is_array($session->meta ?? null)
+        ? $session->meta
+        : (json_decode($session->meta ?? '[]', true) ?: []);
+    $consultationType = \Illuminate\Support\Str::slug((string) (
+        data_get($sessionMetaForPatientType, 'consultation.type')
+        ?: data_get($sessionMetaForPatientType, 'consultation.mode')
+    ));
+    $isReorderFlow = $consultationType === 'reorder'
+        || (bool) data_get($session, 'templates.reorder')
+        || in_array('reorder', (array) ($session->steps ?? []), true);
+    $patientConsultationLines = $isReorderFlow
+        ? '- current repeat patient'
+        : "- First time using\n- video call done new patient";
+    $injectableMedicationLine = $isReorderFlow
+        ? '- New medication: (weight management)'
+        : '- New medication: (weight management)??';
+
+    $injectableConsultationNotesTemplate = <<<TEXT
 
 Important safety information
 
@@ -98,14 +115,13 @@ Seek urgent medical attention if you experience severe, persistent abdominal pai
 Do not restart GLP-1 receptor agonist or GLP-1/GIP receptor agonist treatment if pancreatitis is confirmed.
 
 Medication Review:
-- New medication: (weight management)??
+{$injectableMedicationLine}
 - Dose: once weekly injection, same day each week
 - Storage: keep pen in fridge
 
 Clinical Consultation:
 - Weight management consultation
-- First time using or current repeat patient?
-- video call done new patient?
+{$patientConsultationLines}
 
 Patient Education:
 - Injection technique: once weekly subcutaneous injection, same day each week
@@ -126,7 +142,7 @@ Plan:
 - Continue current strength if effective weight loss achieved
 TEXT;
 
-    $tabletConsultationNotesTemplate = <<<'TEXT'
+    $tabletConsultationNotesTemplate = <<<TEXT
 Important Safety Information
 
 Pancreatitis (inflammation of the pancreas) is a possible side effect with GLP-1 receptor agonists and dual GLP-1/GIP receptor agonists. In rare reports, this can have serious or fatal outcomes.
@@ -142,6 +158,7 @@ Medication Review:
 
 Clinical Consultation:
 - Weight management consultation completed.
+{$patientConsultationLines}
 
 Patient Education:
 - Technique: Take one tablet each day at the same time each day.
