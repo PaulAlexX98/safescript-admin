@@ -757,6 +757,15 @@
 
                             $valRaw = $answerFor($name, $label);
                             $val    = old($name, $valRaw ?? '');
+
+                            // Fuzzy matching can occasionally find a multi-select answer for a
+                            // similarly named scalar field (for example B12 symptoms and its
+                            // "other symptom" textarea). Never pass arrays/objects to scalar
+                            // controls; keep them available for choice controls below.
+                            if (in_array($type, ['text_input', 'textarea', 'date'], true) && ! is_scalar($val) && $val !== null) {
+                                $val = '';
+                            }
+
                             $isBmi = $isBmiField($field);
                             $isGp = $isGpField($field);
                             $cond = $field['showIf'] ?? null;
