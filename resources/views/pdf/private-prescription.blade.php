@@ -26,6 +26,8 @@
     .panel { border:1px solid #cfcfcf; border-radius:6px; padding:10px 12px; margin-top:0; }
     .kv td { padding:4px 0; vertical-align:top; }
     .kv td:first-child { width:120px; font-weight:bold; }
+    .additional-information .section-title { font-size:17px; font-weight:700; }
+    .additional-information-content { font-size:16px; font-weight:700; line-height:1.35; }
 
     .two-col { width:100%; border-collapse:separate; border-spacing:14px 0; }
     .two-col td { width:50%; vertical-align:top; padding:0; }
@@ -1140,6 +1142,109 @@
       </tr>
     </table>
   </div>
+
+  @php
+    $additionalInformationSources = [
+        is_array($sess?->meta ?? null)
+            ? $sess->meta
+            : (json_decode($sess?->meta ?? '[]', true) ?: []),
+        is_array($order?->meta ?? null)
+            ? $order->meta
+            : (json_decode($order?->meta ?? '[]', true) ?: []),
+        is_array($meta ?? null)
+            ? $meta
+            : (json_decode($meta ?? '[]', true) ?: []),
+    ];
+
+    $normaliseAdditionalInformation = function ($value) {
+        if (is_array($value)) {
+            $value = implode(', ', array_filter(array_map(function ($item) {
+                return is_scalar($item) || $item === null
+                    ? trim((string) $item)
+                    : null;
+            }, $value)));
+        }
+
+        if (is_string($value)) {
+            $value = trim($value);
+
+            return $value !== '' ? $value : null;
+        }
+
+        return is_numeric($value) ? (string) $value : null;
+    };
+
+    $additionalInformationFromSource = function (array $source, string $key) use ($normaliseAdditionalInformation) {
+        foreach ([
+            'answers.' . $key,
+            $key,
+            'assessment.answers.' . $key,
+            'raf_answers.' . $key,
+            'meta.answers.' . $key,
+            'forms.reorder.answers.' . $key,
+            'forms.risk_assessment.answers.' . $key,
+            'forms.risk-assessment.answers.' . $key,
+            'formsQA.reorder.' . $key,
+            'formsQA.risk_assessment.' . $key,
+            'formsQA.risk-assessment.' . $key,
+            'forms_qa.reorder.' . $key,
+            'forms_qa.risk_assessment.' . $key,
+            'forms_qa.risk-assessment.' . $key,
+        ] as $path) {
+            $value = $normaliseAdditionalInformation(data_get($source, $path));
+            if ($value !== null) {
+                return $value;
+            }
+        }
+
+        foreach ([
+            data_get($source, 'formsQA.raf.qa'),
+            data_get($source, 'formsQA.risk_assessment.qa'),
+            data_get($source, 'formsQA.risk-assessment.qa'),
+        ] as $rows) {
+            if (!is_array($rows)) {
+                continue;
+            }
+
+            foreach ($rows as $row) {
+                if (!is_array($row) || (string) ($row['key'] ?? '') !== $key) {
+                    continue;
+                }
+
+                $value = $normaliseAdditionalInformation(
+                    $row['answer'] ?? $row['value'] ?? $row['raw'] ?? $row['response'] ?? null
+                );
+
+                if ($value !== null) {
+                    return $value;
+                }
+            }
+        }
+
+        return null;
+    };
+
+    $additionalInformation = null;
+    $additionalInformationDetails = null;
+
+    foreach ($additionalInformationSources as $source) {
+        $sourceInformation = $additionalInformationFromSource($source, 'information');
+        $sourceInformationDetails = $additionalInformationFromSource($source, 'information-details');
+
+        if ($sourceInformation !== null || $sourceInformationDetails !== null) {
+            $additionalInformation = $sourceInformation;
+            $additionalInformationDetails = $sourceInformationDetails;
+            break;
+        }
+    }
+  @endphp
+
+  @if($additionalInformationDetails !== null)
+    <div class="panel additional-information" style="margin-top:16px;">
+      <div class="section-title">Additional Information</div>
+      <div class="additional-information-content">{!! nl2br(e($additionalInformationDetails)) !!}</div>
+    </div>
+  @endif
 
 </body>
 </html>

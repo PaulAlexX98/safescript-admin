@@ -409,7 +409,6 @@
                 $s = is_scalar($s) ? (string)$s : '';
                 $s = strtolower(trim($s));
                 $s = preg_replace('/[^a-z0-9]+/','-',$s);
-                $s = preg_replace('/-(details?|notes?|info(?:rmation)?|explain(?:ation)?)$/','',$s);
                 return trim($s,'-');
             };
             $nameSlug  = $norm($name);
@@ -671,7 +670,7 @@
             </div>
         @endif
 
-        <div id="cf_required_banner" class="cf-required-banner">Please fill all the required fields</div>
+        <div id="cf_required_banner" class="cf-required-banner is-hidden">Please fill all the required fields</div>
 
         <div class="space-y-10">
             @foreach ($sections as $section)
@@ -1427,7 +1426,7 @@
     var requiredCards = Array.from(form.querySelectorAll('.cf-field-card.is-required')).filter(function(card){
       return isActuallyVisible(card);
     });
-    var allComplete = requiredCards.length > 0 && requiredCards.every(cardIsComplete);
+    var allComplete = requiredCards.every(cardIsComplete);
     requiredBanner.classList.toggle('is-hidden', allComplete);
   }
   function setReqAndDisabledFor(node, visible){

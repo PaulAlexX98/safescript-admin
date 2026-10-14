@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Scheduling\Schedules;
 
 use App\Filament\Resources\Scheduling\Schedules\Pages as Pages;
 use App\Models\Schedule;
+use Filament\Actions\Action;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;                                  // v4 forms API
 use Filament\Forms\Components\TextInput;
@@ -106,6 +107,42 @@ class ScheduleResource extends Resource
                 Tables\Columns\TextColumn::make('capacity')->label('Cap.')->sortable(),
                 Tables\Columns\TextColumn::make('timezone')->toggleable(),
                 Tables\Columns\TextColumn::make('updated_at')->dateTime('d M Y, H:i')->label('Updated'),
+            ])
+            ->recordActionsColumnLabel('Operations')
+            ->recordActions([
+                Action::make('duplicate')
+                    ->label('Duplicate')
+                    ->icon('heroicon-o-square-2-stack')
+                    ->color('gray')
+                    ->fillForm(fn (Schedule $record): array => [
+                        'name' => 'Copy of ' . $record->name,
+                        'service_slug' => $record->service_slug,
+                    ])
+                    ->schema([
+                        TextInput::make('name')
+                            ->label('New schedule name')
+                            ->required()
+                            ->maxLength(120),
+                        TextInput::make('service_slug')
+                            ->label('Service key (optional)')
+                            ->placeholder('e.g. travel-clinic'),
+                    ])
+                    ->action(function (array $data, Schedule $record): void {
+                        $copy = $record->replicate();
+                        $copy->name = trim($data['name']);
+                        $copy->service_slug = filled($data['service_slug'] ?? null)
+                            ? trim($data['service_slug'])
+                            : null;
+                        $copy->save();
+
+                        \Filament\Notifications\Notification::make()
+                            ->success()
+                            ->title('Schedule duplicated')
+                            ->body('The copied schedule is ready to edit.')
+                            ->send();
+
+                        redirect(static::getUrl('edit', ['record' => $copy]));
+                    }),
             ])
             // Make row clickable to Edit (avoids missing action classes)
             ->recordUrl(fn ($record) => static::getUrl('edit', ['record' => $record]));

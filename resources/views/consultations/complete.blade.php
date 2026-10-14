@@ -475,6 +475,15 @@ TEXT;
             'assessment.answers.' . $key,
             'raf_answers.' . $key,
             'meta.answers.' . $key,
+            'forms.reorder.answers.' . $key,
+            'forms.risk_assessment.answers.' . $key,
+            'forms.risk-assessment.answers.' . $key,
+            'formsQA.reorder.' . $key,
+            'formsQA.risk_assessment.' . $key,
+            'formsQA.risk-assessment.' . $key,
+            'forms_qa.reorder.' . $key,
+            'forms_qa.risk_assessment.' . $key,
+            'forms_qa.risk-assessment.' . $key,
         ];
 
         foreach ($paths as $path) {
@@ -515,47 +524,37 @@ TEXT;
         return null;
     };
 
-    $completeInformation =
-        $completeAnswerValueFromSource($completeOldData, 'information')
-        ?? $completeAnswerValueFromSource($completeSessionMeta, 'information')
-        ?? $completeAnswerValueFromSource($completeOrderMeta, 'information');
+    $completeInformation = null;
+    $completeInformationDetails = null;
 
-    $completeInformationDetails =
-        $completeAnswerValueFromSource($completeOldData, 'information-details')
-        ?? $completeAnswerValueFromSource($completeSessionMeta, 'information-details')
-        ?? $completeAnswerValueFromSource($completeOrderMeta, 'information-details');
+    // Use both fields from the first source that contains current additional
+    // information. This prevents a missing detail from being mixed with stale
+    // values from an older order-level snapshot.
+    foreach ([$completeOldData, $completeSessionMeta, $completeOrderMeta] as $source) {
+        $sourceInformation = $completeAnswerValueFromSource($source, 'information');
+        $sourceInformationDetails = $completeAnswerValueFromSource($source, 'information-details');
+
+        if ($sourceInformation !== null || $sourceInformationDetails !== null) {
+            $completeInformation = $sourceInformation;
+            $completeInformationDetails = $sourceInformationDetails;
+            break;
+        }
+    }
 @endphp
 
-<div class="cf-section-card">
-    <div class="mb-4">
-        <h3 class="cf-title">Additional information</h3>
-       
-    </div>
-
-    @if (($completeInformation !== null && $completeInformation !== '') || ($completeInformationDetails !== null && $completeInformationDetails !== ''))
-        <div class="cf-grid">
-            @if ($completeInformation !== null && $completeInformation !== '')
-                <div class="cf-field-card">
-                    <div class="cf-label">Information</div>
-                    <div class="text-sm">{{ $completeInformation }}</div>
-                </div>
-            @endif
-
-            @if ($completeInformationDetails !== null && $completeInformationDetails !== '')
-                <div class="cf-field-card">
-                    <div class="cf-label">Information Details</div>
-                    <div class="text-sm">{{ $completeInformationDetails }}</div>
-                </div>
-            @endif
+@if ($completeInformationDetails !== null && $completeInformationDetails !== '')
+    <div class="cf-section-card">
+        <div class="mb-4">
+            <h3 class="cf-title">Additional information</h3>
         </div>
-    @else
-        <div class="cf-field-card">
-            <div class="text-sm text-gray-500">
-                No saved additional information was found for this consultation.
+
+        <div class="cf-grid">
+            <div class="cf-field-card">
+                <div class="text-sm">{{ $completeInformationDetails }}</div>
             </div>
         </div>
-    @endif
-</div>
+    </div>
+@endif
 
 <form
     id="consult-complete-form"

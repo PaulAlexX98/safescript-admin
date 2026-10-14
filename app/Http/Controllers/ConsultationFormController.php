@@ -264,6 +264,71 @@ class ConsultationFormController extends Controller
         }
     }
 
+    /**
+     * Determine whether a schema showIf condition is satisfied by saved answers.
+     */
+    protected function showIfConditionIsMet(array $condition, array $data): bool
+    {
+        $field = (string) ($condition['field'] ?? '');
+        if ($field === '') {
+            return true;
+        }
+
+        $raw = null;
+        foreach (array_values(array_unique(array_filter([
+            $field,
+            str_replace('-', '_', $field),
+            str_replace('_', '-', $field),
+            Str::slug($field, '_'),
+            Str::slug($field, '-'),
+        ]))) as $fieldKey) {
+            if (array_key_exists($fieldKey, $data)) {
+                $raw = $data[$fieldKey];
+                break;
+            }
+        }
+
+        $rawValues = is_array($raw) ? array_map('strval', $raw) : [(string) $raw];
+        $normalisedValues = array_map(fn ($value) => Str::slug($value ?? ''), $rawValues);
+
+        // Form-builder payloads retain unused comparators as null. Follow the
+        // same precedence as the browser and prefer a populated `in` list.
+        if (! empty($condition['in']) && is_array($condition['in'])) {
+            $expectedRaw = array_map('strval', $condition['in']);
+            $expectedNormalised = array_map(fn ($value) => Str::slug($value), $expectedRaw);
+
+            return count(array_intersect($rawValues, $expectedRaw)) > 0
+                || count(array_intersect($normalisedValues, $expectedNormalised)) > 0;
+        }
+
+        if (isset($condition['equals'])) {
+            $expected = (string) $condition['equals'];
+
+            return in_array($expected, $rawValues, true)
+                || in_array(Str::slug($expected), $normalisedValues, true);
+        }
+
+        if (isset($condition['notEquals'])) {
+            $unexpected = (string) $condition['notEquals'];
+            $isEqual = in_array($unexpected, $rawValues, true)
+                || in_array(Str::slug($unexpected), $normalisedValues, true);
+
+            return ! $isEqual;
+        }
+
+        if (! empty($condition['truthy'])) {
+            foreach ($rawValues as $value) {
+                if (trim((string) $value) !== '') {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
     public function save(Request $request, $sessionId, ClinicForm $form)
     {
         // 1) Basic validation
@@ -861,73 +926,6 @@ class ConsultationFormController extends Controller
             : $payload;
 
         // 6a) Remove values for fields whose showIf conditions are not satisfied
-        $evalShowIf = function (array $cond, array $data): bool {
-            $field = (string) ($cond['field'] ?? '');
-            if ($field === '') {
-                return true;
-            } // no field -> treat as visible
-
-            $raw = null;
-            foreach (array_values(array_unique(array_filter([
-                $field,
-                str_replace('-', '_', $field),
-                str_replace('_', '-', $field),
-                \Illuminate\Support\Str::slug($field, '_'),
-                \Illuminate\Support\Str::slug($field, '-'),
-            ]))) as $fieldKey) {
-                if (array_key_exists($fieldKey, $data)) {
-                    $raw = $data[$fieldKey];
-                    break;
-                }
-            }
-            $rawVals = is_array($raw) ? array_map('strval', $raw) : [(string) $raw];
-            // Build slug-normalised versions to allow "Yes" vs "yes" vs "YES" etc.
-            $normVals = array_map(function ($v) {
-                return \Illuminate\Support\Str::slug($v ?? '');
-            }, $rawVals);
-
-            // equals
-            if (array_key_exists('equals', $cond)) {
-                $eq = (string) $cond['equals'];
-                $eqNorm = \Illuminate\Support\Str::slug($eq);
-
-                return in_array($eq, $rawVals, true) || in_array($eqNorm, $normVals, true);
-            }
-
-            // in
-            if (! empty($cond['in']) && is_array($cond['in'])) {
-                $inRaw = array_map('strval', $cond['in']);
-                $inNorm = array_map(fn ($v) => \Illuminate\Support\Str::slug($v), $inRaw);
-                $hitRaw = count(array_intersect($rawVals, $inRaw)) > 0;
-                $hitNorm = count(array_intersect($normVals, $inNorm)) > 0;
-
-                return $hitRaw || $hitNorm;
-            }
-
-            // notEquals
-            if (array_key_exists('notEquals', $cond)) {
-                $neq = (string) $cond['notEquals'];
-                $neqNorm = \Illuminate\Support\Str::slug($neq);
-                $isEq = in_array($neq, $rawVals, true) || in_array($neqNorm, $normVals, true);
-
-                return ! $isEq;
-            }
-
-            // truthy
-            if (! empty($cond['truthy'])) {
-                // Any non-empty raw value or any element in array counts as truthy
-                foreach ($rawVals as $v) {
-                    if (trim((string) $v) !== '') {
-                        return true;
-                    }
-                }
-
-                return false;
-            }
-
-            return true; // unknown condition -> keep
-        };
-
         foreach ($flatSchemaFields as $idx => $fld) {
             $type = $fld['type'] ?? 'text_input';
             $cfg = (array) ($fld['data'] ?? $fld);
@@ -942,7 +940,7 @@ class ConsultationFormController extends Controller
             $name = $fld['name'] ?? $schemaKey ?? $slugLabel ?? (($type === 'text_block') ? ('block_'.$idx) : ('field_'.$idx));
 
             // If condition not met, drop the value so it doesn't display later
-            if ($name && array_key_exists($name, $persistData) && ! $evalShowIf($cond, $persistData)) {
+            if ($name && array_key_exists($name, $persistData) && ! $this->showIfConditionIsMet($cond, $persistData)) {
                 unset($persistData[$name]);
             }
         }
@@ -1490,12 +1488,26 @@ class ConsultationFormController extends Controller
     {
         $order = $session->order ?? null;
         $patient = $order?->patient ?? null;
+        $latestReorderResponse = ConsultationFormResponse::query()
+            ->where('consultation_session_id', $session->id)
+            ->where(function ($query): void {
+                $query->where('form_type', 'reorder')
+                    ->orWhere('step_slug', 'reorder');
+            })
+            ->latest('updated_at')
+            ->latest('id')
+            ->first();
+
+        $oldData = is_array($latestReorderResponse?->data)
+            ? $latestReorderResponse->data
+            : (json_decode($latestReorderResponse?->data ?? '[]', true) ?: []);
 
         return view('consultations.complete', [
             'session' => $session,
             'order' => $order,
             'patient' => $patient,
             'sessionLike' => $session,
+            'oldData' => $oldData,
         ]);
     }
 
