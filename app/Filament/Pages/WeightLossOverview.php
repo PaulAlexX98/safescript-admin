@@ -31,6 +31,28 @@ class WeightLossOverview extends Dashboard
 
     protected ?string $subheading = 'A lightweight view of paid weight-management patients and medication sales.';
 
+    public static function shouldRegisterNavigation(): bool
+    {
+        $user = auth()->user();
+
+        return (bool) $user
+            && (int) ($user->is_staff ?? 0) === 1
+            && strtolower((string) ($user->email ?? '')) !== 'info@safescript.co.uk';
+    }
+
+    public function mount(): void
+    {
+        $user = auth()->user();
+
+        if (
+            $user
+            && (int) ($user->is_staff ?? 0) === 1
+            && strtolower((string) ($user->email ?? '')) === 'info@safescript.co.uk'
+        ) {
+            $this->redirect('/admin/pending-orders');
+        }
+    }
+
     public function filtersForm(Schema $schema): Schema
     {
         return $schema->components([

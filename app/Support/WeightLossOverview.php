@@ -214,7 +214,7 @@ SQL;
         $productName = $productSlug ? ($products[$productSlug] ?? null) : null;
 
         return Cache::remember(
-            'admin:weight-loss:products:v5:'.$period.':'.$cacheRange.':'.sha1((string) $productSlug),
+            'admin:weight-loss:products:v6:'.$period.':'.$cacheRange.':'.sha1((string) $productSlug),
             self::CACHE_SECONDS,
             function () use ($start, $end, $productSlug, $productName): Collection {
                 if (! self::available() || ! $productSlug || ! $productName) {
@@ -234,18 +234,16 @@ SQL;
                             ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(meta, '$.selectedProduct.slug')) = ?", [$productSlug])
                             ->orWhereRaw("{$name} = ?", [$productName]);
                     })
-                    ->selectRaw("{$name} AS product")
                     ->selectRaw("{$variation} AS variation")
                     ->selectRaw('COUNT(*) AS orders_count')
                     ->selectRaw("SUM({$qty}) AS units")
                     ->selectRaw("SUM({$total}) / 100 AS revenue")
-                    ->groupBy('product', 'variation')
+                    ->groupBy('variation')
                     ->orderByDesc('units')
-                    ->orderBy('product')
                     ->orderBy('variation')
                     ->get()
                     ->map(fn (object $row): array => [
-                        'product' => (string) ($row->product ?? 'Unknown'),
+                        'product' => $productName,
                         'variation' => (string) ($row->variation ?? 'No variation'),
                         'orders' => (int) ($row->orders_count ?? 0),
                         'units' => (int) ($row->units ?? 0),
@@ -460,7 +458,7 @@ SQL;
 
         return "CASE
             WHEN LOWER({$variation}) REGEXP '[0-9]+(\\\\.[0-9]+)?[[:space:]]*mg'
-                THEN REGEXP_SUBSTR(LOWER({$variation}), '[0-9]+(\\\\.[0-9]+)?[[:space:]]*mg')
+                THEN CONCAT(REGEXP_SUBSTR(LOWER({$variation}), '[0-9]+(\\\\.[0-9]+)?'), 'mg')
             ELSE {$variation}
         END";
     }
