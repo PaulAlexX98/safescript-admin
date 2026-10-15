@@ -5,6 +5,7 @@ namespace App\Providers\Filament;
 use App\Filament\Pages\Auth\EditProfile;
 use App\Filament\Pages\ConsultationRunner;
 use App\Filament\Pages\Dashboard;
+use App\Filament\Pages\WeightLossOverview;
 use App\Filament\Resources\Appointments\AppointmentResource as AppointmentsAppointmentResource;
 use App\Filament\Resources\Scheduling\Schedules\ScheduleResource;
 use App\Filament\Resources\WalkIns\WalkInResource;
@@ -81,6 +82,7 @@ class AdminPanelProvider extends PanelProvider
             )
             ->pages([
                 Dashboard::class,
+                WeightLossOverview::class,
                 ConsultationRunner::class,
             ])
             ->discoverWidgets(
@@ -135,7 +137,10 @@ HTML;
                 NavigationGroup::make('Private Services')
                     ->collapsed(false),
 
-                NavigationGroup::make('NHS Services')
+                NavigationGroup::make('Walk Ins')
+                    ->collapsed(false),
+
+                NavigationGroup::make('Orders')
                     ->collapsed(false),
 
                 NavigationGroup::make('Notifications')
@@ -180,7 +185,13 @@ HTML;
                             ->visible(true),
                     ]),
 
-                NavigationGroup::make('Orders')
+                NavigationGroup::make('NHS')
+                    ->collapsed(false),
+
+                NavigationGroup::make('Weight Management')
+                    ->collapsed(false),
+
+                NavigationGroup::make('NHS Services')
                     ->collapsed(false),
 
                 NavigationGroup::make('People')
