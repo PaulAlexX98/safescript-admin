@@ -262,7 +262,7 @@ SQL;
         $cacheRange = self::cacheRange($start, $end);
 
         return Cache::remember(
-            "admin:weight-loss:performance:v2:{$cacheRange}",
+            "admin:weight-loss:performance:v3:{$cacheRange}",
             self::CACHE_SECONDS,
             function () use ($start, $end): array {
                 $empty = self::emptyTreatmentPerformance();
@@ -288,6 +288,24 @@ SQL;
                         JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.assessment.answers.weight')),
                         JSON_UNQUOTE(JSON_EXTRACT(meta, '$.weight'))
                     ) AS recorded_weight")
+                    ->selectRaw("COALESCE(
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.raf.answers.weight_kg')),
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.assessment.answers.weight_kg')),
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.raf.weight_kg')),
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.assessment.weight_kg'))
+                    ) AS recorded_weight_kg")
+                    ->selectRaw("COALESCE(
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.raf.answers.weight_st')),
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.assessment.answers.weight_st')),
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.raf.weight_st')),
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.assessment.weight_st'))
+                    ) AS recorded_weight_st")
+                    ->selectRaw("COALESCE(
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.raf.answers.weight_lb')),
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.assessment.answers.weight_lb')),
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.raf.weight_lb')),
+                        JSON_UNQUOTE(JSON_EXTRACT(meta, '$.formsQA.assessment.weight_lb'))
+                    ) AS recorded_weight_lb")
                     ->orderBy('paid_at')
                     ->orderBy('id')
                     ->get();
@@ -295,7 +313,12 @@ SQL;
                 $readings = [];
                 foreach ($rows as $row) {
                     $category = self::treatmentCategory((string) ($row->product ?? ''));
-                    $weight = self::weightInKg($row->recorded_weight ?? null);
+                    $weight = self::weightInKg(
+                        $row->recorded_weight ?? null,
+                        $row->recorded_weight_kg ?? null,
+                        $row->recorded_weight_st ?? null,
+                        $row->recorded_weight_lb ?? null,
+                    );
                     $patient = $row->user_id
                         ? 'user:'.$row->user_id
                         : 'email:'.($row->patient_email ?? '');
@@ -312,7 +335,7 @@ SQL;
 
                 foreach ($empty as $category => $defaults) {
                     $changes = [];
-                    $percentages = [];
+                    $baselineWeights = [];
 
                     foreach ($readings[$category] ?? [] as $patientReadings) {
                         $withinRange = array_values(array_filter(
@@ -336,10 +359,16 @@ SQL;
                         }
 
                         $change = $baseline['weight'] - $latest['weight'];
+                        $changePercent = ($change / $baseline['weight']) * 100;
+
+                        // Large jumps almost always mean an old stone/pound value was stored
+                        // without its unit and later compared with kilograms.
+                        if (abs($change) > 75 || abs($changePercent) > 50) {
+                            continue;
+                        }
+
                         $changes[] = $change;
-                        $percentages[] = $baseline['weight'] > 0
-                            ? ($change / $baseline['weight']) * 100
-                            : 0;
+                        $baselineWeights[] = $baseline['weight'];
                     }
 
                     if ($changes === []) {
@@ -352,7 +381,10 @@ SQL;
                     $empty[$category] = [
                         'patients' => $patientCount,
                         'average_loss_kg' => round(array_sum($changes) / $patientCount, 1),
-                        'average_loss_percent' => round(array_sum($percentages) / $patientCount, 1),
+                        'average_loss_percent' => round(
+                            (array_sum($changes) / array_sum($baselineWeights)) * 100,
+                            1,
+                        ),
                         'losing_percent' => (int) round(($losingCount / $patientCount) * 100),
                     ];
                 }
@@ -540,12 +572,21 @@ SQL;
         return null;
     }
 
-    private static function weightInKg(mixed $value): ?float
+    private static function weightInKg(
+        mixed $value,
+        mixed $kilograms = null,
+        mixed $stones = null,
+        mixed $pounds = null,
+    ): ?float
     {
-        if (is_numeric($value)) {
-            $weight = (float) $value;
+        if (is_numeric($kilograms)) {
+            return self::plausibleWeight((float) $kilograms);
+        }
 
-            return $weight > 0 ? $weight : null;
+        if (is_numeric($stones) || is_numeric($pounds)) {
+            $totalPounds = ((float) ($stones ?: 0) * 14) + (float) ($pounds ?: 0);
+
+            return self::plausibleWeight($totalPounds * 0.45359237);
         }
 
         $value = strtolower(trim((string) $value));
@@ -556,20 +597,32 @@ SQL;
         if (preg_match('/(\d+(?:\.\d+)?)\s*st(?:one)?s?(?:\s*(\d+(?:\.\d+)?)\s*lb)?/', $value, $matches)) {
             $pounds = ((float) $matches[1] * 14) + (float) ($matches[2] ?? 0);
 
-            return round($pounds * 0.45359237, 2);
+            return self::plausibleWeight($pounds * 0.45359237);
         }
 
         if (preg_match('/(\d+(?:\.\d+)?)\s*(?:lb|lbs|pounds?)/', $value, $matches)) {
-            return round((float) $matches[1] * 0.45359237, 2);
+            return self::plausibleWeight((float) $matches[1] * 0.45359237);
         }
 
-        if (preg_match('/(\d+(?:\.\d+)?)/', $value, $matches)) {
-            $weight = (float) $matches[1];
+        if (preg_match('/(\d+(?:\.\d+)?)\s*(?:kg|kgs|kilograms?)/', $value, $matches)) {
+            return self::plausibleWeight((float) $matches[1]);
+        }
 
-            return $weight > 0 ? $weight : null;
+        // A bare number below 35 is ambiguous: it is commonly stones, not kg.
+        if (is_numeric($value)) {
+            return self::plausibleWeight((float) $value);
         }
 
         return null;
+    }
+
+    private static function plausibleWeight(float $weight): ?float
+    {
+        if ($weight < 35 || $weight > 350) {
+            return null;
+        }
+
+        return round($weight, 2);
     }
 
     private static function emptyTreatmentPerformance(): array
