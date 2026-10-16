@@ -124,13 +124,31 @@ class StartConsultation
         // Reuse an existing session for this order if present.
         $session = ConsultationSession::where('order_id', $order->id)->first();
 
-        // Resolve service + treatment from the order (be generous with sources)
-        $service = $this->firstSlug([
+        $orderMeta = $this->decodeToArray($order->meta);
+
+        // Walk-ins store the selected service as flat service_id/service_slug
+        // values in meta. Resolve those canonical values before considering the
+        // display name, whose generated slug may differ from the configured one.
+        $serviceId = (int) (Arr::get($orderMeta, 'service_id') ?: 0);
+        $explicitServiceSlug = $this->firstSlug([
+            Arr::get($orderMeta, 'service_slug'),
+            Arr::get($orderMeta, 'service.slug'),
+            $order->service_slug ?? null,
+        ]);
+
+        $svc = $serviceId > 0 ? Service::query()->find($serviceId) : null;
+        if (! $svc && $explicitServiceSlug) {
+            $svc = Service::query()->where('slug', $explicitServiceSlug)->first();
+        }
+
+        // Preserve all legacy sources for normal orders that pre-date the flat
+        // walk-in metadata fields.
+        $service = $svc?->slug ?: $this->firstSlug([
             $order->service_slug ?? null,
             $order->service ?? null,
             $order->service_name ?? null,
-            Arr::get($order->meta ?? [], 'service.slug'),
-            Arr::get($order->meta ?? [], 'service'),
+            Arr::get($orderMeta, 'service.slug'),
+            Arr::get($orderMeta, 'service'),
             'weight-management-service',
         ]);
 
@@ -181,7 +199,7 @@ class StartConsultation
         }
 
         // Helper to fetch a specific form_type with sensible fallbacks:
-        $pick = function (string $type) use ($service, $treat) {
+        $pick = function (string $type, bool $allowGlobal = true) use ($service, $treat) {
             $aliases = [
                 'raf'         => ['raf'],
                 'assessment'  => ['assessment','risk_assessment','risk-assessment','intake'],
@@ -216,6 +234,10 @@ class StartConsultation
                 return $serviceOnly;
             }
 
+            if (! $allowGlobal) {
+                return null;
+            }
+
             // 3 global generic
             $q3 = $base();
             $global = $q3->where(function ($q) {
@@ -248,7 +270,16 @@ class StartConsultation
         }
         $templates = array_fill_keys($orderedKeys, null);
 
-        $svc = $order->service ?? optional($order->product)->service ?? Service::where('slug', $service)->first();
+        if (! $svc) {
+            $legacyService = $order->service ?? optional($order->product)->service;
+            $svc = $legacyService instanceof Service
+                ? $legacyService
+                : Service::query()->where('slug', $service)->first();
+        }
+
+        if ($svc) {
+            $service = $svc->slug;
+        }
 
         if ($svc) {
             if ($isReorder) {
@@ -276,7 +307,9 @@ class StartConsultation
             }
         } else {
             if (empty($templates['raf'])) {
-                $templates['raf'] = $pick('raf');
+                // Once a real service has been resolved, never substitute an
+                // unrelated global RAF for a missing service RAF.
+                $templates['raf'] = $pick('raf', allowGlobal: ! $svc);
             }
             if (empty($templates['assessment'])) {
                 $templates['assessment'] = $pick('assessment');
