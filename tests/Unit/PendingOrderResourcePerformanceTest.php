@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Filament\Resources\PendingOrders\PendingOrderResource;
+use Carbon\Carbon;
 use PHPUnit\Framework\TestCase;
 
 class PendingOrderResourcePerformanceTest extends TestCase
@@ -49,6 +50,22 @@ class PendingOrderResourcePerformanceTest extends TestCase
             TestablePendingOrderResource::patientEmail($userRecord)
         );
     }
+
+    public function test_sent_patient_email_is_formatted_for_admin_notes(): void
+    {
+        $note = TestablePendingOrderResource::emailAdminNote(
+            'patient@example.test',
+            'Your order needs attention',
+            "Dear Patient,\n\nPlease reply to this email.",
+            'Admin User',
+            Carbon::parse('2026-10-20 09:30:00'),
+        );
+
+        $this->assertSame(
+            "20-10-2026 09:30: Email sent to patient@example.test by Admin User\nSubject: Your order needs attention\nMessage:\nDear Patient,\n\nPlease reply to this email.",
+            $note,
+        );
+    }
 }
 
 class TestablePendingOrderResource extends PendingOrderResource
@@ -63,6 +80,11 @@ class TestablePendingOrderResource extends PendingOrderResource
     public static function patientEmail(object $record): ?string
     {
         return parent::patientEmailForPending($record);
+    }
+
+    public static function emailAdminNote(string $email, string $subject, string $body, ?string $administrator, Carbon $sentAt): string
+    {
+        return parent::patientEmailAdminNote($email, $subject, $body, $administrator, $sentAt);
     }
 
     protected static function resolveSixMonthReviewBannerForPending($record): ?string

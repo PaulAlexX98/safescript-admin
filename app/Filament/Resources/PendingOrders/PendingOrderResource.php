@@ -232,6 +232,51 @@ class PendingOrderResource extends Resource
         return null;
     }
 
+    protected static function patientEmailAdminNote(
+        string $email,
+        string $subject,
+        string $body,
+        ?string $administrator = null,
+        ?Carbon $sentAt = null,
+    ): string {
+        $sentAt ??= now();
+        $administrator = trim((string) $administrator);
+
+        $header = $sentAt->format('d-m-Y H:i').': Email sent to '.$email;
+        if ($administrator !== '') {
+            $header .= ' by '.$administrator;
+        }
+
+        return $header."\nSubject: ".$subject."\nMessage:\n".$body;
+    }
+
+    protected static function appendPatientEmailToAdminNotes(
+        PendingOrder $record,
+        string $email,
+        string $subject,
+        string $body,
+    ): void {
+        $meta = is_array($record->meta)
+            ? $record->meta
+            : (json_decode($record->meta ?? '[]', true) ?: []);
+
+        $existing = data_get($meta, 'admin_notes', '');
+        if (is_array($existing)) {
+            $existing = collect($existing)
+                ->map(fn ($note) => is_scalar($note) ? (string) $note : json_encode($note, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE))
+                ->filter(fn ($note) => filled($note))
+                ->implode("\n");
+        }
+
+        $administrator = auth()->user();
+        $administratorLabel = trim((string) ($administrator?->name ?: $administrator?->email ?: ''));
+        $note = static::patientEmailAdminNote($email, $subject, $body, $administratorLabel);
+
+        data_set($meta, 'admin_notes', filled($existing) ? rtrim((string) $existing)."\n\n".$note : $note);
+        $record->meta = $meta;
+        $record->save();
+    }
+
     protected static function renderPatientEmailTemplate(string $text, $record): string
     {
         $meta = is_array($record?->meta)
@@ -2607,7 +2652,7 @@ class PendingOrderResource extends Resource
                                     ->required()
                                     ->maxLength(10000),
                             ])
-                            ->action(function (array $data, $record): void {
+                            ->action(function (array $data, $record, Action $action): void {
                                 $email = trim((string) ($data['to'] ?? ''));
                                 $subject = trim(static::renderPatientEmailTemplate((string) ($data['subject'] ?? ''), $record));
                                 $body = trim(static::renderPatientEmailTemplate((string) ($data['message'] ?? ''), $record));
@@ -2637,12 +2682,6 @@ class PendingOrderResource extends Resource
                                             ->to($email)
                                             ->subject($subject);
                                     });
-
-                                    Notification::make()
-                                        ->title('Patient email sent')
-                                        ->body('Email sent to '.$email)
-                                        ->success()
-                                        ->send();
                                 } catch (Throwable $e) {
                                     report($e);
 
@@ -2651,7 +2690,32 @@ class PendingOrderResource extends Resource
                                         ->body(Str::limit($e->getMessage(), 180))
                                         ->danger()
                                         ->send();
+
+                                    return;
                                 }
+
+                                try {
+                                    static::appendPatientEmailToAdminNotes($record, $email, $subject, $body);
+                                    $record->refresh();
+                                    $action->getLivewire()->dispatch('$refresh');
+                                    $action->getLivewire()->dispatch('refreshTable');
+                                } catch (Throwable $e) {
+                                    report($e);
+
+                                    Notification::make()
+                                        ->title('Patient email sent, but the admin note could not be saved')
+                                        ->body('Email sent to '.$email.'. Do not resend it; add the note manually instead.')
+                                        ->warning()
+                                        ->send();
+
+                                    return;
+                                }
+
+                                Notification::make()
+                                    ->title('Patient email sent')
+                                    ->body('Email sent to '.$email.' and added to Admin Notes')
+                                    ->success()
+                                    ->send();
                             }),
                         Action::make('set_priority')
                             ->label('Priority')
