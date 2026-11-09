@@ -37,6 +37,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Schema as SchemaFacade;
 use App\Services\Consultations\StartConsultation;
 use App\Support\AdminNavigationCounts;
+use App\Support\AdminNoteFormatter;
 use App\Models\ConsultationSession;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\ToggleButtons;
@@ -2477,11 +2478,10 @@ class ApprovedOrderResource extends Resource
                                 if ($newNote === '') {
                                     return;
                                 }
-                                $timestamp = now()->format('d-m-Y H:i');
-                                $toAppend = $timestamp . ': ' . $newNote;
+                                $toAppend = AdminNoteFormatter::format($newNote);
                                 $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
                                 $existing = data_get($meta, 'admin_notes', '');
-                                data_set($meta, 'admin_notes', $existing ? ($existing . "\n" . $toAppend) : $toAppend);
+                                data_set($meta, 'admin_notes', AdminNoteFormatter::append($existing, $toAppend));
                                 $record->meta = $meta;
                                 $record->save();
                                 $record->refresh();

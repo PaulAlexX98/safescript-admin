@@ -7,6 +7,7 @@ use App\Models\ConsultationFormResponse;
 use App\Models\ConsultationSession;
 use App\Models\Order;
 use App\Models\User;
+use App\Support\AdminNoteFormatter;
 use Filament\Notifications\Notification;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -1309,7 +1310,8 @@ class ConsultationFormController extends Controller
                     };
 
                     if ($adminNotesStr !== '') {
-                        $meta['admin_notes'] = $appendNote($meta['admin_notes'] ?? [], $adminNotesStr);
+                        $formattedAdminNote = AdminNoteFormatter::format($adminNotesStr);
+                        $meta['admin_notes'] = $appendNote($meta['admin_notes'] ?? [], $formattedAdminNote);
                     }
 
                     if ($consultNotesStr !== '') {
