@@ -26,6 +26,7 @@ use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Schemas\Components\Grid;
+use Filament\Schemas\Components\Actions;
 use Filament\Schemas\Components\Section;
 use Filament\Support\Icons\Heroicon;
 use Filament\Notifications\Notification;
@@ -530,6 +531,16 @@ class ApprovedOrderResource extends Resource
                     ->modalCancelActionLabel('Close')
                     ->modalWidth('5xl')
                     ->schema([
+                        Actions::make([
+                            Action::make('completeConsultationTop')
+                                ->label('Complete Consultation')
+                                ->color('gray')
+                                ->icon('heroicon-o-check-badge')
+                                ->visible(fn (ApprovedOrder $record): bool => self::isReorder($record))
+                                ->action(fn (ApprovedOrder $record) => self::openReorderCompletion($record)),
+                        ])
+                            ->alignEnd()
+                            ->columnSpanFull(),
                         Grid::make(12)->schema([
                             Section::make('Patient Details')
                                 ->columnSpan(8)
@@ -2037,58 +2048,8 @@ class ApprovedOrderResource extends Resource
                         ->label('Complete Consultation')
                         ->color('gray')
                         ->icon('heroicon-o-check-badge')
-                        ->visible(function (ApprovedOrder $record): bool {
-                            $meta = is_array($record->meta)
-                                ? $record->meta
-                                : (json_decode($record->meta ?? '[]', true) ?: []);
-
-                            $raw  = strtolower(trim((string) (data_get($meta, 'type') ?? '')));
-                            $mode = strtolower(trim((string) (data_get($meta, 'mode') ?? data_get($meta, 'flow') ?? '')));
-                            $path = strtolower(trim((string) (data_get($meta, 'path') ?? data_get($meta, 'source_url') ?? data_get($meta, 'referer') ?? '')));
-                            $svc  = strtolower(trim((string) (data_get($meta, 'service') ?? data_get($meta, 'serviceName') ?? data_get($meta, 'title') ?? '')));
-                            $ref  = strtoupper(trim((string) ($record->reference ?? '')));
-
-                            return in_array($raw, ['reorder','repeat','re-order','repeat-order'], true)
-                                || in_array($mode, ['reorder','repeat'], true)
-                                || str_contains($path, '/reorder')
-                                || preg_match('/^PTC[A-Z]*R[0-9]{6}$/', $ref)
-                                || str_contains($svc, 'reorder')
-                                || str_contains($svc, 'repeat')
-                                || str_contains($svc, 're-order');
-                        })
-                        ->action(function (ApprovedOrder $record) {
-                            $meta = is_array($record->meta)
-                                ? $record->meta
-                                : (json_decode($record->meta ?? '[]', true) ?: []);
-
-                            $desiredType = 'reorder';
-
-                            data_set($meta, 'consultation.mode', $desiredType);
-                            data_set($meta, 'consultation.type', $desiredType);
-
-                            $record->meta = $meta;
-                            $record->save();
-
-                            $starter = app(\App\Services\Consultations\StartConsultation::class);
-
-                            try {
-                                $session = $starter($record, ['desired_type' => $desiredType]);
-                            } catch (\ArgumentCountError $e) {
-                                $session = $starter($record);
-                            }
-
-                            try {
-                                $attrs = method_exists($session, 'getAttributes') ? $session->getAttributes() : [];
-                                if (array_key_exists('form_type', $attrs)) {
-                                    $session->form_type = $desiredType;
-                                    $session->save();
-                                }
-                            } catch (\Throwable $e) {
-                                // non-fatal
-                            }
-
-                            return redirect()->to(url("/admin/consultations/{$session->id}/complete"));
-                        }),
+                        ->visible(fn (ApprovedOrder $record): bool => self::isReorder($record))
+                        ->action(fn (ApprovedOrder $record) => self::openReorderCompletion($record)),
 
                     Action::make('editProduct')
                         ->label('Edit product')
@@ -2915,6 +2876,61 @@ class ApprovedOrderResource extends Resource
     public static function getRelations(): array
     {
         return [];
+    }
+
+    private static function isReorder(ApprovedOrder $record): bool
+    {
+        $meta = is_array($record->meta)
+            ? $record->meta
+            : (json_decode($record->meta ?? '[]', true) ?: []);
+
+        $raw = strtolower(trim((string) (data_get($meta, 'type') ?? '')));
+        $mode = strtolower(trim((string) (data_get($meta, 'mode') ?? data_get($meta, 'flow') ?? '')));
+        $path = strtolower(trim((string) (data_get($meta, 'path') ?? data_get($meta, 'source_url') ?? data_get($meta, 'referer') ?? '')));
+        $service = strtolower(trim((string) (data_get($meta, 'service') ?? data_get($meta, 'serviceName') ?? data_get($meta, 'title') ?? '')));
+        $reference = strtoupper(trim((string) ($record->reference ?? '')));
+
+        return in_array($raw, ['reorder', 'repeat', 're-order', 'repeat-order'], true)
+            || in_array($mode, ['reorder', 'repeat'], true)
+            || str_contains($path, '/reorder')
+            || preg_match('/^PTC[A-Z]*R[0-9]{6}$/', $reference) === 1
+            || str_contains($service, 'reorder')
+            || str_contains($service, 'repeat')
+            || str_contains($service, 're-order');
+    }
+
+    private static function openReorderCompletion(ApprovedOrder $record): mixed
+    {
+        $meta = is_array($record->meta)
+            ? $record->meta
+            : (json_decode($record->meta ?? '[]', true) ?: []);
+
+        data_set($meta, 'consultation.mode', 'reorder');
+        data_set($meta, 'consultation.type', 'reorder');
+
+        $record->meta = $meta;
+        $record->save();
+
+        $starter = app(StartConsultation::class);
+
+        try {
+            $session = $starter($record, ['desired_type' => 'reorder']);
+        } catch (\ArgumentCountError) {
+            $session = $starter($record);
+        }
+
+        try {
+            $attributes = method_exists($session, 'getAttributes') ? $session->getAttributes() : [];
+
+            if (array_key_exists('form_type', $attributes)) {
+                $session->form_type = 'reorder';
+                $session->save();
+            }
+        } catch (Throwable) {
+            // Persisting the form type is helpful but not required for the redirect.
+        }
+
+        return redirect()->to(url("/admin/consultations/{$session->id}/complete"));
     }
 
     public static function getPages(): array
