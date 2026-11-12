@@ -19,7 +19,7 @@ class ManualAppointmentsPendingTest extends TestCase
         $this->assertStringContainsString('start_at is not null', $normalizedSql);
         $this->assertStringContainsString('start_at >= ?', $normalizedSql);
         $this->assertStringContainsString('appointments.deleted_at is null', $normalizedSql);
-        $this->assertStringContainsString('order by start_at asc', $normalizedSql);
+        $this->assertStringContainsString('order by appointments.start_at asc', $normalizedSql);
 
         $this->assertContains('PCAO%', $bindings);
         $this->assertContains('completed', $bindings);

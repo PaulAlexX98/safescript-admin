@@ -10,6 +10,8 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Filament\Widgets\TableWidget;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class ManualAppointmentsPending extends TableWidget
 {
@@ -87,6 +89,14 @@ class ManualAppointmentsPending extends TableWidget
                     })
                     ->searchable(),
 
+                TextColumn::make('source_label')
+                    ->label('Source')
+                    ->getStateUsing(fn (Appointment $record): string => ($record->source ?? null) === 'partner_api'
+                        ? 'Partner Website'
+                        : 'Pharmacy Express')
+                    ->badge()
+                    ->color(fn (string $state): string => $state === 'Pharmacy Express' ? 'gray' : 'info'),
+
                 TextColumn::make('start_at')
                     ->label('Appointment')
                     ->getStateUsing(function (Appointment $record): string {
@@ -118,28 +128,36 @@ class ManualAppointmentsPending extends TableWidget
 
     public static function query(): Builder
     {
-        return Appointment::query()
+        $query = Appointment::query()
             ->select([
-                'id',
-                'order_reference',
-                'patient_name',
-                'first_name',
-                'last_name',
-                'email',
-                'service_name',
-                'service',
-                'service_slug',
-                'start_at',
-            ])
-            ->whereNull('order_id')
-            ->where('order_reference', 'like', 'PCAO%')
-            ->whereNotNull('start_at')
-            ->where('start_at', '>=', Carbon::now('Europe/London')->startOfDay()->utc())
+                'appointments.id',
+                'appointments.order_reference',
+                'appointments.patient_name',
+                'appointments.first_name',
+                'appointments.last_name',
+                'appointments.email',
+                'appointments.service_name',
+                'appointments.service',
+                'appointments.service_slug',
+                'appointments.start_at',
+            ]);
+
+        if (Schema::hasColumn('appointments', 'source')) {
+            $query->addSelect('appointments.source');
+        } else {
+            $query->addSelect(DB::raw('NULL as source'));
+        }
+
+        return $query
+            ->whereNull('appointments.order_id')
+            ->where('appointments.order_reference', 'like', 'PCAO%')
+            ->whereNotNull('appointments.start_at')
+            ->where('appointments.start_at', '>=', Carbon::now('Europe/London')->startOfDay()->utc())
             ->where(function (Builder $statusQuery): void {
                 $statusQuery
-                    ->whereNull('status')
-                    ->orWhere('status', '')
-                    ->orWhereNotIn('status', [
+                    ->whereNull('appointments.status')
+                    ->orWhere('appointments.status', '')
+                    ->orWhereNotIn('appointments.status', [
                         'completed',
                         'complete',
                         'done',
@@ -148,6 +166,6 @@ class ManualAppointmentsPending extends TableWidget
                         'rejected',
                     ]);
             })
-            ->orderBy('start_at');
+            ->orderBy('appointments.start_at');
     }
 }
