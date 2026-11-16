@@ -8,6 +8,8 @@ use Throwable;
 use Carbon\Carbon;
 use App\Filament\Resources\Orders\CompletedOrderResource;
 use App\Models\ConsultationFormResponse;
+use App\Models\ConsultationSession;
+use App\Models\GpContact;
 use App\Models\Order;
 use App\Models\PendingOrder;
 use Filament\Actions;
@@ -18,6 +20,7 @@ use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Resources\Pages\ViewRecord;
+use Illuminate\Contracts\View\View;
 use Illuminate\Support\Arr;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\Mail;
@@ -36,6 +39,8 @@ use Filament\Schemas\Components\Utilities\Get;
 class CompletedOrderDetails extends ViewRecord
 {
     protected static string $resource = CompletedOrderResource::class;
+
+    protected array $gpDetailsCache = [];
 
     public function mount($record): void
     {
@@ -75,6 +80,136 @@ class CompletedOrderDetails extends ViewRecord
     public function getTitle(): string
     {
         return 'Order ' . ($this->record->reference ?? $this->record->getKey());
+    }
+
+    public function getHeader(): ?View
+    {
+        return view('filament.orders.completed-order-header', [
+            'actions' => $this->getCachedHeaderActions(),
+            'actionsAlignment' => $this->getHeaderActionsAlignment(),
+            'breadcrumbs' => filament()->hasBreadcrumbs() ? $this->getBreadcrumbs() : [],
+            'heading' => $this->getHeading(),
+            'subheading' => $this->getSubheading(),
+        ]);
+    }
+
+    protected function notificationOfTreatmentPdf(int|string $sessionId): ?string
+    {
+        try {
+            $url = Route::has('admin.consultations.pdf.notification')
+                ? route('admin.consultations.pdf.notification', ['session' => $sessionId])
+                : url("/admin/consultations/{$sessionId}/pdf/notification-of-treatment-issued");
+
+            $response = Route::dispatch(Request::create($url, 'GET'));
+
+            return $response->getStatusCode() === 200
+                ? $response->getContent()
+                : null;
+        } catch (Throwable $e) {
+            report($e);
+
+            return null;
+        }
+    }
+
+    protected function gpDetailsForRecord($record): array
+    {
+        $cacheKey = (string) ($record?->getKey() ?? 'unknown');
+
+        if (array_key_exists($cacheKey, $this->gpDetailsCache)) {
+            return $this->gpDetailsCache[$cacheKey];
+        }
+
+        $addressKeys = ['gp', 'gpsurgery', 'gpaddress', 'gpnameaddress', 'gpsearch'];
+        $emailKeys = ['gpemail', 'gpemailaddress'];
+
+        $findValue = function ($value, array $keys) use (&$findValue): ?string {
+            if (! is_array($value)) {
+                return null;
+            }
+
+            foreach ($value as $key => $item) {
+                $normalizedKey = strtolower((string) preg_replace('/[^a-z0-9]/i', '', (string) $key));
+
+                if (in_array($normalizedKey, $keys, true) && is_scalar($item)) {
+                    $candidate = trim((string) $item);
+                    if ($candidate !== '') {
+                        return $candidate;
+                    }
+                }
+            }
+
+            foreach ($value as $item) {
+                if (is_array($item) && filled($candidate = $findValue($item, $keys))) {
+                    return $candidate;
+                }
+            }
+
+            return null;
+        };
+
+        $meta = is_array($record?->meta)
+            ? $record->meta
+            : (json_decode($record?->meta ?? '[]', true) ?: []);
+        $sources = [];
+        $sessionId = data_get($meta, 'consultation_session_id');
+
+        if ($sessionId) {
+            $responses = ConsultationFormResponse::query()
+                ->where('consultation_session_id', $sessionId)
+                ->whereIn('form_type', ['raf', 'risk_assessment', 'assessment', 'intake'])
+                ->latest('id')
+                ->get();
+
+            foreach ($responses as $response) {
+                $sources[] = [
+                    'answers' => $response->answers,
+                    'data' => $response->data,
+                    'meta' => $response->meta,
+                ];
+            }
+
+            $session = ConsultationSession::query()->find($sessionId);
+            if ($session) {
+                $sources[] = $session->meta;
+            }
+        }
+
+        $sources[] = $meta;
+
+        $address = null;
+        $email = null;
+        foreach ($sources as $source) {
+            $address ??= $findValue($source, $addressKeys);
+            $email ??= $findValue($source, $emailKeys);
+
+            if ($address && $email) {
+                break;
+            }
+        }
+
+        $address ??= $record?->user?->gp_surgery;
+
+        // An administrator-assigned directory email is authoritative for a GP address.
+        // Fall back to the assessment snapshot, then the patient record, when no mapping exists.
+        $email = GpContact::emailForAddress($address)
+            ?? $email
+            ?? $record?->user?->gp_email;
+
+        return $this->gpDetailsCache[$cacheKey] = [
+            'address' => filled($address) ? trim((string) $address) : null,
+            'email' => filled($email) ? strtolower(trim((string) $email)) : null,
+        ];
+    }
+
+    protected function gpAddressForRecord($record): ?string
+    {
+        return $this->gpDetailsForRecord($record)['address'];
+    }
+
+    protected function gpEmailForRecord($record): ?string
+    {
+        return $this->gpDetailsForRecord($record)['email'];
     }
 
 
@@ -881,6 +1016,166 @@ class CompletedOrderDetails extends ViewRecord
                 ->button()
                 ->visible($hasSession),
 
+            ActionGroup::make([
+                Action::make('find_gp_contact')
+                    ->label('Find GP Contact')
+                    ->icon('heroicon-o-magnifying-glass')
+                    ->url('https://servicefinder.nhs.uk/location')
+                    ->openUrlInNewTab(),
+
+                Action::make('assign_gp_email')
+                    ->label('Assign GP Email')
+                    ->icon('heroicon-o-at-symbol')
+                    ->modalHeading('Assign email to GP address')
+                    ->modalDescription('This email will be reused when another patient provides the same GP address.')
+                    ->modalSubmitActionLabel('Save GP email')
+                    ->fillForm(function (): array {
+                        $address = $this->gpAddressForRecord($this->record);
+
+                        return [
+                            'gp_address' => $address,
+                            'gp_email' => $this->gpEmailForRecord($this->record)
+                                ?? GpContact::emailForAddress($address),
+                        ];
+                    })
+                    ->form([
+                        Textarea::make('gp_address')
+                            ->label('GP Address')
+                            ->rows(4)
+                            ->disabled()
+                            ->dehydrated(false),
+                        TextInput::make('gp_email')
+                            ->label('GP Email')
+                            ->email()
+                            ->required()
+                            ->maxLength(254),
+                    ])
+                    ->action(function (array $data): void {
+                        $user = $this->record?->user;
+                        $address = trim((string) ($this->gpAddressForRecord($this->record) ?? ''));
+                        $email = strtolower(trim((string) ($data['gp_email'] ?? '')));
+
+                        if ($address === '') {
+                            Notification::make()->danger()->title('No GP address is recorded')->send();
+                            return;
+                        }
+
+                        GpContact::query()->updateOrCreate(
+                            ['address_hash' => GpContact::hashAddress($address)],
+                            [
+                                'gp_address' => $address,
+                                'normalized_address' => GpContact::normalizeAddress($address),
+                                'email' => $email,
+                                'assigned_by' => auth()->id(),
+                            ],
+                        );
+
+                        if ($user) {
+                            $user->gp_surgery = $address;
+                            $user->gp_email = $email;
+                            $user->save();
+                        }
+
+                        $this->gpDetailsCache = [];
+
+                        Notification::make()
+                            ->success()
+                            ->title('GP email assigned')
+                            ->body('Future patients using this GP address will inherit the saved email.')
+                            ->send();
+                    }),
+
+                Action::make('email_gp_notification')
+                    ->label('Email Treatment Notification')
+                    ->icon('heroicon-o-paper-airplane')
+                    ->modalHeading('Email GP treatment notification')
+                    ->modalDescription('The Notification of Treatment PDF will be attached automatically.')
+                    ->modalSubmitActionLabel('Send to GP')
+                    ->fillForm(function (): array {
+                        $user = $this->record?->user;
+                        $meta = is_array($this->record?->meta)
+                            ? $this->record->meta
+                            : (json_decode($this->record?->meta ?? '[]', true) ?: []);
+                        $patientName = trim(implode(' ', array_filter([
+                            data_get($meta, 'firstName') ?? data_get($meta, 'first_name') ?? $user?->first_name,
+                            data_get($meta, 'lastName') ?? data_get($meta, 'last_name') ?? $user?->last_name,
+                        ])));
+
+                        return [
+                            'to' => $this->gpEmailForRecord($this->record)
+                                ?? GpContact::emailForAddress($this->gpAddressForRecord($this->record)),
+                            'subject' => 'Notification of Treatment'.($patientName !== '' ? " - {$patientName}" : ''),
+                            'message' => "Dear GP surgery,\n\n"
+                                . "This patient received an assessment from our clinical team on the date shown above for weight management and was supplied the treatment ordered through our service. Please see the attached document.\n\n"
+                                . "W M Malik\n"
+                                . 'MRPharmS',
+                        ];
+                    })
+                    ->form([
+                        TextInput::make('to')
+                            ->label('To')
+                            ->email()
+                            ->required()
+                            ->maxLength(254),
+                        TextInput::make('subject')
+                            ->label('Subject')
+                            ->required(),
+                        Textarea::make('message')
+                            ->label('Message')
+                            ->rows(10)
+                            ->required(),
+                    ])
+                    ->action(function (array $data) use ($sessionId): void {
+                        if (! $sessionId) {
+                            Notification::make()->danger()->title('No consultation session')->send();
+                            return;
+                        }
+
+                        $pdfContent = $this->notificationOfTreatmentPdf($sessionId);
+                        if ($pdfContent === null) {
+                            Notification::make()->danger()->title('Could not generate the Notification of Treatment PDF')->send();
+                            return;
+                        }
+
+                        $email = strtolower(trim((string) ($data['to'] ?? '')));
+                        $subject = trim((string) ($data['subject'] ?? ''));
+                        $body = trim((string) ($data['message'] ?? ''));
+                        $ref = $this->record?->reference ?? $this->record?->getKey();
+
+                        try {
+                            $fromAddress = config('mail.from.address') ?: 'info@safescript.co.uk';
+                            $fromName = config('mail.from.name') ?: 'Safescript Pharmacy';
+
+                            Mail::send([], [], function ($mail) use ($email, $subject, $body, $pdfContent, $ref, $fromAddress, $fromName): void {
+                                $mail->from($fromAddress, $fromName)
+                                    ->to($email)
+                                    ->subject($subject)
+                                    ->text($body)
+                                    ->attachData(
+                                        $pdfContent,
+                                        "Notification-of-Treatment-{$ref}.pdf",
+                                        ['mime' => 'application/pdf'],
+                                    );
+                            });
+
+                            Notification::make()->success()->title('GP notification email sent')->send();
+                        } catch (Throwable $e) {
+                            report($e);
+                            Notification::make()
+                                ->danger()
+                                ->title('Could not send GP email')
+                                ->body(substr($e->getMessage(), 0, 200))
+                                ->send();
+                        }
+                    })
+                    ->visible($hasSession),
+            ])
+                ->label('GP Communication')
+                ->icon('heroicon-o-building-office-2')
+                ->color('gray')
+                ->button()
+                ->visible(fn () => filled($this->gpAddressForRecord($this->record))),
+
             Action::make('email_people')
                 ->label('Email People')
                 ->icon('heroicon-o-envelope')
@@ -1652,159 +1947,168 @@ class CompletedOrderDetails extends ViewRecord
                             ]),
                         ]),
 
-                        Section::make('Payment')->columnSpan(2)->schema([
-                             TextEntry::make('payment_status')
-                                ->hiddenLabel()
+                        Grid::make(1)->columnSpan(4)->schema([
+                        Section::make('Order Details')->columns(2)->schema([
+                            TextEntry::make('payment_status')
+                                ->label('Payment')
                                 ->badge()
                                 ->formatStateUsing(fn ($state) => $state ? ucfirst((string) $state) : null)
                                 ->color(function ($state) {
-                                $s = strtolower((string) $state);
-                                return match ($s) {
-                                    'paid'     => 'success',
-                                    'unpaid'   => 'warning',
-                                    'refunded' => 'danger',
-                                    default    => 'gray',
-                                };
+                                    $s = strtolower((string) $state);
+                                    return match ($s) {
+                                        'paid'     => 'success',
+                                        'unpaid'   => 'warning',
+                                        'refunded' => 'danger',
+                                        default    => 'gray',
+                                    };
                                 }),
-                        ]),
 
-                        Section::make('Status')->columnSpan(2)->schema([
-                            TextEntry::make('status')->hiddenLabel()
+                            TextEntry::make('status')
+                                ->label('Status')
                                 ->state(fn () => ucfirst((string) $rec->status))
                                 ->badge()
                                 ->color('success'),
+
+                            TextEntry::make('scr_verified')
+                                ->label('SCR Verified')
+                                ->visible(function ($record) {
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                    $slug = data_get($meta, 'service_slug')
+                                        ?? data_get($meta, 'service.slug')
+                                        ?? data_get($meta, 'consultation.service_slug');
+                                    return is_string($slug) && strtolower($slug) === 'weight-management';
+                                })
+                                ->state(function ($record) {
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                    // First preference from this order's meta
+                                    $val = data_get($meta, 'scr_verified')
+                                        ?? data_get($meta, 'scr_status')
+                                        ?? data_get($meta, 'scrVerified');
+
+                                    // Fallback from the patient user record so it carries forward across orders
+                                    if ($val === null || $val === '') {
+                                        $user = $record->user;
+                                        if ($user) {
+                                            $val = data_get($user, 'scr_verified')
+                                                ?? data_get($user, 'meta.scr_verified')
+                                                ?? data_get($user, 'meta.scr_status')
+                                                ?? data_get($user, 'meta.scrVerified');
+                                        }
+                                    }
+
+                                    if (is_bool($val)) return $val ? 'Yes' : 'No';
+                                    $s = strtolower(trim((string) $val));
+                                    return match ($s) {
+                                        'y', 'yes', 'true', '1' => 'Yes',
+                                        'n', 'no', 'false', '0' => 'No',
+                                        default => '—',
+                                    };
+                                })
+                                ->badge()
+                                ->color(function ($state) {
+                                    $s = strtolower((string) $state);
+                                    return match ($s) {
+                                        'yes' => 'success',
+                                        'no'  => 'danger',
+                                        default => 'gray',
+                                    };
+                                }),
+
+                            TextEntry::make('id_verified')
+                                ->label('ID Verified')
+                                ->visible(function ($record) {
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                    $slug = data_get($meta, 'service_slug')
+                                        ?? data_get($meta, 'service.slug')
+                                        ?? data_get($meta, 'consultation.service_slug');
+                                    return is_string($slug) && strtolower($slug) === 'weight-management';
+                                })
+                                ->state(function ($record) {
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+
+                                    // Prefer this order's meta
+                                    $val = data_get($meta, 'id_verified')
+                                        ?? data_get($meta, 'id_status')
+                                        ?? data_get($meta, 'idVerified');
+
+                                    // Fallback from the patient so it carries forward across orders
+                                    if ($val === null || $val === '') {
+                                        $user = $record->user;
+                                        if ($user) {
+                                            $val = data_get($user, 'id_verified')
+                                                ?? data_get($user, 'meta.id_verified')
+                                                ?? data_get($user, 'meta.id_status')
+                                                ?? data_get($user, 'meta.idVerified');
+                                        }
+                                    }
+
+                                    if (is_bool($val)) return $val ? 'Yes' : 'No';
+                                    $s = strtolower(trim((string) $val));
+                                    return match ($s) {
+                                        'y', 'yes', 'true', '1' => 'Yes',
+                                        'n', 'no', 'false', '0' => 'No',
+                                        default => '—',
+                                    };
+                                })
+                                ->badge()
+                                ->color(function ($state) {
+                                    $s = strtolower((string) $state);
+                                    return match ($s) {
+                                        'yes' => 'success',
+                                        'no'  => 'danger',
+                                        default => 'gray',
+                                    };
+                                }),
+
                         ]),
 
-                        Section::make('Appointment')
-                            ->columnSpan(4)
+                        Section::make('Appointment')->schema([
+                            TextEntry::make('appointment_datetime')
+                                ->hiddenLabel()
+                                ->state(function ($record) {
+                                    $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
+                                    $start = data_get($meta, 'appointment_start_at')
+                                        ?? data_get($meta, 'appointment.start_at')
+                                        ?? data_get($meta, 'appointment_at')
+                                        ?? data_get($meta, 'booking.start_at');
+
+                                    $end = data_get($meta, 'appointment_end_at')
+                                        ?? data_get($meta, 'appointment.end_at')
+                                        ?? data_get($meta, 'booking.end_at');
+
+                                    $sd = null; $ed = null;
+                                    try { if ($start) { $sd = \Carbon\Carbon::parse($start, 'UTC')->setTimezone('Europe/London'); } } catch (\Throwable $e) {}
+                                    try { if ($end)   { $ed = \Carbon\Carbon::parse($end,   'UTC')->setTimezone('Europe/London'); } } catch (\Throwable $e) {}
+
+                                    if (!$sd) return null;
+
+                                    if ($ed) {
+                                        return $sd->format('Y-m-d') === $ed->format('Y-m-d')
+                                            ? $sd->format('d-m-Y H:i') . ' — ' . $ed->format('H:i')
+                                            : $sd->format('d-m-Y H:i') . ' — ' . $ed->format('d-m-Y H:i');
+                                    }
+
+                                    return $sd->format('d-m-Y H:i');
+                                })
+                                ->placeholder('—'),
+                        ]),
+                        ]),
+
+                        Section::make('GP Details')
+                            ->columnSpan(12)
+                            ->columns(2)
+                            ->visible(fn ($record) => filled($this->gpAddressForRecord($record)) || filled($this->gpEmailForRecord($record)))
                             ->schema([
-                                TextEntry::make('appointment_datetime')
-                                    ->hiddenLabel()
-                                    ->state(function ($record) {
-                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                        $start = data_get($meta, 'appointment_start_at')
-                                            ?? data_get($meta, 'appointment.start_at')
-                                            ?? data_get($meta, 'appointment_at')
-                                            ?? data_get($meta, 'booking.start_at');
+                            TextEntry::make('gp_surgery')
+                                ->label('GP Address')
+                                ->state(fn ($record) => $this->gpAddressForRecord($record))
+                                ->placeholder('—'),
 
-                                        $end = data_get($meta, 'appointment_end_at')
-                                            ?? data_get($meta, 'appointment.end_at')
-                                            ?? data_get($meta, 'booking.end_at');
-
-                                        $sd = null; $ed = null;
-                                        try { if ($start) { $sd = \Carbon\Carbon::parse($start, 'UTC')->setTimezone('Europe/London'); } } catch (\Throwable $e) {}
-                                        try { if ($end)   { $ed = \Carbon\Carbon::parse($end,   'UTC')->setTimezone('Europe/London'); } } catch (\Throwable $e) {}
-
-                                        if (!$sd) return null;
-
-                                        if ($ed) {
-                                            return $sd->format('Y-m-d') === $ed->format('Y-m-d')
-                                                ? $sd->format('d-m-Y H:i') . ' — ' . $ed->format('H:i')
-                                                : $sd->format('d-m-Y H:i') . ' — ' . $ed->format('d-m-Y H:i');
-                                        }
-
-                                        return $sd->format('d-m-Y H:i');
-                                    }),
-                            ]),
-
-                        Section::make('SCR Verified')
-                            ->columnSpan(4)
-                            ->visible(function ($record) {
-                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                $slug = data_get($meta, 'service_slug')
-                                    ?? data_get($meta, 'service.slug')
-                                    ?? data_get($meta, 'consultation.service_slug');
-                                return is_string($slug) && strtolower($slug) === 'weight-management';
-                            })
-                            ->schema([
-                                TextEntry::make('scr_verified')
-                                    ->hiddenLabel()
-                                    ->state(function ($record) {
-                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-
-                                        // First preference from this order's meta
-                                        $val = data_get($meta, 'scr_verified')
-                                            ?? data_get($meta, 'scr_status')
-                                            ?? data_get($meta, 'scrVerified');
-
-                                        // Fallback from the patient user record so it carries forward across orders
-                                        if ($val === null || $val === '') {
-                                            $user = $record->user;
-                                            if ($user) {
-                                                $val = data_get($user, 'scr_verified')
-                                                    ?? data_get($user, 'meta.scr_verified')
-                                                    ?? data_get($user, 'meta.scr_status')
-                                                    ?? data_get($user, 'meta.scrVerified');
-                                            }
-                                        }
-
-                                        if (is_bool($val)) return $val ? 'Yes' : 'No';
-                                        $s = strtolower(trim((string) $val));
-                                        return match ($s) {
-                                            'y', 'yes', 'true', '1' => 'Yes',
-                                            'n', 'no', 'false', '0' => 'No',
-                                            default => '—',
-                                        };
-                                    })
-                                    ->badge()
-                                    ->color(function ($state) {
-                                        $s = strtolower((string) $state);
-                                        return match ($s) {
-                                            'yes' => 'success',
-                                            'no'  => 'danger',
-                                            default => 'gray',
-                                        };
-                                    }),
-                            ]),
-                        // --- ID Verified section for weight-management ---
-                        Section::make('ID Verified')
-                            ->columnSpan(4)
-                            ->visible(function ($record) {
-                                $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-                                $slug = data_get($meta, 'service_slug')
-                                    ?? data_get($meta, 'service.slug')
-                                    ?? data_get($meta, 'consultation.service_slug');
-                                return is_string($slug) && strtolower($slug) === 'weight-management';
-                            })
-                            ->schema([
-                                TextEntry::make('id_verified')
-                                    ->hiddenLabel()
-                                    ->state(function ($record) {
-                                        $meta = is_array($record->meta) ? $record->meta : (json_decode($record->meta ?? '[]', true) ?: []);
-
-                                        // Prefer this order's meta
-                                        $val = data_get($meta, 'id_verified')
-                                            ?? data_get($meta, 'id_status')
-                                            ?? data_get($meta, 'idVerified');
-
-                                        // Fallback from the patient so it carries forward across orders
-                                        if ($val === null || $val === '') {
-                                            $user = $record->user;
-                                            if ($user) {
-                                                $val = data_get($user, 'id_verified')
-                                                    ?? data_get($user, 'meta.id_verified')
-                                                    ?? data_get($user, 'meta.id_status')
-                                                    ?? data_get($user, 'meta.idVerified');
-                                            }
-                                        }
-
-                                        if (is_bool($val)) return $val ? 'Yes' : 'No';
-                                        $s = strtolower(trim((string) $val));
-                                        return match ($s) {
-                                            'y', 'yes', 'true', '1' => 'Yes',
-                                            'n', 'no', 'false', '0' => 'No',
-                                            default => '—',
-                                        };
-                                    })
-                                    ->badge()
-                                    ->color(function ($state) {
-                                        $s = strtolower((string) $state);
-                                        return match ($s) {
-                                            'yes' => 'success',
-                                            'no'  => 'danger',
-                                            default => 'gray',
-                                        };
-                                    }),
+                            TextEntry::make('gp_email')
+                                ->label('GP Email')
+                                ->state(fn ($record) => $this->gpEmailForRecord($record))
+                                ->placeholder('—'),
                             ]),
                     ]),
                 ])
