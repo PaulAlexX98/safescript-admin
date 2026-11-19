@@ -1392,6 +1392,13 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                     ->dehydrated(fn () => \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'phone'))
                     ->columnSpan(6),
 
+                \Filament\Forms\Components\Textarea::make('notes')
+                    ->label('Appointment notes')
+                    ->rows(4)
+                    ->maxLength(4000)
+                    ->dehydrated(fn () => \Illuminate\Support\Facades\Schema::hasColumn('appointments', 'notes'))
+                    ->columnSpan(12),
+
                 \Filament\Forms\Components\Hidden::make('service')
                     ->dehydrated(true),
 
@@ -1788,6 +1795,13 @@ public static function appointmentSlotHasCapacityForStartAt(?string $startAtUtc,
                     ->getStateUsing(fn ($record) => static::sixMonthReviewHistoryForAppointment($record))
                     ->formatStateUsing(fn ($state) => filled($state) ? $state : '—')
                     ->wrap()
+                    ->toggleable(isToggledHiddenByDefault: true),
+
+                TextColumn::make('notes')
+                    ->label('Appointment notes')
+                    ->placeholder('—')
+                    ->wrap()
+                    ->limit(120)
                     ->toggleable(isToggledHiddenByDefault: true),
 
             ])

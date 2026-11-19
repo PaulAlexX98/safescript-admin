@@ -15,7 +15,7 @@ class Appointment extends Model
         'patient_name', 'first_name', 'last_name',
         'service_slug', 'service_name', 'service',
         'status', 'order_id', 'order_reference',
-        'email', 'phone', 'online_consultation',
+        'email', 'phone', 'online_consultation', 'notes',
     ];
 
     protected $casts = [
