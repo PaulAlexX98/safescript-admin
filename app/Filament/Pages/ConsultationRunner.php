@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\DB;
 use App\Models\Order;
 use App\Models\Patient;
+use App\Services\GpTreatmentNotification;
 use App\Services\Shipping\ClickAndDrop;
 
 class ConsultationRunner extends Page
@@ -239,6 +240,10 @@ class ConsultationRunner extends Page
         // Always persist any unsaved meta from the UI first
         $this->syncMetaToOrder();
 
+        // Only the first transition to completed should email the patient's GP.
+        $shouldSendGpNotification = $this->order
+            && strtolower(trim((string) $this->order->status)) !== 'completed';
+
         DB::transaction(function () {
             // 1) Mark the consultation session as completed (if the column exists)
             if (Schema::hasColumn($this->session->getTable(), 'completed_at')) {
@@ -305,6 +310,32 @@ class ConsultationRunner extends Page
                 }
             }
         });
+
+        if ($shouldSendGpNotification) {
+            try {
+                $completedOrder = Order::query()
+                    ->with('user')
+                    ->where('reference', $this->order?->reference)
+                    ->firstOrFail();
+
+                app(GpTreatmentNotification::class)->sendForCompletedOrder(
+                    $completedOrder,
+                    $this->session,
+                );
+
+                Notification::make()
+                    ->success()
+                    ->title('GP treatment notification sent successfully')
+                    ->send();
+            } catch (Throwable $e) {
+                report($e);
+
+                Notification::make()
+                    ->danger()
+                    ->title('GP treatment notification failed')
+                    ->send();
+            }
+        }
 
         // 4) Trigger Royal Mail Click & Drop shipping now that completion has been saved
         $orderMetaForWalkInCheck = is_array($this->order?->meta ?? null)

@@ -7,6 +7,7 @@ use App\Models\ConsultationFormResponse;
 use App\Models\ConsultationSession;
 use App\Models\Order;
 use App\Models\User;
+use App\Services\GpTreatmentNotification;
 use App\Support\AdminNoteFormatter;
 use Filament\Notifications\Notification;
 use Illuminate\Http\Request;
@@ -2230,6 +2231,31 @@ class ConsultationFormController extends Controller
                 'session' => $session->id,
                 'error' => $e->getMessage(),
             ]);
+        }
+
+        try {
+            $completedOrder = Order::query()
+                ->with('user')
+                ->findOrFail($order?->getKey());
+
+            $sent = app(GpTreatmentNotification::class)->sendForCompletedOrder(
+                $completedOrder,
+                $session,
+            );
+
+            if ($sent) {
+                Notification::make()
+                    ->success()
+                    ->title('GP treatment notification sent successfully')
+                    ->send();
+            }
+        } catch (\Throwable $e) {
+            report($e);
+
+            Notification::make()
+                ->danger()
+                ->title('GP treatment notification failed')
+                ->send();
         }
 
         $this->sendApprovedEmail($session);
