@@ -25,7 +25,7 @@ class GpTreatmentNotification
             return false;
         }
 
-        $email = $this->gpEmailFor($order);
+        $email = $this->recipientFor($order);
 
         if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
             throw new RuntimeException('No valid GP email is registered for this patient.');
@@ -73,7 +73,7 @@ class GpTreatmentNotification
         return true;
     }
 
-    protected function gpEmailFor(Order $order): ?string
+    public function recipientFor(Order $order): ?string
     {
         $user = $order->user;
         $address = trim((string) ($user?->gp_surgery ?? ''));
