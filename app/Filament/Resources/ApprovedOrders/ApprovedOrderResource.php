@@ -17,6 +17,7 @@ use Filament\Forms\Components\TextInput;
 use App\Filament\Resources\ApprovedOrders\Pages\ListApprovedOrders;
 use App\Filament\Resources\ApprovedOrders\Schemas\ApprovedOrderForm;
 use App\Models\ApprovedOrder;
+use App\Models\Appointment;
 use App\Models\Order;
 use App\Models\PendingOrder;
 use BackedEnum;
@@ -62,6 +63,72 @@ class ApprovedOrderResource extends Resource
 
     // use order reference as record title if you have it
     protected static ?string $recordTitleAttribute = 'reference';
+
+    protected static function appointmentDateTimeForApproved($record): ?string
+    {
+        if (! $record) {
+            return null;
+        }
+
+        $meta = is_array($record->meta)
+            ? $record->meta
+            : (json_decode($record->meta ?? '[]', true) ?: []);
+
+        $appointmentAt = data_get($meta, 'appointment_at')
+            ?? data_get($meta, 'appointment_start_at')
+            ?? data_get($meta, 'appointment_start')
+            ?? data_get($meta, 'appointment_datetime')
+            ?? data_get($meta, 'appointmentDateTime')
+            ?? data_get($meta, 'appointment.start_at')
+            ?? data_get($meta, 'booking.start_at');
+
+        if (! $appointmentAt) {
+            $date = data_get($meta, 'booking_date')
+                ?? data_get($meta, 'consultation_date')
+                ?? data_get($meta, 'appointment_date');
+
+            $time = data_get($meta, 'booking_time')
+                ?? data_get($meta, 'consultation_time')
+                ?? data_get($meta, 'appointment_time');
+
+            if ($date && $time) {
+                $appointmentAt = trim((string) $date) . ' ' . trim((string) $time);
+            } elseif ($date) {
+                $appointmentAt = $date;
+            }
+        }
+
+        if (! $appointmentAt) {
+            try {
+                $appointmentAt = Appointment::query()
+                    ->where(function ($query) use ($record) {
+                        if (! empty($record->id)) {
+                            $query->orWhere('order_id', $record->id);
+                        }
+
+                        if (! empty($record->reference)) {
+                            $query->orWhere('order_reference', $record->reference);
+                        }
+                    })
+                    ->latest('id')
+                    ->value('start_at');
+            } catch (Throwable $e) {
+                // Preserve the empty appointment fallback.
+            }
+        }
+
+        if (! $appointmentAt) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($appointmentAt)
+                ->timezone('Europe/London')
+                ->format('d M Y, H:i');
+        } catch (Throwable $e) {
+            return (string) $appointmentAt;
+        }
+    }
 
     public static function form(Schema $schema): Schema
     {
@@ -464,6 +531,13 @@ class ApprovedOrderResource extends Resource
                               ->orWhere('reference', 'like', $like);
                         });
                     })
+                    ->toggleable(),
+
+                TextColumn::make('appointment_datetime')
+                    ->label('Appointment')
+                    ->getStateUsing(fn ($record) => static::appointmentDateTimeForApproved($record))
+                    ->placeholder('—')
+                    ->sortable(false)
                     ->toggleable(),
             ])
             ->defaultPaginationPageOption(25)
