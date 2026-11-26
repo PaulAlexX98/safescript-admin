@@ -191,6 +191,17 @@ class Order extends Model
         static::saved(function (self $order) {
             static::syncAppointmentFromMeta($order);
         });
+
+        static::deleted(function (self $order) {
+            $appointmentId = data_get($order->meta, 'manual_appointment_id');
+            $appointmentReference = data_get($order->meta, 'manual_appointment_reference');
+            if ($appointmentId && $appointmentReference && $order->isWalkIn()) {
+                Appointment::query()
+                    ->whereKey($appointmentId)
+                    ->where('order_id', $order->getKey())
+                    ->update(['order_id' => null, 'order_reference' => $appointmentReference]);
+            }
+        });
     }
 
     public static function syncAppointmentFromMeta(self $order): void
@@ -227,6 +238,11 @@ class Order extends Model
                 : (json_decode($order->meta ?? '[]', true) ?: []);
 
             if (! is_array($meta)) {
+                return;
+            }
+
+            if (! empty($meta['manual_appointment_id']) && $order->isWalkIn()) {
+                // The walk-in creation flow links the existing appointment itself.
                 return;
             }
 

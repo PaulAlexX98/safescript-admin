@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\PendingOrders\Widgets;
 
 use App\Filament\Resources\Appointments\AppointmentResource;
+use App\Filament\Resources\WalkIns\WalkInResource;
 use App\Models\Appointment;
 use Carbon\Carbon;
 use Filament\Actions\Action;
@@ -34,14 +35,22 @@ class ManualAppointmentsPending extends TableWidget
     {
         return $table
             ->heading('Manual Appointments Pending')
-            ->description('Manual appointments are shown separately from paid orders and use the existing appointment workflow.')
-            ->query(static::query())
+            ->description('Start or reopen a walk-in order from a manual appointment.')
+            ->query(static::query()->with('order'))
             ->defaultPaginationPageOption(5)
             ->paginationPageOptions([5, 10, 25])
             ->columns([
                 TextColumn::make('order_reference')
                     ->label('Ref')
-                    ->searchable()
+                    ->state(fn (Appointment $record): string => data_get($record->order?->meta, 'manual_appointment_reference') ?: $record->order_reference)
+                    ->searchable(query: function (Builder $query, string $search): Builder {
+                        $like = '%'.$search.'%';
+
+                        return $query->where(fn (Builder $reference): Builder => $reference
+                            ->where('appointments.order_reference', 'like', $like)
+                            ->orWhereHas('order', fn (Builder $order): Builder => $order
+                                ->where('meta->manual_appointment_reference', 'like', $like)));
+                    })
                     ->copyable()
                     ->copyMessage('Reference copied'),
 
@@ -114,6 +123,21 @@ class ManualAppointmentsPending extends TableWidget
 
             ])
             ->recordActions([
+                Action::make('startWalkInOrder')
+                    ->label('Start Walk-In Order')
+                    ->visible(fn (Appointment $record): bool => ! $record->order_id
+                        && $record->source !== 'partner_api'
+                        && AppointmentResource::canEdit($record)
+                        && WalkInResource::canCreate())
+                    ->url(fn (Appointment $record): string => WalkInResource::getUrl('create', [
+                        'appointment' => $record->getKey(),
+                    ])),
+                Action::make('viewWalkInOrder')
+                    ->label('View Walk-In Order')
+                    ->visible(fn (Appointment $record): bool => $record->order && WalkInResource::canView($record->order))
+                    ->url(fn (Appointment $record): ?string => $record->order
+                        ? WalkInResource::getUrl('view', ['record' => $record->order])
+                        : null),
                 Action::make('editAppointment')
                     ->label('View / Edit')
                     ->icon('heroicon-o-pencil-square')
@@ -131,6 +155,7 @@ class ManualAppointmentsPending extends TableWidget
         $query = Appointment::query()
             ->select([
                 'appointments.id',
+                'appointments.order_id',
                 'appointments.order_reference',
                 'appointments.patient_name',
                 'appointments.first_name',
@@ -149,8 +174,14 @@ class ManualAppointmentsPending extends TableWidget
         }
 
         return $query
-            ->whereNull('appointments.order_id')
-            ->where('appointments.order_reference', 'like', 'PCAO%')
+            ->where(function (Builder $query): void {
+                $query->where(function (Builder $manual): void {
+                    $manual->whereNull('appointments.order_id')
+                        ->where('appointments.order_reference', 'like', 'PCAO%');
+                })->orWhereHas('order', fn (Builder $order): Builder => $order
+                    ->where('status', 'pending')
+                    ->whereNotNull('meta->manual_appointment_id'));
+            })
             ->whereNotNull('appointments.start_at')
             ->where('appointments.start_at', '>=', Carbon::now('Europe/London')->startOfDay()->utc())
             ->where(function (Builder $statusQuery): void {

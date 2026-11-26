@@ -2,21 +2,169 @@
 
 namespace App\Filament\Resources\WalkIns\Pages;
 
+use App\Filament\Resources\Appointments\AppointmentResource;
+use App\Filament\Resources\PendingOrders\Widgets\ManualAppointmentsPending;
+use App\Filament\Resources\WalkIns\Actions\StartWalkInConsultation;
+use App\Filament\Resources\WalkIns\Schemas\WalkInForm;
 use App\Filament\Resources\WalkIns\WalkInResource;
+use App\Models\Appointment;
 use App\Models\Patient;
 use App\Models\User;
 use App\Models\Order;
+use Carbon\Carbon;
+use Filament\Notifications\Notification;
 use Filament\Resources\Pages\CreateRecord;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Schema as SchemaFacade;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Livewire\Attributes\Locked;
+use Throwable;
 
 class CreateWalkIn extends CreateRecord
 {
     protected static string $resource = WalkInResource::class;
 
     protected static ?string $title = 'Create Walk In';
+
+    #[Locked]
+    public ?int $sourceAppointmentId = null;
+
+    protected ?Appointment $sourceAppointment = null;
+
+    protected bool $startConsultationAfterCreate = false;
+
+    public function mount(): void
+    {
+        parent::mount();
+
+        if (! request()->query->has('appointment')) {
+            return;
+        }
+
+        $this->sourceAppointmentId = filter_var(request()->query('appointment'), FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1],
+        ]) ?: null;
+        abort_unless($this->sourceAppointmentId, 404);
+
+        $appointment = $this->findSourceAppointment();
+        abort_unless($appointment, 404);
+
+        if ($appointment->order_id) {
+            abort_unless($appointment->order && WalkInResource::canView($appointment->order), 403);
+            $this->redirect(WalkInResource::getUrl('view', ['record' => $appointment->order]));
+
+            return;
+        }
+
+        $this->form->fill(array_replace($this->data ?? [], $this->appointmentFormData($appointment)));
+    }
+
+    public function canCreateAnother(): bool
+    {
+        return $this->sourceAppointmentId === null && parent::canCreateAnother();
+    }
+
+    protected function getFormActions(): array
+    {
+        if ($this->sourceAppointmentId === null) {
+            return parent::getFormActions();
+        }
+
+        return [
+            $this->getCreateFormAction(),
+            StartWalkInConsultation::make()->action('createAndStartConsultation'),
+            $this->getCancelFormAction(),
+        ];
+    }
+
+    public function createAndStartConsultation(): void
+    {
+        abort_if($this->sourceAppointmentId === null, 404);
+
+        $this->startConsultationAfterCreate = true;
+        try {
+            $this->create();
+        } finally {
+            $this->startConsultationAfterCreate = false;
+        }
+    }
+
+    public function hasDatabaseTransactions(): bool
+    {
+        return $this->sourceAppointmentId !== null || parent::hasDatabaseTransactions();
+    }
+
+    protected function findSourceAppointment(bool $lock = false): ?Appointment
+    {
+        $appointment = ManualAppointmentsPending::query()
+            ->select('appointments.*')
+            ->whereKey($this->sourceAppointmentId)
+            ->when($lock, fn ($query) => $query->lockForUpdate())
+            ->first();
+
+        if ($appointment) {
+            abort_if($appointment->source === 'partner_api', 404);
+            AppointmentResource::authorizeEdit($appointment);
+        }
+
+        return $appointment;
+    }
+
+    protected function appointmentFormData(Appointment $appointment): array
+    {
+        $data = $appointment->only(['first_name', 'last_name', 'email', 'phone']);
+        $data['appointment_time_display'] = $this->appointmentStart($appointment)->tz('Europe/London')->format('d M Y, H:i');
+        $data['appointment_notes'] = $appointment->notes;
+
+        if (! SchemaFacade::hasTable('services')) {
+            return $data;
+        }
+
+        $service = $appointment->service_id
+            ? DB::table('services')->find($appointment->service_id)
+            : null;
+        if (! $service && filled($appointment->service_slug) && SchemaFacade::hasColumn('services', 'slug')) {
+            $service = DB::table('services')->where('slug', $appointment->service_slug)->first();
+        }
+        if (! $service && filled($appointment->service)) {
+            $service = DB::table('services')->where('name', $appointment->service)->first();
+        }
+        if (! $service) {
+            return $data;
+        }
+
+        $data['service_id'] = $service->id;
+        $data['service_name'] = $service->name;
+        $data['service_slug'] = $service->slug ?? null;
+
+        $itemOptions = WalkInForm::itemOptions($service->id);
+        foreach (['order_item', 'item', 'item_name', 'product_name', 'medicine_name', 'service_name'] as $column) {
+            $itemName = trim((string) $appointment->getAttribute($column));
+            if (! isset($itemOptions[$itemName])) {
+                continue;
+            }
+
+            $variation = trim((string) ($appointment->variation ?? $appointment->variant ?? $appointment->strength ?? $appointment->dose ?? ''));
+            $matchedVariation = $variation !== '' && isset(WalkInForm::variationOptions($itemName)[$variation]);
+            $price = $appointment->unit_price ?? $appointment->price;
+            $data['items'] = [[
+                'name' => $itemName,
+                'variation' => $matchedVariation ? $variation : null,
+                'qty' => 1,
+                'unit_price' => ($variation === '' || $matchedVariation) && is_numeric($price) ? $price : null,
+            ]];
+            break;
+        }
+
+        return $data;
+    }
+
+    protected function appointmentStart(Appointment $appointment): Carbon
+    {
+        return Carbon::parse($appointment->getRawOriginal('start_at'), 'UTC');
+    }
 
     public function getHeading(): string
     {
@@ -25,6 +173,19 @@ class CreateWalkIn extends CreateRecord
 
     protected function mutateFormDataBeforeCreate(array $data): array
     {
+        if ($this->sourceAppointmentId !== null) {
+            $this->sourceAppointment = $this->findSourceAppointment(lock: true);
+            if (! $this->sourceAppointment || $this->sourceAppointment->order_id) {
+                Notification::make()
+                    ->warning()
+                    ->title('This appointment is no longer available to start a walk-in order')
+                    ->send();
+                $this->halt(shouldRollbackDatabaseTransaction: true);
+            }
+
+            $data['appointment_at'] = $this->appointmentStart($this->sourceAppointment)->toIso8601String();
+        }
+
         $patientWasSelected = ! empty($data['patient_id']);
         $patientWasOriginallySelected = $patientWasSelected;
         if (! $patientWasSelected) {
@@ -228,6 +389,14 @@ class CreateWalkIn extends CreateRecord
             'payment_status_label' => 'Paid at Pharmacy',
         ];
 
+        if ($this->sourceAppointment) {
+            $meta['manual_appointment_id'] = $this->sourceAppointment->getKey();
+            $meta['manual_appointment_reference'] = $this->sourceAppointment->order_reference;
+            if (filled($data['appointment_notes'] ?? null)) {
+                $meta['admin_notes'] = 'Appointment notes: '.trim($data['appointment_notes']);
+            }
+        }
+
         $payload = [
             'reference' => $reference,
             'status' => 'pending',
@@ -251,8 +420,35 @@ class CreateWalkIn extends CreateRecord
         return $payload;
     }
 
+    protected function handleRecordCreation(array $data): Model
+    {
+        $order = parent::handleRecordCreation($data);
+
+        if ($this->sourceAppointment) {
+            $this->sourceAppointment->forceFill([
+                'order_id' => $order->getKey(),
+                'order_reference' => $order->reference,
+            ])->saveOrFail();
+        }
+
+        return $order;
+    }
+
     protected function getRedirectUrl(): string
     {
+        if ($this->startConsultationAfterCreate) {
+            try {
+                return StartWalkInConsultation::start($this->getRecord());
+            } catch (Throwable $exception) {
+                report($exception);
+                Notification::make()
+                    ->warning()
+                    ->title('The walk-in order was saved, but the consultation could not start')
+                    ->body('Open the saved order from Walk Ins to try again.')
+                    ->send();
+            }
+        }
+
         return static::getResource()::getUrl('index');
     }
 

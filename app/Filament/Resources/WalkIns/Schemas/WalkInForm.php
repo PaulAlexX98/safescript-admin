@@ -3,12 +3,15 @@
 namespace App\Filament\Resources\WalkIns\Schemas;
 
 use App\Models\Patient;
+use Illuminate\Database\Eloquent\Builder;
+use App\Filament\Resources\WalkIns\Pages\CreateWalkIn;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Textarea;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -21,6 +24,194 @@ use App\Models\PendingOrder;
 
 class WalkInForm
 {
+    public static function itemOptions($serviceId): array
+    {
+        if (! $serviceId) {
+            return [];
+        }
+
+        if (SchemaFacade::hasTable('products')) {
+            $nameColumn = SchemaFacade::hasColumn('products', 'name')
+                ? 'name'
+                : (SchemaFacade::hasColumn('products', 'title') ? 'title' : null);
+
+            if ($nameColumn) {
+                if (SchemaFacade::hasTable('service_product')) {
+                    return DB::table('products')
+                        ->join('service_product', 'products.id', '=', 'service_product.product_id')
+                        ->where('service_product.service_id', $serviceId)
+                        ->orderBy("products.{$nameColumn}")
+                        ->select(['products.id', DB::raw("products.{$nameColumn} as product_name")])
+                        ->limit(500)
+                        ->get()
+                        ->mapWithKeys(fn ($row) => [(string) $row->product_name => (string) $row->product_name])
+                        ->toArray();
+                }
+
+                if (SchemaFacade::hasTable('product_service')) {
+                    return DB::table('products')
+                        ->join('product_service', 'products.id', '=', 'product_service.product_id')
+                        ->where('product_service.service_id', $serviceId)
+                        ->orderBy("products.{$nameColumn}")
+                        ->select(['products.id', DB::raw("products.{$nameColumn} as product_name")])
+                        ->limit(500)
+                        ->get()
+                        ->mapWithKeys(fn ($row) => [(string) $row->product_name => (string) $row->product_name])
+                        ->toArray();
+                }
+            }
+        }
+
+        if (SchemaFacade::hasTable('service_medicines')) {
+            $nameColumn = SchemaFacade::hasColumn('service_medicines', 'name')
+                ? 'name'
+                : (SchemaFacade::hasColumn('service_medicines', 'title') ? 'title' : null);
+
+            if ($nameColumn && SchemaFacade::hasColumn('service_medicines', 'service_id')) {
+                return DB::table('service_medicines')
+                    ->where('service_id', $serviceId)
+                    ->orderBy($nameColumn)
+                    ->limit(500)
+                    ->get()
+                    ->mapWithKeys(function ($row) use ($nameColumn) {
+                        $name = (string) ($row->{$nameColumn} ?? ('Item #' . $row->id));
+                        return [$name => $name];
+                    })
+                    ->toArray();
+            }
+        }
+
+        return [];
+    }
+
+    public static function variationOptions(string $itemName): array
+    {
+        if ($itemName === '') {
+            return [];
+        }
+
+        $options = [];
+
+        if (SchemaFacade::hasTable('product_variations') && SchemaFacade::hasTable('products')) {
+            $productNameColumn = SchemaFacade::hasColumn('products', 'name')
+                ? 'name'
+                : (SchemaFacade::hasColumn('products', 'title') ? 'title' : null);
+
+            $variationLabelColumn = SchemaFacade::hasColumn('product_variations', 'title')
+                ? 'title'
+                : (SchemaFacade::hasColumn('product_variations', 'label')
+                    ? 'label'
+                    : (SchemaFacade::hasColumn('product_variations', 'name')
+                        ? 'name'
+                        : (SchemaFacade::hasColumn('product_variations', 'variation')
+                            ? 'variation'
+                            : (SchemaFacade::hasColumn('product_variations', 'strength') ? 'strength' : null))));
+
+            $productIdColumn = SchemaFacade::hasColumn('product_variations', 'product_id')
+                ? 'product_id'
+                : null;
+
+            if ($productNameColumn && $variationLabelColumn && $productIdColumn) {
+                $rows = DB::table('product_variations')
+                    ->join('products', "product_variations.{$productIdColumn}", '=', 'products.id')
+                    ->where("products.{$productNameColumn}", $itemName)
+                    ->select([
+                        "product_variations.{$variationLabelColumn} as variation_label",
+                        SchemaFacade::hasColumn('product_variations', 'price') ? 'product_variations.price as variation_price' : DB::raw('null as variation_price'),
+                        SchemaFacade::hasColumn('product_variations', 'price_minor') ? 'product_variations.price_minor as variation_price_minor' : DB::raw('null as variation_price_minor'),
+                    ])
+                    ->orderBy("product_variations.{$variationLabelColumn}")
+                    ->limit(100)
+                    ->get();
+
+                foreach ($rows as $row) {
+                    $label = trim((string) ($row->variation_label ?? ''));
+                    if ($label !== '') {
+                        $options[$label] = $label;
+                    }
+                }
+            }
+        }
+
+        if (empty($options) && SchemaFacade::hasTable('products')) {
+            $nameColumn = SchemaFacade::hasColumn('products', 'name')
+                ? 'name'
+                : (SchemaFacade::hasColumn('products', 'title') ? 'title' : null);
+
+            if ($nameColumn) {
+                $product = DB::table('products')->where($nameColumn, $itemName)->first();
+
+                if ($product) {
+                    foreach (['title', 'variation', 'variations', 'strength', 'dose', 'option', 'options', 'variant', 'variants'] as $key) {
+                        $value = $product->{$key} ?? null;
+
+                        if (is_string($value) && trim($value) !== '') {
+                            $decoded = json_decode($value, true);
+
+                            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                                foreach ($decoded as $entry) {
+                                    if (is_array($entry)) {
+                                        $label = trim((string) ($entry['title'] ?? $entry['label'] ?? $entry['name'] ?? $entry['value'] ?? ''));
+                                    } else {
+                                        $label = trim((string) $entry);
+                                    }
+
+                                    if ($label !== '') {
+                                        $options[$label] = $label;
+                                    }
+                                }
+                            } else {
+                                $label = trim($value);
+                                if ($label !== '') {
+                                    $options[$label] = $label;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return $options;
+    }
+
+    private static function patientContactMatchHint(string $field, mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $value = trim($value);
+
+        if ($field === 'email') {
+            if (! filter_var($value, FILTER_VALIDATE_EMAIL)) {
+                return null;
+            }
+
+            $expression = 'LOWER(TRIM(email))';
+            $value = strtolower($value);
+            $label = 'email address';
+        } else {
+            $value = str_replace([' ', '-', '(', ')', '+'], '', $value);
+            if (! preg_match('/^\d{7,15}$/', $value)) {
+                return null;
+            }
+
+            $expression = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '(', ''), ')', ''), '+', '')";
+            $label = 'phone number';
+        }
+
+        $match = Patient::query()
+            ->where(fn (Builder $query): Builder => $query
+                ->whereRaw("{$expression} = ?", [$value])
+                ->orWhereHas('user', fn (Builder $user): Builder => $user->whereRaw("{$expression} = ?", [$value])))
+            ->exists();
+
+        return $match
+            ? "Possible existing patient with this {$label}. Use Search patient above to verify and select their record."
+            : null;
+    }
+
     public static function configure(Schema $schema): Schema
     {
         return $schema
@@ -616,11 +807,19 @@ class WalkInForm
                                 TextInput::make('email')
                                     ->label('Email')
                                     ->email()
+                                    ->live(onBlur: true)
+                                    ->helperText(fn ($state, callable $get, $livewire): ?string => $livewire instanceof CreateWalkIn && ! $get('patient_id')
+                                        ? self::patientContactMatchHint('email', $state)
+                                        : null)
                                     ->columnSpan(6),
 
                                 TextInput::make('phone')
                                     ->label('Phone')
                                     ->tel()
+                                    ->live(onBlur: true)
+                                    ->helperText(fn ($state, callable $get, $livewire): ?string => $livewire instanceof CreateWalkIn && ! $get('patient_id')
+                                        ? self::patientContactMatchHint('phone', $state)
+                                        : null)
                                     ->columnSpan(6),
 
                                 TextInput::make('address_line_1')
@@ -653,6 +852,16 @@ class WalkInForm
                 Section::make('Order Details')
                    ->columnSpanFull()
                     ->schema([
+                        TextInput::make('appointment_time_display')
+                            ->label('Appointment')
+                            ->readOnly()
+                            ->dehydrated(false)
+                            ->visible(fn ($livewire): bool => $livewire instanceof CreateWalkIn && $livewire->sourceAppointmentId !== null),
+                        Textarea::make('appointment_notes')
+                            ->label('Appointment notes')
+                            ->maxLength(4000)
+                            ->columnSpanFull()
+                            ->visible(fn ($livewire): bool => $livewire instanceof CreateWalkIn && $livewire->sourceAppointmentId !== null),
                         Grid::make(12)
                             ->schema([
                                 Select::make('service_id')
@@ -738,66 +947,7 @@ class WalkInForm
                                         Select::make('name')
                                             ->label('Item name')
                                             ->placeholder('Choose item')
-                                            ->options(function (callable $get): array {
-                                                $serviceId = $get('../../service_id') ?: $get('service_id');
-
-                                                if (! $serviceId) {
-                                                    return [];
-                                                }
-
-                                                if (SchemaFacade::hasTable('products')) {
-                                                    $nameColumn = SchemaFacade::hasColumn('products', 'name')
-                                                        ? 'name'
-                                                        : (SchemaFacade::hasColumn('products', 'title') ? 'title' : null);
-
-                                                    if ($nameColumn) {
-                                                        if (SchemaFacade::hasTable('service_product')) {
-                                                            return DB::table('products')
-                                                                ->join('service_product', 'products.id', '=', 'service_product.product_id')
-                                                                ->where('service_product.service_id', $serviceId)
-                                                                ->orderBy("products.{$nameColumn}")
-                                                                ->select(['products.id', DB::raw("products.{$nameColumn} as product_name")])
-                                                                ->limit(500)
-                                                                ->get()
-                                                                ->mapWithKeys(fn ($row) => [(string) $row->product_name => (string) $row->product_name])
-                                                                ->toArray();
-                                                        }
-
-                                                        if (SchemaFacade::hasTable('product_service')) {
-                                                            return DB::table('products')
-                                                                ->join('product_service', 'products.id', '=', 'product_service.product_id')
-                                                                ->where('product_service.service_id', $serviceId)
-                                                                ->orderBy("products.{$nameColumn}")
-                                                                ->select(['products.id', DB::raw("products.{$nameColumn} as product_name")])
-                                                                ->limit(500)
-                                                                ->get()
-                                                                ->mapWithKeys(fn ($row) => [(string) $row->product_name => (string) $row->product_name])
-                                                                ->toArray();
-                                                        }
-                                                    }
-                                                }
-
-                                                if (SchemaFacade::hasTable('service_medicines')) {
-                                                    $nameColumn = SchemaFacade::hasColumn('service_medicines', 'name')
-                                                        ? 'name'
-                                                        : (SchemaFacade::hasColumn('service_medicines', 'title') ? 'title' : null);
-
-                                                    if ($nameColumn && SchemaFacade::hasColumn('service_medicines', 'service_id')) {
-                                                        return DB::table('service_medicines')
-                                                            ->where('service_id', $serviceId)
-                                                            ->orderBy($nameColumn)
-                                                            ->limit(500)
-                                                            ->get()
-                                                            ->mapWithKeys(function ($row) use ($nameColumn) {
-                                                                $name = (string) ($row->{$nameColumn} ?? ('Item #' . $row->id));
-                                                                return [$name => $name];
-                                                            })
-                                                            ->toArray();
-                                                    }
-                                                }
-
-                                                return [];
-                                            })
+                                            ->options(fn (callable $get): array => self::itemOptions($get('../../service_id') ?: $get('service_id')))
                                             ->searchable()
                                             ->preload()
                                             ->required()
@@ -818,97 +968,7 @@ class WalkInForm
                                             ->live()
                                             ->disabled(fn (callable $get): bool => blank($get('name')))
                                             ->helperText(fn (callable $get): ?string => blank($get('name')) ? 'Choose item name first' : null)
-                                            ->options(function (callable $get): array {
-                                                $itemName = trim((string) ($get('name') ?? ''));
-
-                                                if ($itemName === '') {
-                                                    return [];
-                                                }
-
-                                                $options = [];
-
-                                                if (SchemaFacade::hasTable('product_variations') && SchemaFacade::hasTable('products')) {
-                                                    $productNameColumn = SchemaFacade::hasColumn('products', 'name')
-                                                        ? 'name'
-                                                        : (SchemaFacade::hasColumn('products', 'title') ? 'title' : null);
-
-                                                    $variationLabelColumn = SchemaFacade::hasColumn('product_variations', 'title')
-                                                        ? 'title'
-                                                        : (SchemaFacade::hasColumn('product_variations', 'label')
-                                                            ? 'label'
-                                                            : (SchemaFacade::hasColumn('product_variations', 'name')
-                                                                ? 'name'
-                                                                : (SchemaFacade::hasColumn('product_variations', 'variation')
-                                                                    ? 'variation'
-                                                                    : (SchemaFacade::hasColumn('product_variations', 'strength') ? 'strength' : null))));
-
-                                                    $productIdColumn = SchemaFacade::hasColumn('product_variations', 'product_id')
-                                                        ? 'product_id'
-                                                        : null;
-
-                                                    if ($productNameColumn && $variationLabelColumn && $productIdColumn) {
-                                                        $rows = DB::table('product_variations')
-                                                            ->join('products', "product_variations.{$productIdColumn}", '=', 'products.id')
-                                                            ->where("products.{$productNameColumn}", $itemName)
-                                                            ->select([
-                                                                "product_variations.{$variationLabelColumn} as variation_label",
-                                                                SchemaFacade::hasColumn('product_variations', 'price') ? 'product_variations.price as variation_price' : DB::raw('null as variation_price'),
-                                                                SchemaFacade::hasColumn('product_variations', 'price_minor') ? 'product_variations.price_minor as variation_price_minor' : DB::raw('null as variation_price_minor'),
-                                                            ])
-                                                            ->orderBy("product_variations.{$variationLabelColumn}")
-                                                            ->limit(100)
-                                                            ->get();
-
-                                                        foreach ($rows as $row) {
-                                                            $label = trim((string) ($row->variation_label ?? ''));
-                                                            if ($label !== '') {
-                                                                $options[$label] = $label;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-
-                                                if (empty($options) && SchemaFacade::hasTable('products')) {
-                                                    $nameColumn = SchemaFacade::hasColumn('products', 'name')
-                                                        ? 'name'
-                                                        : (SchemaFacade::hasColumn('products', 'title') ? 'title' : null);
-
-                                                    if ($nameColumn) {
-                                                        $product = DB::table('products')->where($nameColumn, $itemName)->first();
-
-                                                        if ($product) {
-                                                            foreach (['title', 'variation', 'variations', 'strength', 'dose', 'option', 'options', 'variant', 'variants'] as $key) {
-                                                                $value = $product->{$key} ?? null;
-
-                                                                if (is_string($value) && trim($value) !== '') {
-                                                                    $decoded = json_decode($value, true);
-
-                                                                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                                                                        foreach ($decoded as $entry) {
-                                                                            if (is_array($entry)) {
-                                                                                $label = trim((string) ($entry['title'] ?? $entry['label'] ?? $entry['name'] ?? $entry['value'] ?? ''));
-                                                                            } else {
-                                                                                $label = trim((string) $entry);
-                                                                            }
-
-                                                                            if ($label !== '') {
-                                                                                $options[$label] = $label;
-                                                                            }
-                                                                        }
-                                                                    } else {
-                                                                        $label = trim($value);
-                                                                        if ($label !== '') {
-                                                                            $options[$label] = $label;
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-
-                                                return $options;
-                                            })
+                                            ->options(fn (callable $get): array => self::variationOptions(trim((string) $get('name'))))
                                             ->afterStateUpdated(function ($state, callable $set, callable $get): void {
                                                 $itemName = trim((string) ($get('name') ?? ''));
                                                 $variation = trim((string) ($state ?? ''));
